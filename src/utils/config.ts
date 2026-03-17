@@ -1,0 +1,135 @@
+import { cosmiconfig } from "cosmiconfig";
+import * as path from "path";
+import type {
+  EmitConfig,
+  SnowflakeWarehouseConfig,
+  SdkType,
+} from "../types/index.js";
+
+const explorer = cosmiconfig("emit", {
+  searchPlaces: [
+    "emit.config.yml",
+    "emit.config.yaml",
+    "emit.config.js",
+    "emit.config.cjs",
+    "package.json",
+  ],
+});
+
+function resolveEnvVars(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(/\$\{([^}]+)\}/g, (_, key) => {
+      const resolved = process.env[key];
+      if (!resolved) {
+        throw new Error(
+          `Missing required environment variable: ${key}\n` +
+            `  Set ${key} in your environment or .env file.`
+        );
+      }
+      return resolved;
+    });
+  }
+  if (Array.isArray(value)) {
+    return value.map(resolveEnvVars);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        resolveEnvVars(v),
+      ])
+    );
+  }
+  return value;
+}
+
+function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
+  return {
+    ...raw,
+    repo: {
+      paths: ["./"],
+      sdk: "segment" as SdkType,
+      ...raw.repo,
+    },
+    output: {
+      file: "emit.catalog.yml",
+      confidence_threshold: "low",
+      ...raw.output,
+    },
+    llm: {
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      ...raw.llm,
+    },
+  };
+}
+
+function validate(config: EmitConfig): void {
+  if (!config.warehouse && !config.source && !config.manual_events?.length) {
+    throw new Error(
+      "Config must include at least one of: warehouse, source, or manual_events\n" +
+        "  Run `emit init` to set up your configuration."
+    );
+  }
+
+  if (config.warehouse?.type === "snowflake") {
+    const sf = config.warehouse as SnowflakeWarehouseConfig;
+    const required = ["account", "username", "password", "database", "schema"] as const;
+    for (const field of required) {
+      if (!sf[field]) {
+        throw new Error(
+          `Missing required warehouse field: warehouse.${field}\n` +
+            `  Set SNOWFLAKE_${field.toUpperCase()} in your environment.`
+        );
+      }
+    }
+  }
+
+  if (config.source?.type === "segment") {
+    if (!config.source.workspace || !config.source.tracking_plan_id) {
+      throw new Error(
+        "Segment source requires: source.workspace and source.tracking_plan_id"
+      );
+    }
+    if (!process.env.SEGMENT_API_TOKEN) {
+      throw new Error(
+        "Missing required environment variable: SEGMENT_API_TOKEN\n" +
+          "  Get your token at https://app.segment.com/goto-my-workspace/settings/access-management"
+      );
+    }
+  }
+
+  const model = config.llm?.model ?? "claude-sonnet-4-6";
+  const isOllama = model.startsWith("ollama/");
+  const isOpenAI = model.startsWith("gpt-") || model.startsWith("o1-") || model.startsWith("o3-");
+  if (!isOllama && !isOpenAI && !process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      "Missing required environment variable: ANTHROPIC_API_KEY\n" +
+        "  Get your key at https://console.anthropic.com"
+    );
+  }
+}
+
+export async function loadConfig(searchFrom?: string): Promise<EmitConfig> {
+  const result = await explorer.search(searchFrom ?? process.cwd());
+
+  if (!result || result.isEmpty) {
+    throw new Error(
+      "No emit configuration found.\n" +
+        "  Run `emit init` to create emit.config.yml, or create one manually."
+    );
+  }
+
+  const resolved = resolveEnvVars(result.config) as Partial<EmitConfig>;
+  const config = applyDefaults(resolved);
+  validate(config);
+
+  return config;
+}
+
+export function resolveOutputPath(config: EmitConfig, cwd?: string): string {
+  const base = cwd ?? process.cwd();
+  return path.isAbsolute(config.output.file)
+    ? config.output.file
+    : path.resolve(base, config.output.file);
+}

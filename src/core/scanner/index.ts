@@ -5,16 +5,22 @@ import { extractContext, resolveEnumStringValue } from "./context.js";
 export class RepoScanner {
   private paths: string[];
   private sdk: SdkType;
-  private customPattern?: string;
+  private customPatterns: string[];
 
   constructor(opts: {
     paths: string[];
     sdk: SdkType;
-    trackPattern?: string;
+    trackPattern?: string | string[];
   }) {
     this.paths = opts.paths;
     this.sdk = opts.sdk;
-    this.customPattern = opts.trackPattern;
+    if (!opts.trackPattern) {
+      this.customPatterns = [];
+    } else if (Array.isArray(opts.trackPattern)) {
+      this.customPatterns = opts.trackPattern;
+    } else {
+      this.customPatterns = [opts.trackPattern];
+    }
   }
 
   async findEvent(eventName: string): Promise<CodeContext> {
@@ -23,7 +29,7 @@ export class RepoScanner {
       eventName,
       this.paths,
       this.sdk,
-      this.customPattern
+      this.customPatterns
     );
 
     if (directMatches.length > 0) {
@@ -49,7 +55,7 @@ export class RepoScanner {
       constantName,
       this.paths,
       this.sdk,
-      this.customPattern
+      this.customPatterns
     );
 
     if (constantMatches.length > 0) {

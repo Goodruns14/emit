@@ -7,7 +7,7 @@ export interface SearchMatch {
   rawLine: string;
 }
 
-const SDK_PATTERNS: Record<SdkType, string[]> = {
+export const SDK_PATTERNS: Record<SdkType, string[]> = {
   segment: [
     "analytics.track(",
     "analytics.identify(",
@@ -28,7 +28,7 @@ const SDK_PATTERNS: Record<SdkType, string[]> = {
   custom: [],
 };
 
-const FILE_EXTENSIONS = [
+export const FILE_EXTENSIONS = [
   "*.ts",
   "*.tsx",
   "*.js",
@@ -67,10 +67,10 @@ export async function searchDirect(
   eventName: string,
   paths: string[],
   sdk: SdkType,
-  customPattern?: string
+  customPatterns?: string[]
 ): Promise<SearchMatch[]> {
   const patterns = sdk === "custom"
-    ? customPattern ? [customPattern] : []
+    ? customPatterns ?? []
     : SDK_PATTERNS[sdk] ?? [];
 
   // If no SDK patterns, fall back to broad search
@@ -128,10 +128,10 @@ export async function searchConstant(
   constantName: string,
   paths: string[],
   sdk: SdkType,
-  customPattern?: string
+  customPatterns?: string[]
 ): Promise<SearchMatch[]> {
   const patterns = sdk === "custom"
-    ? customPattern ? [customPattern] : []
+    ? customPatterns ?? []
     : SDK_PATTERNS[sdk] ?? [];
 
   for (const searchPath of paths) {

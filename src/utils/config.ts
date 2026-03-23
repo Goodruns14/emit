@@ -4,6 +4,7 @@ import type {
   EmitConfig,
   SnowflakeWarehouseConfig,
   SdkType,
+  LlmProvider,
 } from "../types/index.js";
 
 const explorer = cosmiconfig("emit", {
@@ -57,6 +58,7 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
       ...raw.output,
     },
     llm: {
+      provider: "anthropic" as LlmProvider,
       model: "claude-sonnet-4-6",
       max_tokens: 1000,
       ...raw.llm,
@@ -99,13 +101,26 @@ function validate(config: EmitConfig): void {
     }
   }
 
-  const model = config.llm?.model ?? "claude-sonnet-4-6";
-  const isOllama = model.startsWith("ollama/");
-  const isOpenAI = model.startsWith("gpt-") || model.startsWith("o1-") || model.startsWith("o3-");
-  if (!isOllama && !isOpenAI && !process.env.ANTHROPIC_API_KEY) {
+  const provider = config.llm?.provider ?? "anthropic";
+
+  if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     throw new Error(
       "Missing required environment variable: ANTHROPIC_API_KEY\n" +
         "  Get your key at https://console.anthropic.com"
+    );
+  }
+
+  if (provider === "openai" && !process.env.OPENAI_API_KEY) {
+    throw new Error(
+      "Missing required environment variable: OPENAI_API_KEY\n" +
+        "  Get your key at https://platform.openai.com/api-keys"
+    );
+  }
+
+  if (provider === "openai-compatible" && !config.llm?.base_url) {
+    throw new Error(
+      "llm.base_url is required when provider is openai-compatible\n" +
+        "  Example: base_url: http://localhost:11434/v1"
     );
   }
 }

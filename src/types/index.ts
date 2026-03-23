@@ -97,6 +97,8 @@ export interface CatalogEvent {
     }
   >;
   flags: string[];
+  context_hash?: string;
+  last_modified_by?: string;
 }
 
 export interface CatalogStats {
@@ -116,6 +118,42 @@ export interface EmitCatalog {
   property_definitions: Record<string, PropertyDefinition>;
   events: Record<string, CatalogEvent>;
   not_found: string[];
+}
+
+// ─────────────────────────────────────────────
+// DIFF TYPES
+// ─────────────────────────────────────────────
+
+export interface EventChange {
+  event: string;
+  type: "added" | "removed" | "modified";
+  description: string;
+  previous_description?: string;
+  confidence: "high" | "medium" | "low";
+  confidence_changed: boolean;
+  previous_confidence?: "high" | "medium" | "low";
+  property_changes: PropertyChange[];
+  fields_changed: string[];
+}
+
+export interface PropertyChange {
+  property: string;
+  type: "added" | "removed" | "modified";
+  before?: string;
+  after?: string;
+}
+
+export interface CatalogDiff {
+  added: EventChange[];
+  removed: EventChange[];
+  modified: EventChange[];
+  low_confidence: Array<{
+    event: string;
+    property?: string;
+    confidence_reason: string;
+    source_file: string;
+    source_line: number;
+  }>;
 }
 
 // ─────────────────────────────────────────────
@@ -154,11 +192,42 @@ export interface DestinationAdapter {
 // CONFIG TYPES
 // ─────────────────────────────────────────────
 
-export type SchemaType = "segment_monolith" | "segment_per_event" | "custom";
+export type SchemaType = "monolith" | "per_event" | "custom";
 export type SdkType = "segment" | "rudderstack" | "snowplow" | "custom";
-export type DestinationType = "segment" | "amplitude" | "mixpanel";
+export type DestinationType = "segment" | "amplitude" | "mixpanel" | "snowflake";
 export type SourceType = "segment";
 export type WarehouseType = "snowflake";
+
+// ─────────────────────────────────────────────
+// LLM PROVIDER TYPES
+// ─────────────────────────────────────────────
+
+/**
+ * How emit calls the LLM:
+ *   claude-code        — subprocess: `claude -p "<prompt>"`  (no API key needed)
+ *   anthropic          — Anthropic API (ANTHROPIC_API_KEY)
+ *   openai             — OpenAI API (OPENAI_API_KEY)
+ *   openai-compatible  — any OpenAI-compatible endpoint (base_url + optional key)
+ *   platform           — emit-managed, future hosted option
+ */
+export type LlmProvider =
+  | "claude-code"
+  | "anthropic"
+  | "openai"
+  | "openai-compatible"
+  | "platform";
+
+export interface LlmCallConfig {
+  provider: LlmProvider;
+  model: string;
+  max_tokens: number;
+  /** Required for openai-compatible — base URL of the endpoint */
+  base_url?: string;
+  /** For openai-compatible — env var name to read the API key from (optional) */
+  api_key_env?: string;
+}
+
+export type CdpPreset = "segment" | "rudderstack" | "snowplow" | "none";
 
 export interface SnowflakeWarehouseConfig {
   type: "snowflake";
@@ -168,7 +237,13 @@ export interface SnowflakeWarehouseConfig {
   database: string;
   schema: string;
   schema_type: SchemaType;
+  /** CDP preset — sets default table names and exclude lists */
+  cdp_preset?: CdpPreset;
   events_table?: string;
+  /** Regex pattern to filter tables in per_event mode (e.g. "^TRACKS_.*") */
+  table_pattern?: string;
+  /** Tables to exclude in per_event mode */
+  exclude_tables?: string[];
   top_n?: number;
   custom?: {
     table: string;
@@ -201,10 +276,22 @@ export interface MixpanelDestinationConfig {
   project_id: string | number;
 }
 
+export interface SnowflakeDestinationConfig {
+  type: "snowflake";
+  account?: string;
+  username?: string;
+  password?: string;
+  database?: string;
+  schema?: string;
+  schema_type: "per_event" | "monolith";
+  cdp_preset?: CdpPreset;
+}
+
 export type DestinationConfig =
   | SegmentDestinationConfig
   | AmplitudeDestinationConfig
-  | MixpanelDestinationConfig;
+  | MixpanelDestinationConfig
+  | SnowflakeDestinationConfig;
 
 export interface EmitConfig {
   warehouse?: SnowflakeWarehouseConfig;
@@ -213,16 +300,13 @@ export interface EmitConfig {
   repo: {
     paths: string[];
     sdk: SdkType;
-    track_pattern?: string;
+    track_pattern?: string | string[];
   };
   output: {
     file: string;
     confidence_threshold: "high" | "medium" | "low";
   };
-  llm: {
-    model: string;
-    max_tokens: number;
-  };
+  llm: LlmCallConfig;
   destinations?: DestinationConfig[];
 }
 

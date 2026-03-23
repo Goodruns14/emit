@@ -77,6 +77,44 @@ export function isGitRepo(cwd?: string): boolean {
   }
 }
 
+export function getCatalogAtRef(ref: string, catalogPath: string): EmitCatalog | null {
+  try {
+    const content = execSync(`git show "${ref}:${catalogPath}"`, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const parsed = yaml.load(content) as EmitCatalog;
+    return parsed?.events ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getChangedFiles(baseRef: string): string[] {
+  try {
+    const output = execSync(`git diff --name-only "${baseRef}...HEAD"`, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (!output) return [];
+    return output.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function getLastModifier(filePath: string, lineNumber: number): string | null {
+  try {
+    const output = execSync(
+      `git log -1 --format="%an" -L ${lineNumber},${lineNumber}:"${filePath}"`,
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
+    return output.split("\n")[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getRelativeCatalogPath(absolutePath: string): string {
   try {
     const root = execSync("git rev-parse --show-toplevel", {

@@ -17,8 +17,8 @@ interface PushOptions {
 export function registerPush(program: Command): void {
   program
     .command("push")
-    .description("Push catalog metadata to configured destinations (Segment, Amplitude, Mixpanel)")
-    .option("--destination <name>", "Push to a single destination only (segment|amplitude|mixpanel)")
+    .description("Push catalog metadata to configured destinations (Segment, Amplitude, Mixpanel, Snowflake)")
+    .option("--destination <name>", "Push to a single destination only (segment|amplitude|mixpanel|snowflake)")
     .option("--dry-run", "Preview what would be pushed without making API calls")
     .option("--event <name>", "Push a single specific event only")
     .option("--format <format>", "Output format: text (default) or json")
@@ -93,7 +93,7 @@ async function runPush(opts: PushOptions): Promise<number> {
   for (const destConfig of destinationConfigs) {
     let adapter;
     try {
-      adapter = createDestinationAdapter(destConfig);
+      adapter = createDestinationAdapter(destConfig, config.warehouse);
     } catch (err: any) {
       logger.error(`${destConfig.type}: ${err.message}`);
       hasErrors = true;

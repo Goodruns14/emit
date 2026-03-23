@@ -6,6 +6,7 @@ import type {
   ExtractedMetadata,
   PropertyDefinition,
   CatalogEvent,
+  LlmCallConfig,
 } from "../../types/index.js";
 import { buildExtractionPrompt, buildPropertyDefinitionsPrompt } from "./prompts.js";
 import { callLLM, parseJsonResponse } from "./claude.js";
@@ -21,12 +22,10 @@ const EXTRACTION_FALLBACK: ExtractedMetadata = {
 };
 
 export class MetadataExtractor {
-  private model: string;
-  private maxTokens: number;
+  private cfg: LlmCallConfig;
 
-  constructor(opts: { model: string; maxTokens: number }) {
-    this.model = opts.model;
-    this.maxTokens = opts.maxTokens;
+  constructor(cfg: LlmCallConfig) {
+    this.cfg = cfg;
   }
 
   async extractMetadata(
@@ -48,7 +47,7 @@ export class MetadataExtractor {
       literalValues
     );
 
-    const text = await callLLM(prompt, this.model, this.maxTokens);
+    const text = await callLLM(prompt, this.cfg);
     const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
 
     setCached(eventName, cacheKey, result);
@@ -80,7 +79,7 @@ export class MetadataExtractor {
     if (Object.keys(sharedProperties).length === 0) return {};
 
     const prompt = buildPropertyDefinitionsPrompt(sharedProperties);
-    const text = await callLLM(prompt, this.model, 2000);
+    const text = await callLLM(prompt, { ...this.cfg, max_tokens: 2000 });
     const raw = parseJsonResponse<Record<string, any>>(text, {});
 
     const result: Record<string, PropertyDefinition> = {};

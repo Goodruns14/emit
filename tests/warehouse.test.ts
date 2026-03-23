@@ -1,18 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { SegmentMonolithAdapter } from "../src/core/warehouse/adapters/segment-monolith.js";
+import { MonolithAdapter } from "../src/core/warehouse/adapters/monolith.js";
+import { PerEventAdapter } from "../src/core/warehouse/adapters/per-event.js";
 import type { SnowflakeWarehouseConfig } from "../src/types/index.js";
-
-const mockConfig: SnowflakeWarehouseConfig = {
-  type: "snowflake",
-  account: "test-account",
-  username: "user",
-  password: "pass",
-  database: "ANALYTICS",
-  schema: "EVENTS",
-  schema_type: "segment_monolith",
-  events_table: "analytics.tracks",
-  top_n: 10,
-};
 
 const mockClient = {
   connect: vi.fn().mockResolvedValue(undefined),
@@ -20,12 +9,27 @@ const mockClient = {
   query: vi.fn(),
 };
 
-describe("SegmentMonolithAdapter", () => {
-  let adapter: SegmentMonolithAdapter;
+// ── MonolithAdapter ──────────────────────────────────────────────
+
+const monolithConfig: SnowflakeWarehouseConfig = {
+  type: "snowflake",
+  account: "test-account",
+  username: "user",
+  password: "pass",
+  database: "ANALYTICS",
+  schema: "EVENTS",
+  schema_type: "monolith",
+  cdp_preset: "segment",
+  events_table: "analytics.tracks",
+  top_n: 10,
+};
+
+describe("MonolithAdapter", () => {
+  let adapter: MonolithAdapter;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    adapter = new SegmentMonolithAdapter(mockClient as any, mockConfig);
+    adapter = new MonolithAdapter(mockClient as any, monolithConfig);
   });
 
   it("getTopEvents returns mapped events", async () => {
@@ -54,6 +58,152 @@ describe("SegmentMonolithAdapter", () => {
   it("getPropertyStats returns empty array on error", async () => {
     mockClient.query.mockRejectedValue(new Error("Query failed"));
     const stats = await adapter.getPropertyStats("some_event");
+    expect(stats).toEqual([]);
+  });
+
+  it("uses CDP preset defaults when no events_table override", async () => {
+    const configNoTable: SnowflakeWarehouseConfig = {
+      ...monolithConfig,
+      events_table: undefined,
+      cdp_preset: "rudderstack",
+    };
+    const a = new MonolithAdapter(mockClient as any, configNoTable);
+    mockClient.query.mockResolvedValue([]);
+    await a.getTopEvents(10);
+    // RudderStack default table is TRACKS
+    expect(mockClient.query.mock.calls[0][0]).toContain("TRACKS");
+  });
+});
+
+// ── PerEventAdapter ──────────────────────────────────────────────
+
+const perEventConfig: SnowflakeWarehouseConfig = {
+  type: "snowflake",
+  account: "test-account",
+  username: "user",
+  password: "pass",
+  database: "ANALYTICS",
+  schema: "PUBLIC",
+  schema_type: "per_event",
+  cdp_preset: "segment",
+  top_n: 10,
+};
+
+describe("PerEventAdapter", () => {
+  let adapter: PerEventAdapter;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    adapter = new PerEventAdapter(mockClient as any, perEventConfig);
+  });
+
+  it("getTopEvents returns discovered tables as events", async () => {
+    mockClient.query.mockResolvedValue([
+      { NAME: "PURCHASE_COMPLETED", DAILY_VOLUME: 5000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+      { NAME: "CHECKOUT_STARTED", DAILY_VOLUME: 3000, FIRST_SEEN: "2023-02-01", LAST_SEEN: "2024-03-15" },
+    ]);
+
+    const events = await adapter.getTopEvents(10);
+    expect(events).toHaveLength(2);
+    expect(events[0].name).toBe("purchase_completed");
+  });
+
+  it("excludes CDP system tables by default", async () => {
+    mockClient.query.mockResolvedValue([]);
+    await adapter.getTopEvents(10);
+    const sql = mockClient.query.mock.calls[0][0] as string;
+    expect(sql).toContain("'IDENTIFIES'");
+    expect(sql).toContain("'USERS'");
+  });
+
+  it("filters tables by regex when table_pattern is set", async () => {
+    const configWithPattern: SnowflakeWarehouseConfig = {
+      ...perEventConfig,
+      table_pattern: "^CHECKOUT_",
+    };
+    const a = new PerEventAdapter(mockClient as any, configWithPattern);
+
+    mockClient.query.mockResolvedValue([
+      { NAME: "CHECKOUT_STARTED", DAILY_VOLUME: 3000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+      { NAME: "CHECKOUT_COMPLETED", DAILY_VOLUME: 2000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+      { NAME: "PURCHASE_COMPLETED", DAILY_VOLUME: 5000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+      { NAME: "SIGNUP_STARTED", DAILY_VOLUME: 1000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+    ]);
+
+    const events = await a.getTopEvents(10);
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.name)).toEqual(["checkout_started", "checkout_completed"]);
+  });
+
+  it("regex filtering is case-insensitive", async () => {
+    const configWithPattern: SnowflakeWarehouseConfig = {
+      ...perEventConfig,
+      table_pattern: "^checkout_",
+    };
+    const a = new PerEventAdapter(mockClient as any, configWithPattern);
+
+    mockClient.query.mockResolvedValue([
+      { NAME: "CHECKOUT_STARTED", DAILY_VOLUME: 3000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+      { NAME: "PURCHASE_COMPLETED", DAILY_VOLUME: 5000, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-03-15" },
+    ]);
+
+    const events = await a.getTopEvents(10);
+    expect(events).toHaveLength(1);
+    expect(events[0].name).toBe("checkout_started");
+  });
+
+  it("merges user exclude_tables with CDP preset excludes", async () => {
+    const configWithExcludes: SnowflakeWarehouseConfig = {
+      ...perEventConfig,
+      exclude_tables: ["INTERNAL_AUDIT", "TEMP_STAGING"],
+    };
+    const a = new PerEventAdapter(mockClient as any, configWithExcludes);
+
+    mockClient.query.mockResolvedValue([]);
+    await a.getTopEvents(10);
+    const sql = mockClient.query.mock.calls[0][0] as string;
+    // Segment defaults
+    expect(sql).toContain("'IDENTIFIES'");
+    // User additions
+    expect(sql).toContain("'INTERNAL_AUDIT'");
+    expect(sql).toContain("'TEMP_STAGING'");
+  });
+
+  it("respects limit after regex filtering", async () => {
+    const configWithPattern: SnowflakeWarehouseConfig = {
+      ...perEventConfig,
+      table_pattern: ".*",
+    };
+    const a = new PerEventAdapter(mockClient as any, configWithPattern);
+
+    mockClient.query.mockResolvedValue([
+      { NAME: "EVENT_A", DAILY_VOLUME: 100, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-01-01" },
+      { NAME: "EVENT_B", DAILY_VOLUME: 90, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-01-01" },
+      { NAME: "EVENT_C", DAILY_VOLUME: 80, FIRST_SEEN: "2023-01-01", LAST_SEEN: "2024-01-01" },
+    ]);
+
+    const events = await a.getTopEvents(2);
+    expect(events).toHaveLength(2);
+  });
+
+  it("getPropertyStats excludes CDP system columns", async () => {
+    mockClient.query.mockResolvedValue([
+      { COLUMN_NAME: "AMOUNT" },
+      { COLUMN_NAME: "CURRENCY" },
+    ]);
+
+    const stats = await adapter.getPropertyStats("purchase_completed");
+    expect(stats).toHaveLength(2);
+    expect(stats[0].property_name).toBe("amount");
+
+    const sql = mockClient.query.mock.calls[0][0] as string;
+    expect(sql).toContain("'RECEIVED_AT'");
+    expect(sql).toContain("'UUID_TS'");
+  });
+
+  it("getPropertyStats returns empty array on error", async () => {
+    mockClient.query.mockRejectedValue(new Error("Table not found"));
+    const stats = await adapter.getPropertyStats("nonexistent_event");
     expect(stats).toEqual([]);
   });
 });

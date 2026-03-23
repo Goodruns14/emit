@@ -1,4 +1,9 @@
+import { execFile } from "child_process";
+import { promisify } from "util";
 import Anthropic from "@anthropic-ai/sdk";
+import type { LlmCallConfig } from "../../types/index.js";
+
+const execFileAsync = promisify(execFile);
 
 let _anthropicClient: Anthropic | null = null;
 
@@ -16,6 +21,48 @@ function getAnthropicClient(): Anthropic {
   return _anthropicClient;
 }
 
+let _claudeBinaryPath: string | null = null;
+
+async function findClaudeBinary(): Promise<string> {
+  if (_claudeBinaryPath) return _claudeBinaryPath;
+
+  // Resolve absolute path via `which` so we can use execFile without shell: true
+  for (const bin of ["claude", "claude-code"]) {
+    try {
+      const { stdout } = await execFileAsync("which", [bin]);
+      _claudeBinaryPath = stdout.trim();
+      return _claudeBinaryPath;
+    } catch {
+      // not found, try next
+    }
+  }
+  throw new Error(
+    "Claude Code CLI not found. Looked for 'claude' and 'claude-code' on PATH.\n" +
+      "  Install: npm install -g @anthropic-ai/claude-code\n" +
+      "  Or switch to a different provider: emit init"
+  );
+}
+
+async function callClaudeCode(prompt: string): Promise<string> {
+  const bin = await findClaudeBinary();
+  try {
+    const { stdout } = await execFileAsync(bin, ["-p", prompt], {
+      timeout: 120_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return stdout.trim();
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      throw new Error(
+        "Claude Code CLI not found on PATH.\n" +
+          "  Install: npm install -g @anthropic-ai/claude-code\n" +
+          "  Or switch to a different provider: emit init"
+      );
+    }
+    throw new Error(`Claude Code CLI error: ${err.message}`);
+  }
+}
+
 async function callAnthropic(
   prompt: string,
   model: string,
@@ -30,24 +77,21 @@ async function callAnthropic(
   return response.content[0].type === "text" ? response.content[0].text : "";
 }
 
-async function callOpenAI(
+async function callOpenAICompat(
   prompt: string,
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  baseUrl: string,
+  apiKeyEnv?: string
 ): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "Missing required environment variable: OPENAI_API_KEY\n" +
-        "  Get your key at https://platform.openai.com/api-keys"
-    );
-  }
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const keyEnvName = apiKeyEnv ?? "OPENAI_API_KEY";
+  const apiKey = process.env[keyEnvName];
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+  const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       max_tokens: maxTokens,
@@ -56,65 +100,66 @@ async function callOpenAI(
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`OpenAI API error ${res.status}: ${body}`);
-  }
-  const data = (await res.json()) as any;
-  return data.choices?.[0]?.message?.content ?? "";
-}
-
-async function callOllama(
-  prompt: string,
-  model: string,
-  maxTokens: number
-): Promise<string> {
-  // Strip the "ollama/" prefix to get the actual model name
-  const ollamaModel = model.replace(/^ollama\//, "");
-  const baseUrl = process.env.OLLAMA_HOST ?? "http://localhost:11434";
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: ollamaModel,
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Ollama API error ${res.status}: ${body}`);
+    throw new Error(`LLM API error ${res.status}: ${body}`);
   }
   const data = (await res.json()) as any;
   return data.choices?.[0]?.message?.content ?? "";
 }
 
 /**
- * Route a prompt to the correct LLM provider based on the model name:
- *   - "ollama/<model>"  → local Ollama (OLLAMA_HOST or http://localhost:11434)
- *   - "gpt-*" / "o1-*" / "o3-*" → OpenAI (OPENAI_API_KEY)
- *   - anything else     → Anthropic (ANTHROPIC_API_KEY)
+ * Route a prompt to the correct LLM provider based on LlmCallConfig.
  */
 export async function callLLM(
   prompt: string,
-  model: string,
-  maxTokens: number
+  cfg: LlmCallConfig
 ): Promise<string> {
-  if (model.startsWith("ollama/")) {
-    return callOllama(prompt, model, maxTokens);
-  }
-  if (model.startsWith("gpt-") || model.startsWith("o1-") || model.startsWith("o3-")) {
-    return callOpenAI(prompt, model, maxTokens);
-  }
-  return callAnthropic(prompt, model, maxTokens);
-}
+  switch (cfg.provider) {
+    case "claude-code":
+      return callClaudeCode(prompt);
 
-/** @deprecated Use callLLM */
-export const callClaude = callLLM;
+    case "anthropic":
+      return callAnthropic(prompt, cfg.model, cfg.max_tokens);
+
+    case "openai":
+      return callOpenAICompat(
+        prompt,
+        cfg.model,
+        cfg.max_tokens,
+        "https://api.openai.com/v1",
+        "OPENAI_API_KEY"
+      );
+
+    case "openai-compatible": {
+      if (!cfg.base_url) {
+        throw new Error(
+          "llm.base_url is required when provider is openai-compatible"
+        );
+      }
+      return callOpenAICompat(
+        prompt,
+        cfg.model,
+        cfg.max_tokens,
+        cfg.base_url,
+        cfg.api_key_env
+      );
+    }
+
+    case "platform":
+      throw new Error(
+        "The 'platform' provider is not yet available. Use claude-code, anthropic, openai, or openai-compatible."
+      );
+
+    default: {
+      const _exhaustive: never = cfg.provider;
+      throw new Error(`Unknown LLM provider: ${_exhaustive}`);
+    }
+  }
+}
 
 export function parseJsonResponse<T>(text: string, fallback: T): T {
   try {
     return JSON.parse(text) as T;
   } catch {
-    // Try stripping markdown code fences if present
     const stripped = text.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
     try {
       return JSON.parse(stripped) as T;

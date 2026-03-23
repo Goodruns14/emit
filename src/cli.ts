@@ -5,6 +5,7 @@ import { registerInit } from "./commands/init.js";
 import { registerStatus } from "./commands/status.js";
 import { registerRevert } from "./commands/revert.js";
 import { registerPush } from "./commands/push.js";
+import { registerImport } from "./commands/import.js";
 import pkg from "../package.json";
 
 const program = new Command();
@@ -19,5 +20,6 @@ registerScan(program);
 registerStatus(program);
 registerRevert(program);
 registerPush(program);
+registerImport(program);
 
 program.parse(process.argv);

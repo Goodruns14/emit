@@ -5,13 +5,9 @@ import type {
   SnowflakeWarehouseConfig,
 } from "../../../types/index.js";
 import type { SnowflakeClient } from "../snowflake.js";
+import { CDP_PRESETS } from "./presets.js";
 
-const DEFAULT_TABLE = "ANALYTICS.TRACKS";
-const DEFAULT_EVENT_COL = "EVENT";
-const DEFAULT_PROPS_COL = "PROPERTIES";
-const DEFAULT_TS_COL = "RECEIVED_AT";
-
-export class SegmentMonolithAdapter implements WarehouseAdapter {
+export class MonolithAdapter implements WarehouseAdapter {
   private client: SnowflakeClient;
   private config: SnowflakeWarehouseConfig;
 
@@ -28,20 +24,28 @@ export class SegmentMonolithAdapter implements WarehouseAdapter {
     await this.client.disconnect();
   }
 
+  private getDefaults() {
+    const preset = CDP_PRESETS[this.config.cdp_preset ?? "segment"];
+    return {
+      table: this.config.events_table ?? preset.monolith.default_table,
+      eventCol: preset.monolith.event_column,
+      propsCol: preset.monolith.properties_column,
+      tsCol: preset.monolith.timestamp_column,
+    };
+  }
+
   async getTopEvents(limit: number): Promise<WarehouseEvent[]> {
-    const table = this.config.events_table ?? DEFAULT_TABLE;
-    const nameCol = DEFAULT_EVENT_COL;
-    const tsCol = DEFAULT_TS_COL;
+    const { table, eventCol, tsCol } = this.getDefaults();
 
     const rows = await this.client.query(`
       SELECT
-        ${nameCol} as name,
+        ${eventCol} as name,
         COUNT(*) as daily_volume,
         MIN(${tsCol}) as first_seen,
         MAX(${tsCol}) as last_seen
       FROM ${table}
       WHERE ${tsCol} >= DATEADD(day, -30, CURRENT_DATE)
-      GROUP BY ${nameCol}
+      GROUP BY ${eventCol}
       ORDER BY daily_volume DESC
       LIMIT ${limit}
     `);
@@ -55,9 +59,7 @@ export class SegmentMonolithAdapter implements WarehouseAdapter {
   }
 
   async getPropertyStats(eventName: string): Promise<PropertyStat[]> {
-    const table = this.config.events_table ?? DEFAULT_TABLE;
-    const nameCol = DEFAULT_EVENT_COL;
-    const propsCol = DEFAULT_PROPS_COL;
+    const { table, eventCol, propsCol } = this.getDefaults();
 
     try {
       const rows = await this.client.query(`
@@ -71,7 +73,7 @@ export class SegmentMonolithAdapter implements WarehouseAdapter {
           ARRAY_AGG(DISTINCT f.value::string) as sample_values
         FROM ${table},
         LATERAL FLATTEN(input => TRY_PARSE_JSON(${propsCol})) f
-        WHERE ${nameCol} = '${eventName}'
+        WHERE ${eventCol} = '${eventName}'
         GROUP BY f.key
         LIMIT 50
       `);

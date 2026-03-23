@@ -67,17 +67,14 @@ export async function searchDirect(
   eventName: string,
   paths: string[],
   sdk: SdkType,
-  customPatterns?: string[]
+  customPatterns?: string[],
+  backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
   const patterns = sdk === "custom"
     ? customPatterns ?? []
     : SDK_PATTERNS[sdk] ?? [];
 
-  // If no SDK patterns, fall back to broad search
-  const patternFilter =
-    patterns.length > 0
-      ? patterns.map((p) => `-e "${p}"`).join(" ")
-      : `-e "track" -e "identify" -e "page" -e "audit" -e "record"`;
+  const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 
   for (const searchPath of paths) {
     try {
@@ -100,8 +97,8 @@ export async function searchDirect(
         .split("\n")
         .filter((line) => {
           const lower = line.toLowerCase();
-          if (patterns.length > 0) {
-            return patterns.some((p) => line.includes(p.replace("(", "")));
+          if (allPatterns.length > 0) {
+            return allPatterns.some((p) => line.includes(p.replace("(", "")));
           }
           return (
             lower.includes("track") ||
@@ -124,15 +121,103 @@ export async function searchDirect(
   return [];
 }
 
+/**
+ * Broad search: greps for the event name (and casing variants) without
+ * any SDK-pattern filtering.  Returns raw matches for LLM triage.
+ */
+export async function searchBroad(
+  eventName: string,
+  paths: string[]
+): Promise<SearchMatch[]> {
+  // Generate casing variants: snake_case, camelCase, Title Case, UPPER_CASE
+  const variants = generateCasingVariants(eventName);
+  const allMatches: SearchMatch[] = [];
+
+  for (const variant of variants) {
+    for (const searchPath of paths) {
+      try {
+        const { stdout } = await execa(
+          "grep",
+          [
+            "-rn",
+            "-i",  // case-insensitive to catch more
+            variant,
+            searchPath,
+            ...FILE_EXTENSIONS.flatMap((e) => ["--include", e]),
+            ...buildExcludeArgs(),
+          ],
+          { reject: false }
+        );
+
+        if (!stdout.trim()) continue;
+
+        const parsed = parseCallSites(stdout);
+        for (const match of parsed) {
+          // Deduplicate by file:line
+          if (!allMatches.some((m) => m.file === match.file && m.line === match.line)) {
+            allMatches.push(match);
+          }
+        }
+      } catch {
+        // no matches
+      }
+    }
+  }
+
+  return allMatches.slice(0, 30);
+}
+
+/**
+ * Generate casing variants from an event name for fuzzy matching.
+ * e.g. "save_entity_click" → ["save_entity_click", "saveEntityClick", "Save Entity Click", "SAVE_ENTITY_CLICK"]
+ */
+export function generateCasingVariants(eventName: string): string[] {
+  const variants = new Set<string>();
+  variants.add(eventName);
+
+  // Normalize to words (split on _, -, spaces, camelCase boundaries)
+  const words = eventName
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_\-]/g, " ")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) return [eventName];
+
+  // snake_case
+  variants.add(words.join("_"));
+
+  // camelCase
+  variants.add(words[0] + words.slice(1).map((w) => w[0].toUpperCase() + w.slice(1)).join(""));
+
+  // Title Case (with spaces)
+  variants.add(words.map((w) => w[0].toUpperCase() + w.slice(1)).join(" "));
+
+  // UPPER_SNAKE_CASE
+  variants.add(words.join("_").toUpperCase());
+
+  // PascalCase
+  variants.add(words.map((w) => w[0].toUpperCase() + w.slice(1)).join(""));
+
+  // kebab-case
+  variants.add(words.join("-"));
+
+  return [...variants];
+}
+
 export async function searchConstant(
   constantName: string,
   paths: string[],
   sdk: SdkType,
-  customPatterns?: string[]
+  customPatterns?: string[],
+  backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
   const patterns = sdk === "custom"
     ? customPatterns ?? []
     : SDK_PATTERNS[sdk] ?? [];
+
+  const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 
   for (const searchPath of paths) {
     try {
@@ -154,8 +239,8 @@ export async function searchConstant(
         .split("\n")
         .filter((line) => {
           const lower = line.toLowerCase();
-          if (patterns.length > 0) {
-            return patterns.some((p) => line.includes(p.replace("(", "")));
+          if (allPatterns.length > 0) {
+            return allPatterns.some((p) => line.includes(p.replace("(", "")));
           }
           return (
             lower.includes("track") ||

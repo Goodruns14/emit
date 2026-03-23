@@ -7,10 +7,13 @@ import type {
   PropertyDefinition,
   CatalogEvent,
   LlmCallConfig,
+  ResolvedEvent,
 } from "../../types/index.js";
-import { buildExtractionPrompt, buildPropertyDefinitionsPrompt } from "./prompts.js";
+import { buildExtractionPrompt, buildPropertyDefinitionsPrompt, buildResolveMissingPrompt } from "./prompts.js";
 import { callLLM, parseJsonResponse } from "./claude.js";
 import { getCached, setCached } from "./cache.js";
+import { searchBroad } from "../scanner/search.js";
+import { extractContext } from "../scanner/context.js";
 
 const EXTRACTION_FALLBACK: ExtractedMetadata = {
   event_description: "Could not extract — JSON parse failed",
@@ -52,6 +55,42 @@ export class MetadataExtractor {
 
     setCached(eventName, cacheKey, result);
     return result;
+  }
+
+  async resolveMissing(
+    eventName: string,
+    repoPaths: string[]
+  ): Promise<ResolvedEvent | null> {
+    const broadMatches = await searchBroad(eventName, repoPaths);
+
+    if (broadMatches.length === 0) return null;
+
+    // Enrich each match with surrounding context for the LLM
+    const candidates = broadMatches.slice(0, 15).map((m) => ({
+      file: m.file,
+      line: m.line,
+      rawLine: m.rawLine,
+      context: extractContext(m.file, m.line, 20),
+    }));
+
+    const prompt = buildResolveMissingPrompt(eventName, candidates);
+    const text = await callLLM(prompt, { ...this.cfg, max_tokens: 1000 });
+
+    const FALLBACK = { resolved: false as const };
+    const result = parseJsonResponse<any>(text, FALLBACK);
+
+    if (!result.resolved || !result.actual_event_name) return null;
+
+    return {
+      original_name: eventName,
+      actual_event_name: result.actual_event_name,
+      match_file: result.match_file ?? "",
+      match_line: result.match_line ?? 0,
+      event_type: result.event_type ?? "unknown",
+      explanation: result.explanation ?? "",
+      rename_detected: result.rename_detected ?? false,
+      confidence: result.confidence ?? "low",
+    };
   }
 
   async generatePropertyDefinitions(

@@ -21,6 +21,7 @@ import type {
   WarehouseAdapter,
   SourceAdapter,
   LlmProvider,
+  ResolvedEvent,
 } from "../types/index.js";
 
 interface ScanOptions {
@@ -33,6 +34,7 @@ interface ScanOptions {
   model?: string;
   provider?: LlmProvider;
   fresh?: boolean;
+  resolveMissing?: boolean | string;
 }
 
 export function registerScan(program: Command): void {
@@ -54,6 +56,10 @@ export function registerScan(program: Command): void {
       "Override LLM provider: claude-code | anthropic | openai | openai-compatible"
     )
     .option("--fresh", "Force full re-extraction, ignoring cached results")
+    .option(
+      "--resolve-missing [events]",
+      "Use LLM to find renamed/missing events. Pass comma-separated names, or omit for all not-found events"
+    )
     .action(async (opts: ScanOptions) => {
       const exitCode = await runScan(opts);
       process.exit(exitCode);
@@ -166,6 +172,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
     paths: config.repo.paths,
     sdk: config.repo.sdk,
     trackPattern: config.repo.track_pattern,
+    backendPatterns: config.repo.backend_patterns,
   });
 
   if (!json) {
@@ -306,6 +313,97 @@ async function runScan(opts: ScanOptions): Promise<number> {
     if (!json) logger.succeed("All events unchanged — property definitions carried forward");
   }
 
+  // ── Resolve missing events ──────────────────────────────────────
+  const resolvedEvents: ResolvedEvent[] = [];
+
+  if (opts.resolveMissing && notFound.length > 0 && !json) {
+    // Determine which events to resolve
+    let eventsToResolve: string[];
+    if (typeof opts.resolveMissing === "string" && opts.resolveMissing !== "true") {
+      eventsToResolve = opts.resolveMissing.split(",").map((s) => s.trim()).filter(Boolean);
+      // Only resolve events that are actually missing
+      eventsToResolve = eventsToResolve.filter((e) => notFound.includes(e));
+    } else {
+      eventsToResolve = [...notFound];
+    }
+
+    if (eventsToResolve.length > 0) {
+      logger.blank();
+      logger.line(chalk.bold("  Resolve missing events"));
+      logger.line(chalk.gray("─".repeat(45)));
+      logger.blank();
+      logger.line(`  ${eventsToResolve.length} missing event${eventsToResolve.length === 1 ? "" : "s"} to resolve.`);
+      logger.line(chalk.gray("  This uses LLM calls to fuzzy-match renamed/refactored events."));
+      logger.blank();
+
+      // Checkpoint: confirm before spending tokens
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => {
+        rl.question(`  Proceed with resolving ${eventsToResolve.length} event${eventsToResolve.length === 1 ? "" : "s"}? [Y/n]: `, (ans) => {
+          rl.close();
+          resolve(ans);
+        });
+      });
+
+      if (answer.trim().toLowerCase() !== "n") {
+        let resolvedCount = 0;
+
+        for (let i = 0; i < eventsToResolve.length; i++) {
+          const eventName = eventsToResolve[i];
+          logger.scanRow(eventName, chalk.gray("searching..."), "pending");
+
+          const result = await extractor.resolveMissing(eventName, config.repo.paths);
+
+          if (result) {
+            resolvedEvents.push(result);
+            resolvedCount++;
+            const nameDisplay = result.rename_detected
+              ? `→ "${result.actual_event_name}" (renamed)`
+              : `→ "${result.actual_event_name}"`;
+            logger.scanRow(
+              eventName,
+              `${nameDisplay} in ${result.match_file}:${result.match_line}`,
+              "ok"
+            );
+          } else {
+            logger.scanRow(eventName, "no match found", "fail");
+          }
+
+          // Checkpoint every 5 events if more than 10 remain
+          const remaining = eventsToResolve.length - (i + 1);
+          if (remaining > 5 && (i + 1) % 5 === 0) {
+            const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
+            const cont = await new Promise<string>((resolve) => {
+              rl2.question(
+                chalk.gray(`\n  ${resolvedCount} resolved so far, ${remaining} remaining. Continue? [Y/n]: `),
+                (ans) => { rl2.close(); resolve(ans); }
+              );
+            });
+            if (cont.trim().toLowerCase() === "n") {
+              logger.blank();
+              logger.line(chalk.gray("  Stopped early. Resolved events so far will be included in the catalog."));
+              break;
+            }
+          }
+        }
+
+        logger.blank();
+        if (resolvedCount > 0) {
+          logger.succeed(`Resolved ${resolvedCount}/${eventsToResolve.length} missing events`);
+        } else {
+          logger.line(chalk.gray("  No missing events could be resolved."));
+        }
+      } else {
+        logger.blank();
+        logger.line(chalk.gray("  Skipped resolve-missing phase."));
+      }
+    }
+  }
+
+  // Update not_found list: remove events that were resolved
+  const resolvedNames = new Set(resolvedEvents.map((r) => r.original_name));
+  const finalNotFound = notFound.filter((e) => !resolvedNames.has(e));
+
   // ── Build output ──────────────────────────────────────────────────
   const output: EmitCatalog = {
     version: 1,
@@ -313,15 +411,16 @@ async function runScan(opts: ScanOptions): Promise<number> {
     commit: getCurrentCommit(),
     stats: {
       events_targeted: events.length,
-      events_located: located.length,
-      events_not_found: notFound.length,
+      events_located: located.length + resolvedEvents.length,
+      events_not_found: finalNotFound.length,
       high_confidence: stats.high,
       medium_confidence: stats.medium,
       low_confidence: stats.low,
     },
     property_definitions: propertyDefinitions,
     events: catalog,
-    not_found: notFound,
+    not_found: finalNotFound,
+    ...(resolvedEvents.length > 0 ? { resolved: resolvedEvents } : {}),
   };
 
   if (json) {
@@ -373,8 +472,11 @@ async function runScan(opts: ScanOptions): Promise<number> {
         value: stats.low > 0 ? `${stats.low}  ⚠ review recommended` : stats.low,
         warn: stats.low > 0,
       },
-      { label: "Not found:", value: notFound.length, warn: notFound.length > 0 },
+      { label: "Not found:", value: finalNotFound.length, warn: finalNotFound.length > 0 },
     );
+    if (resolvedEvents.length > 0) {
+      summaryRows.push({ label: "Resolved (renamed):", value: resolvedEvents.length });
+    }
     logger.summary(summaryRows);
     logger.line(chalk.gray("─".repeat(45)));
     logger.blank();
@@ -383,6 +485,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
   // Disconnect
   if (warehouseAdapter) await warehouseAdapter.disconnect().catch(() => {});
 
-  const hasLowOrNotFound = stats.low > 0 || notFound.length > 0;
+  const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;
   return hasLowOrNotFound ? 2 : 0;
 }

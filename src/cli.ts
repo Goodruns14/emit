@@ -6,7 +6,9 @@ import { registerStatus } from "./commands/status.js";
 import { registerRevert } from "./commands/revert.js";
 import { registerPush } from "./commands/push.js";
 import { registerImport } from "./commands/import.js";
-import pkg from "../package.json";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json");
 
 const program = new Command();
 

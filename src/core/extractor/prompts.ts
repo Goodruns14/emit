@@ -75,6 +75,55 @@ Rules:
 `.trim();
 }
 
+export function buildResolveMissingPrompt(
+  eventName: string,
+  candidateMatches: { file: string; line: number; rawLine: string; context: string }[]
+): string {
+  const candidates = candidateMatches
+    .map(
+      (m, i) =>
+        `Candidate ${i + 1} — ${m.file}:${m.line}\nMatched line: ${m.rawLine.trim()}\nContext:\n\`\`\`\n${m.context}\n\`\`\``
+    )
+    .join("\n\n");
+
+  return `
+You are helping resolve a missing analytics event. The event "${eventName}" was expected in the codebase
+but could not be found by exact-match search. This usually happens because:
+- The event was renamed (e.g. "save_entity_click" → "Save Entity Click")
+- The event uses different casing (snake_case vs camelCase vs Title Case)
+- The event was replaced by a newer event with a different name
+- The event is tracked through a backend system with a different naming convention
+
+Below are candidate code matches found by a broad fuzzy search. Analyze them and determine:
+1. Which candidate (if any) is actually tracking this event under a different name
+2. What the actual event name is in code
+3. Whether this is a frontend or backend event
+
+Candidates:
+${candidates}
+
+Return ONLY a valid JSON object. No preamble, no markdown, no explanation:
+{
+  "resolved": true | false,
+  "actual_event_name": "the name as it appears in the tracking call, or null if not resolved",
+  "candidate_index": 1-based index of the best matching candidate, or null,
+  "match_file": "file path of the match, or null",
+  "match_line": line number of the match, or null,
+  "event_type": "frontend | backend | unknown",
+  "explanation": "Brief explanation of why this is or isn't a match",
+  "rename_detected": true | false,
+  "original_name": "${eventName}",
+  "confidence": "high | medium | low"
+}
+
+Rules:
+- Only mark resolved: true if you are confident this is the same logical event
+- A renamed event that tracks the same user action counts as resolved
+- If multiple candidates look plausible, pick the strongest match and explain why
+- If none of the candidates are the event, return resolved: false with an explanation
+`.trim();
+}
+
 export function buildPropertyDefinitionsPrompt(
   sharedProperties: Record<
     string,

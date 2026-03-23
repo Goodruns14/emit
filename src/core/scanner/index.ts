@@ -6,11 +6,13 @@ export class RepoScanner {
   private paths: string[];
   private sdk: SdkType;
   private customPatterns: string[];
+  private backendPatterns: string[];
 
   constructor(opts: {
     paths: string[];
     sdk: SdkType;
     trackPattern?: string | string[];
+    backendPatterns?: string[];
   }) {
     this.paths = opts.paths;
     this.sdk = opts.sdk;
@@ -21,6 +23,7 @@ export class RepoScanner {
     } else {
       this.customPatterns = [opts.trackPattern];
     }
+    this.backendPatterns = opts.backendPatterns ?? [];
   }
 
   async findEvent(eventName: string): Promise<CodeContext> {
@@ -29,7 +32,8 @@ export class RepoScanner {
       eventName,
       this.paths,
       this.sdk,
-      this.customPatterns
+      this.customPatterns,
+      this.backendPatterns
     );
 
     if (directMatches.length > 0) {
@@ -55,7 +59,8 @@ export class RepoScanner {
       constantName,
       this.paths,
       this.sdk,
-      this.customPatterns
+      this.customPatterns,
+      this.backendPatterns
     );
 
     if (constantMatches.length > 0) {

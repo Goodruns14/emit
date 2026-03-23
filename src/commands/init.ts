@@ -155,6 +155,42 @@ async function detectTrackPatterns(paths: string[]): Promise<string[]> {
   return patterns;
 }
 
+async function detectBackendPatterns(paths: string[]): Promise<string[]> {
+  const found: string[] = [];
+
+  for (const pattern of BACKEND_PATTERNS) {
+    for (const searchPath of paths) {
+      try {
+        const { stdout } = await execa(
+          "grep",
+          [
+            "-rl",
+            pattern.replace("(", ""),
+            searchPath,
+            "--include", "*.java",
+            "--include", "*.kt",
+            "--include", "*.scala",
+            "--include", "*.py",
+            "--exclude-dir", "node_modules",
+            "--exclude-dir", ".git",
+            "--exclude-dir", "target",
+            "--exclude-dir", "build",
+          ],
+          { reject: false }
+        );
+        const files = stdout.trim().split("\n").filter(Boolean);
+        if (files.length > 0 && !found.includes(pattern)) {
+          found.push(pattern);
+        }
+      } catch {
+        // no match
+      }
+    }
+  }
+
+  return found;
+}
+
 async function detectLlmProvider(): Promise<string | null> {
   if (await isClaudeCodeInstalled()) return "claude-code";
   if (process.env.ANTHROPIC_API_KEY) return "anthropic";
@@ -164,7 +200,7 @@ async function detectLlmProvider(): Promise<string | null> {
 
 // ── Config builders ────────────────────────────────────────────────────────────
 
-function buildConfig(patterns: string[], llmProvider: string): string {
+function buildConfig(patterns: string[], llmProvider: string, backendPatterns?: string[]): string {
   let yml = "repo:\n  paths:\n    - ./\n  sdk: custom\n";
   if (patterns.length === 1) {
     yml += `  track_pattern: "${patterns[0]}"\n`;
@@ -174,7 +210,13 @@ function buildConfig(patterns: string[], llmProvider: string): string {
       yml += `    - "${p}"\n`;
     }
   }
-  yml += `\noutput:\n  file: emit.catalog.yml\n  confidence_threshold: low\n`;
+  if (backendPatterns && backendPatterns.length > 0) {
+    yml += `  backend_patterns:\n`;
+    for (const p of backendPatterns) {
+      yml += `    - "${p}"\n`;
+    }
+  }
+  yml += `\noutput:\n  file: .emit/catalog.yml\n  confidence_threshold: low\n`;
   yml += `\nllm:\n  provider: ${llmProvider}\n  model: claude-sonnet-4-6\n  max_tokens: 1000\n`;
   return yml;
 }
@@ -189,7 +231,7 @@ function writeBlankConfig(configPath: string): void {
     '  track_pattern: "analytics.track("',
     "",
     "output:",
-    "  file: emit.catalog.yml",
+    "  file: .emit/catalog.yml",
     "  confidence_threshold: low",
     "",
     "llm:",
@@ -265,12 +307,16 @@ async function askFromScratch(
   return { patterns, llm };
 }
 
-function showSummary(patterns: string[], llm: string): void {
+function showSummary(patterns: string[], llm: string, backendPatterns?: string[]): void {
   logger.blank();
   const patternDisplay = patterns.length === 1 ? patterns[0] : patterns.join(", ");
-  logger.line(`    track_pattern:  ${chalk.cyan(patternDisplay)}`);
+  logger.line(`    track_pattern:     ${chalk.cyan(patternDisplay)}`);
+  if (backendPatterns && backendPatterns.length > 0) {
+    const backendDisplay = backendPatterns.length === 1 ? backendPatterns[0] : backendPatterns.join(", ");
+    logger.line(`    backend_patterns:  ${chalk.cyan(backendDisplay)}`);
+  }
   if (llm) {
-    logger.line(`    llm:            ${chalk.cyan(LLM_DISPLAY_LABELS[llm] ?? llm)}`);
+    logger.line(`    llm:               ${chalk.cyan(LLM_DISPLAY_LABELS[llm] ?? llm)}`);
   }
   logger.blank();
 }
@@ -285,7 +331,6 @@ async function runInit(dir?: string): Promise<number> {
     return 1;
   }
 
-  const p = createPrompter();
   const configPath = path.resolve(repoDir, "emit.config.yml");
 
   logger.blank();
@@ -297,9 +342,13 @@ async function runInit(dir?: string): Promise<number> {
   const scanPaths = [repoDir];
   logger.spin("Detecting your setup...");
   const detectedPatterns = await detectTrackPatterns(scanPaths);
+  const detectedBackend = await detectBackendPatterns(scanPaths);
   const detectedLlm = await detectLlmProvider();
   logger.succeed("Detection complete");
   logger.blank();
+
+  // Create prompter AFTER spinner finishes to avoid stdin conflicts
+  const p = createPrompter();
 
   if (detectedPatterns.length > 0) {
     const patternDisplay =
@@ -308,7 +357,12 @@ async function runInit(dir?: string): Promise<number> {
         : chalk.cyan(detectedPatterns.join(", "));
     logger.line(`  ${chalk.green("✓")} Detected ${patternDisplay} in files`);
   } else {
-    logger.line(`  ${chalk.yellow("⚠")} No tracking patterns detected`);
+    logger.line(`  ${chalk.yellow("⚠")} No frontend tracking patterns detected`);
+  }
+
+  if (detectedBackend.length > 0) {
+    const backendDisplay = chalk.cyan(detectedBackend.join(", "));
+    logger.line(`  ${chalk.green("✓")} Detected backend patterns: ${backendDisplay}`);
   }
 
   if (detectedLlm) {
@@ -321,7 +375,7 @@ async function runInit(dir?: string): Promise<number> {
   let llm: string;
 
   if (detectedPatterns.length > 0 && detectedLlm) {
-    showSummary(detectedPatterns, detectedLlm);
+    showSummary(detectedPatterns, detectedLlm, detectedBackend);
     const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
     if (confirm.trim().toLowerCase() === "n") {
       logger.blank();
@@ -340,7 +394,7 @@ async function runInit(dir?: string): Promise<number> {
       llm = detectedLlm;
     }
   } else if (detectedPatterns.length > 0) {
-    showSummary(detectedPatterns, "");
+    showSummary(detectedPatterns, "", detectedBackend);
     const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
     if (confirm.trim().toLowerCase() === "n") {
       const newPatterns = await askTrackPatterns(p);
@@ -378,7 +432,7 @@ async function runInit(dir?: string): Promise<number> {
   // Close readline before switching to raw mode
   p.close();
 
-  const configYml = buildConfig(patterns, llm);
+  const configYml = buildConfig(patterns, llm, detectedBackend);
   fs.writeFileSync(configPath, configYml);
 
   logger.blank();
@@ -493,6 +547,22 @@ const WRAPPER_PATTERNS = [
   "posthog.capture(",
   "amplitude.track(",
   "mixpanel.track(",
+];
+
+// ── Common backend/server-side tracking patterns ──────────────────────────────
+
+const BACKEND_PATTERNS = [
+  "AuditEventHelper.capture",
+  "AuditEventHelper.log",
+  "auditEventHelper.capture",
+  "captureEntityCRUDEvent(",
+  "EventPublisher.publish(",
+  "eventPublisher.publish(",
+  "analyticsService.track(",
+  "AnalyticsService.track(",
+  "EventTracker.track(",
+  "auditLog(",
+  "AuditLog.create(",
 ];
 
 interface DetectedPattern {

@@ -7,7 +7,7 @@ export const logger = {
   // ── Spinner ────────────────────────────────────────────────────────
   spin(text: string): void {
     if (_spinner) _spinner.stop();
-    _spinner = ora(text).start();
+    _spinner = ora({ text, discardStdin: false }).start();
   },
 
   succeed(text?: string): void {
@@ -64,13 +64,15 @@ export const logger = {
   },
 
   // ── Scan-specific row output (name + result on same line) ──────────
-  scanRow(name: string, result: string, status: "ok" | "warn" | "fail"): void {
+  scanRow(name: string, result: string, status: "ok" | "warn" | "fail" | "pending"): void {
     if (_spinner) _spinner.stop();
     const icon =
       status === "ok"
         ? chalk.green("✓")
         : status === "warn"
         ? chalk.yellow("~")
+        : status === "pending"
+        ? chalk.blue("…")
         : chalk.red("✗");
     process.stdout.write(
       `  ${icon} ${name.padEnd(45)} ${result}\n`

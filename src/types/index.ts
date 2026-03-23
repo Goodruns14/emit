@@ -118,6 +118,22 @@ export interface EmitCatalog {
   property_definitions: Record<string, PropertyDefinition>;
   events: Record<string, CatalogEvent>;
   not_found: string[];
+  resolved?: ResolvedEvent[];
+}
+
+// ─────────────────────────────────────────────
+// RESOLVE-MISSING TYPES
+// ─────────────────────────────────────────────
+
+export interface ResolvedEvent {
+  original_name: string;
+  actual_event_name: string;
+  match_file: string;
+  match_line: number;
+  event_type: "frontend" | "backend" | "unknown";
+  explanation: string;
+  rename_detected: boolean;
+  confidence: "high" | "medium" | "low";
 }
 
 // ─────────────────────────────────────────────
@@ -301,6 +317,8 @@ export interface EmitConfig {
     paths: string[];
     sdk: SdkType;
     track_pattern?: string | string[];
+    /** Additional patterns for backend tracking (e.g. Java audit helpers, server-side SDKs) */
+    backend_patterns?: string[];
   };
   output: {
     file: string;

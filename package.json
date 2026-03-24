@@ -1,6 +1,6 @@
 {
   "name": "emit-catalog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Automatic event catalog generator — extract semantic metadata from instrumentation code",
   "keywords": [
     "analytics",

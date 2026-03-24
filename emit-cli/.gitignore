@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.emit/cache/
+*.js.map
+emit.config.yml
+.DS_Store

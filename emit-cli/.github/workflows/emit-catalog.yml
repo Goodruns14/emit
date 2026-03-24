@@ -1,0 +1,31 @@
+# Emit — Catalog Check
+# Runs emit scan on PRs that touch instrumentation files and posts a
+# comment showing new, modified, and low-confidence events.
+#
+# Setup:
+#   1. Add ANTHROPIC_API_KEY as an org-level or repo-level secret
+#   2. Adjust the `paths` filter below to match your instrumentation directories
+#
+name: Update Event Catalog
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "src/**" # Customize: paths containing your instrumentation code
+
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ./action
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # base_branch: main  # uncomment to override

@@ -17,21 +17,12 @@ Emit scans your codebase for analytics tracking calls (Segment, PostHog, Amplitu
 ## Install
 
 ```bash
-cd emit-cli
-npm install
-npm run build
+npm install -g emit-catalog
 ```
 
-Then either run directly:
+Then verify:
 
 ```bash
-node dist/cli.js --help
-```
-
-Or link it globally:
-
-```bash
-npm link
 emit --help
 ```
 

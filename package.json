@@ -1,15 +1,24 @@
 {
-  "name": "emit-cli",
+  "name": "emit-catalog",
   "version": "0.1.0",
   "description": "Automatic event catalog generator — extract semantic metadata from instrumentation code",
-  "keywords": ["analytics", "events", "catalog", "segment", "snowflake", "cli"],
+  "keywords": [
+    "analytics",
+    "events",
+    "catalog",
+    "segment",
+    "snowflake",
+    "cli"
+  ],
   "license": "MIT",
   "bin": {
-    "emit": "./dist/cli.js"
+    "emit": "dist/cli.js"
   },
   "type": "module",
   "main": "./dist/cli.js",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

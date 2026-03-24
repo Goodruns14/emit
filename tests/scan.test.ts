@@ -1,0 +1,288 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import * as yaml from "js-yaml";
+
+// ── Mock the LLM layer ─────────────────────────────────────────────
+// We mock callLLM so tests never hit a real API. Everything else
+// (config loading, scanner, reconciler, writer) runs for real.
+vi.mock("../src/core/extractor/claude.js", () => ({
+  callLLM: vi.fn(),
+  parseJsonResponse: vi.fn((text: string, fallback: any) => {
+    try {
+      // Strip markdown fences if present
+      const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      return JSON.parse(cleaned);
+    } catch {
+      return fallback;
+    }
+  }),
+}));
+
+import { callLLM } from "../src/core/extractor/claude.js";
+import { loadConfig, resolveOutputPath } from "../src/utils/config.js";
+import { RepoScanner } from "../src/core/scanner/index.js";
+import { extractAllLiteralValues } from "../src/core/scanner/context.js";
+import { MetadataExtractor } from "../src/core/extractor/index.js";
+import { reconcile } from "../src/core/reconciler/index.js";
+import { writeOutput } from "../src/core/writer/index.js";
+import type { EmitCatalog, CatalogEvent, ExtractedMetadata } from "../src/types/index.js";
+
+const CALCOM_DIR = path.resolve(__dirname, "../../test-repos/calcom");
+
+function fakeLLMResponse(eventName: string): string {
+  const response: ExtractedMetadata = {
+    event_description: `Test description for ${eventName}`,
+    fires_when: `User triggers ${eventName}`,
+    confidence: "high",
+    confidence_reason: "Clear tracking call with descriptive name",
+    properties: {},
+    flags: [],
+  };
+  return JSON.stringify(response);
+}
+
+function fakePropertyDefsResponse(): string {
+  return JSON.stringify({});
+}
+
+describe("emit scan — integration", () => {
+  let tmpDir: string;
+  const originalCwd = process.cwd;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "emit-scan-test-"));
+  });
+
+  afterEach(() => {
+    process.cwd = originalCwd;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("scans calcom repo with manual events and produces valid catalog", async () => {
+    // Use calcom's real config but override output to tmp
+    process.cwd = () => CALCOM_DIR;
+
+    const config = await loadConfig(CALCOM_DIR);
+    const outputPath = path.join(tmpDir, "emit.catalog.yml");
+
+    // Scanner runs for real against the calcom repo
+    const scanner = new RepoScanner({
+      paths: config.repo.paths,
+      sdk: config.repo.sdk,
+      trackPattern: config.repo.track_pattern,
+    });
+
+    // Mock LLM to return predictable responses
+    const mockedCallLLM = vi.mocked(callLLM);
+    mockedCallLLM.mockImplementation(async (prompt: string) => {
+      // Property definitions prompt is different from extraction
+      if (prompt.includes("property definitions")) {
+        return fakePropertyDefsResponse();
+      }
+      // Extract event name from prompt for predictable output
+      const match = prompt.match(/Event name:\s*"?([^"\n]+)"?/);
+      const name = match?.[1] ?? "unknown";
+      return fakeLLMResponse(name);
+    });
+
+    const events = config.manual_events!.map((name) => ({
+      name,
+      daily_volume: 0,
+      first_seen: "unknown",
+      last_seen: "unknown",
+    }));
+
+    // ── Scan phase ────────────────────────────────────────────────
+    const located: typeof events = [];
+    const notFound: string[] = [];
+    const codeContextMap = new Map<string, Awaited<ReturnType<RepoScanner["findEvent"]>>>();
+
+    for (const event of events) {
+      const ctx = await scanner.findEvent(event.name);
+      codeContextMap.set(event.name, ctx);
+      if (ctx.match_type === "not_found") {
+        notFound.push(event.name);
+      } else {
+        located.push(event);
+      }
+    }
+
+    // Cal.com uses posthog.capture — we expect most events to be found
+    expect(located.length).toBeGreaterThan(0);
+
+    // ── Extract phase ─────────────────────────────────────────────
+    const extractor = new MetadataExtractor(config.llm);
+    const catalog: Record<string, CatalogEvent> = {};
+
+    for (const event of located) {
+      const ctx = codeContextMap.get(event.name)!;
+      const literalValues = extractAllLiteralValues(
+        ctx.context,
+        ctx.all_call_sites.slice(1).map((cs) => cs.context),
+        config.repo.paths
+      );
+      const meta = await extractor.extractMetadata(
+        event.name, ctx, event, [], literalValues
+      );
+      const reconciled = reconcile(meta, ctx, event, [], literalValues);
+      catalog[event.name] = reconciled;
+    }
+
+    // Every located event should have a catalog entry
+    expect(Object.keys(catalog).length).toBe(located.length);
+
+    // ── Write phase ───────────────────────────────────────────────
+    const output: EmitCatalog = {
+      version: 1,
+      generated_at: new Date().toISOString(),
+      commit: "test123",
+      stats: {
+        events_targeted: events.length,
+        events_located: located.length,
+        events_not_found: notFound.length,
+        high_confidence: located.length,
+        medium_confidence: 0,
+        low_confidence: 0,
+      },
+      property_definitions: {},
+      events: catalog,
+      not_found: notFound,
+    };
+
+    writeOutput(output, outputPath);
+
+    // ── Verify output ─────────────────────────────────────────────
+    expect(fs.existsSync(outputPath)).toBe(true);
+    const written = yaml.load(fs.readFileSync(outputPath, "utf8")) as EmitCatalog;
+
+    expect(written.version).toBe(1);
+    expect(written.stats.events_targeted).toBe(events.length);
+    expect(written.stats.events_located).toBe(located.length);
+    expect(Object.keys(written.events).length).toBe(located.length);
+
+    // Each event should have the expected structure
+    for (const [name, event] of Object.entries(written.events)) {
+      expect(event.description).toContain("Test description");
+      expect(event.source_file).toBeTruthy();
+      expect(event.source_line).toBeGreaterThan(0);
+      expect(event.confidence).toBe("high");
+      expect(event.all_call_sites.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("scanner finds events via custom track pattern", async () => {
+    const scanner = new RepoScanner({
+      paths: ["./"],
+      sdk: "custom",
+      trackPattern: "posthog.capture(",
+    });
+
+    process.cwd = () => CALCOM_DIR;
+
+    // posthog.capture("app_card_details_clicked") should be findable
+    const ctx = await scanner.findEvent("app_card_details_clicked");
+    expect(ctx.match_type).not.toBe("not_found");
+    expect(ctx.file_path).toBeTruthy();
+    expect(ctx.line_number).toBeGreaterThan(0);
+    expect(ctx.all_call_sites.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("scanner returns not_found for non-existent events", async () => {
+    const scanner = new RepoScanner({
+      paths: ["./"],
+      sdk: "custom",
+      trackPattern: "posthog.capture(",
+    });
+
+    process.cwd = () => CALCOM_DIR;
+
+    const ctx = await scanner.findEvent("this_event_does_not_exist_anywhere_xyz");
+    expect(ctx.match_type).toBe("not_found");
+    expect(ctx.file_path).toBe("");
+    expect(ctx.all_call_sites).toEqual([]);
+  });
+
+  it("reconciler downgrades confidence when warehouse has unknown properties", async () => {
+    const scanner = new RepoScanner({
+      paths: ["./"],
+      sdk: "custom",
+      trackPattern: "posthog.capture(",
+    });
+
+    process.cwd = () => CALCOM_DIR;
+
+    const ctx = await scanner.findEvent("app_card_details_clicked");
+    if (ctx.match_type === "not_found") return; // skip if not found
+
+    const extracted: ExtractedMetadata = {
+      event_description: "User clicked app card details",
+      fires_when: "Click on app card",
+      confidence: "high",
+      confidence_reason: "Clear pattern",
+      properties: {},
+      flags: [],
+    };
+
+    const fakeWarehouseProps = [
+      { property_name: "mystery_prop", null_rate: 5, cardinality: 10, sample_values: ["a", "b"] },
+    ];
+
+    const event = { name: "app_card_details_clicked", daily_volume: 100, first_seen: "2023-01-01", last_seen: "2024-01-01" };
+    const reconciled = reconcile(extracted, ctx, event, fakeWarehouseProps, {});
+
+    // Should be downgraded from high because warehouse has a property the LLM didn't find
+    expect(reconciled.confidence).not.toBe("high");
+    expect(reconciled.flags.length).toBeGreaterThan(0);
+    expect(reconciled.flags[0]).toContain("mystery_prop");
+  });
+
+  it("writes valid YAML that round-trips cleanly", async () => {
+    const catalog: EmitCatalog = {
+      version: 1,
+      generated_at: "2024-01-01T00:00:00.000Z",
+      commit: "abc1234",
+      stats: {
+        events_targeted: 1, events_located: 1, events_not_found: 0,
+        high_confidence: 1, medium_confidence: 0, low_confidence: 0,
+      },
+      property_definitions: {},
+      events: {
+        test_event: {
+          description: "A test event with \"special\" characters & <tags>",
+          fires_when: "User does something",
+          confidence: "high",
+          confidence_reason: "Clear",
+          review_required: false,
+          source_file: "src/test.ts",
+          source_line: 42,
+          all_call_sites: [{ file: "src/test.ts", line: 42 }],
+          warehouse_stats: { daily_volume: 100, first_seen: "2023-01-01", last_seen: "2024-01-01" },
+          properties: {
+            amount: {
+              description: "Transaction amount",
+              edge_cases: ["Can be negative for refunds"],
+              null_rate: 0.5,
+              cardinality: 200,
+              sample_values: ["100", "200"],
+              code_sample_values: [],
+              confidence: "high",
+            },
+          },
+          flags: [],
+        },
+      },
+      not_found: [],
+    };
+
+    const outputPath = path.join(tmpDir, "roundtrip.yml");
+    writeOutput(catalog, outputPath);
+
+    const reloaded = yaml.load(fs.readFileSync(outputPath, "utf8")) as EmitCatalog;
+    expect(reloaded.events.test_event.description).toBe(catalog.events.test_event.description);
+    expect(reloaded.events.test_event.properties.amount.edge_cases).toEqual(["Can be negative for refunds"]);
+    expect(reloaded.stats).toEqual(catalog.stats);
+  });
+});

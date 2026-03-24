@@ -66,11 +66,27 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
   };
 }
 
+const VALID_PROVIDERS = new Set<string>([
+  "claude-code",
+  "anthropic",
+  "openai",
+  "openai-compatible",
+  "platform",
+]);
+
 function validate(config: EmitConfig): void {
   if (!config.warehouse && !config.source && !config.manual_events?.length) {
     throw new Error(
       "Config must include at least one of: warehouse, source, or manual_events\n" +
         "  Run `emit init` to set up your configuration."
+    );
+  }
+
+  const provider = config.llm?.provider ?? "anthropic";
+  if (!VALID_PROVIDERS.has(provider)) {
+    throw new Error(
+      `Unknown LLM provider: "${provider}"\n` +
+        `  Valid options: claude-code, anthropic, openai, openai-compatible`
     );
   }
 
@@ -100,8 +116,6 @@ function validate(config: EmitConfig): void {
       );
     }
   }
-
-  const provider = config.llm?.provider ?? "anthropic";
 
   if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     throw new Error(

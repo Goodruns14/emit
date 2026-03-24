@@ -40,9 +40,53 @@ export function parseEventsFile(
     throw new Error(`File not found: ${filePath}`);
   }
 
-  const raw = fs.readFileSync(resolved, "utf8");
+  // Reject directories
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    throw new Error(`Expected a file but got a directory: ${filePath}`);
+  }
 
+  // Reject known binary/unsupported extensions
   const ext = path.extname(resolved).toLowerCase();
+  const binaryExtensions = new Set([
+    ".xlsx", ".xls", ".xlsm", ".ods",
+    ".docx", ".doc", ".pdf",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg",
+    ".zip", ".tar", ".gz",
+    ".exe", ".bin", ".dmg",
+    ".parquet", ".avro",
+    ".yml", ".yaml", ".toml", ".xml",
+  ]);
+  if (binaryExtensions.has(ext)) {
+    const spreadsheetExts = new Set([".xlsx", ".xls", ".xlsm", ".ods"]);
+    const configExts = new Set([".yml", ".yaml", ".toml", ".xml"]);
+    let hint = "";
+    if (spreadsheetExts.has(ext)) {
+      hint = `\n  Export your spreadsheet as CSV first, then run: emit import <file>.csv`;
+    } else if (configExts.has(ext)) {
+      hint = `\n  This looks like a config file, not an event list. Emit import accepts .csv, .tsv, or .json files.`;
+    }
+    throw new Error(`Unsupported file type "${ext}". Emit import accepts .csv, .tsv, or .json files.${hint}`);
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(resolved, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EACCES") {
+      throw new Error(`Permission denied: cannot read ${filePath}`);
+    }
+    throw new Error(`Failed to read file: ${(err as Error).message}`);
+  }
+
+  // Detect binary content (null bytes indicate non-text file)
+  if (raw.includes("\0")) {
+    throw new Error(
+      `File appears to be binary, not a text file: ${filePath}\n  Emit import accepts .csv, .tsv, or .json files.`
+    );
+  }
+
   if (ext === ".json") {
     return parseJson(raw, resolved);
   } else {
@@ -111,12 +155,22 @@ function parseMultiColumnCsv(lines: string[], column?: string): string[] {
   return names;
 }
 
+const COMMON_HEADERS = new Set([
+  "event_name", "event name", "eventname",
+  "event", "events",
+  "name", "names",
+  "track", "tracking_event",
+]);
+
 function parseSingleColumnCsv(lines: string[]): string[] {
   const names: string[] = [];
 
-  for (const line of lines) {
-    const val = stripQuotes(line.trim());
-    if (val) names.push(val);
+  for (let i = 0; i < lines.length; i++) {
+    const val = stripQuotes(lines[i].trim());
+    if (!val) continue;
+    // Skip first line if it looks like a header
+    if (i === 0 && COMMON_HEADERS.has(val.toLowerCase())) continue;
+    names.push(val);
   }
 
   return names;

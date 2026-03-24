@@ -190,4 +190,48 @@ describe("shared edge cases", () => {
       /File not found/
     );
   });
+
+  it("throws on directory instead of file", () => {
+    expect(() => parseEventsFile(tmpDir)).toThrow(
+      /Expected a file but got a directory/
+    );
+  });
+
+  it("throws on .xlsx with helpful hint", () => {
+    const f = path.join(tmpDir, "events.xlsx");
+    fs.writeFileSync(f, "fake xlsx content");
+    expect(() => parseEventsFile(f)).toThrow(/Unsupported file type ".xlsx"/);
+    expect(() => parseEventsFile(f)).toThrow(/Export your spreadsheet as CSV/);
+  });
+
+  it("throws on binary image files", () => {
+    const f = path.join(tmpDir, "logo.png");
+    fs.writeFileSync(f, "fake png content");
+    expect(() => parseEventsFile(f)).toThrow(/Unsupported file type ".png"/);
+  });
+
+  it("throws on binary content with null bytes", () => {
+    const f = path.join(tmpDir, "events.csv");
+    fs.writeFileSync(f, Buffer.from("event_name\0binary\0garbage"));
+    expect(() => parseEventsFile(f)).toThrow(/appears to be binary/);
+  });
+
+  it("throws on .yml files with helpful hint", () => {
+    const f = path.join(tmpDir, "config.yml");
+    fs.writeFileSync(f, "repo:\n  paths: [./]\n");
+    expect(() => parseEventsFile(f)).toThrow(/Unsupported file type ".yml"/);
+    expect(() => parseEventsFile(f)).toThrow(/looks like a config file/);
+  });
+
+  it("skips common header in single-column CSV", () => {
+    const f = write("events.csv", "event_name\ncheckout_completed\nsignup_form_submitted\n");
+    const result = parseEventsFile(f);
+    expect(result.events).toEqual(["checkout_completed", "signup_form_submitted"]);
+  });
+
+  it("preserves first line in single-column CSV when not a header", () => {
+    const f = write("events.csv", "checkout_completed\nsignup_form_submitted\n");
+    const result = parseEventsFile(f);
+    expect(result.events).toEqual(["checkout_completed", "signup_form_submitted"]);
+  });
 });

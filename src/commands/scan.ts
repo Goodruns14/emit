@@ -404,23 +404,57 @@ async function runScan(opts: ScanOptions): Promise<number> {
   const resolvedNames = new Set(resolvedEvents.map((r) => r.original_name));
   const finalNotFound = notFound.filter((e) => !resolvedNames.has(e));
 
-  // ── Build output ──────────────────────────────────────────────────
+  // ── Build output (merge with existing catalog when using --event/--events) ──
+  const isPartialScan = !!(opts.event || opts.events);
+  let mergedEvents = catalog;
+  let mergedNotFound = finalNotFound;
+  let mergedResolved = resolvedEvents;
+  let mergedPropertyDefinitions = propertyDefinitions;
+
+  if (isPartialScan && previousCatalog) {
+    // Merge: start with all existing events, overwrite only the ones we just scanned
+    mergedEvents = { ...previousCatalog.events, ...catalog };
+    // For not_found: keep previous not_found minus any we just found, plus new not_found
+    const scannedNames = new Set([...located.map((e) => e.name), ...notFound]);
+    mergedNotFound = [
+      ...(previousCatalog.not_found ?? []).filter((e) => !scannedNames.has(e)),
+      ...finalNotFound,
+    ];
+    // Merge resolved events
+    mergedResolved = [
+      ...(previousCatalog.resolved ?? []),
+      ...resolvedEvents,
+    ];
+    // Keep existing property definitions, merge new ones on top
+    mergedPropertyDefinitions = { ...previousCatalog.property_definitions, ...propertyDefinitions };
+
+    // Recompute stats from the full merged catalog
+    stats.high = 0;
+    stats.medium = 0;
+    stats.low = 0;
+    for (const ev of Object.values(mergedEvents)) {
+      stats[ev.confidence]++;
+    }
+  }
+
+  const totalEvents = Object.keys(mergedEvents).length + mergedNotFound.length;
+
   const output: EmitCatalog = {
     version: 1,
     generated_at: new Date().toISOString(),
     commit: getCurrentCommit(),
     stats: {
-      events_targeted: events.length,
-      events_located: located.length + resolvedEvents.length,
-      events_not_found: finalNotFound.length,
+      events_targeted: isPartialScan ? totalEvents : events.length,
+      events_located: Object.keys(mergedEvents).length + mergedResolved.length,
+      events_not_found: mergedNotFound.length,
       high_confidence: stats.high,
       medium_confidence: stats.medium,
       low_confidence: stats.low,
     },
-    property_definitions: propertyDefinitions,
-    events: catalog,
-    not_found: finalNotFound,
-    ...(resolvedEvents.length > 0 ? { resolved: resolvedEvents } : {}),
+    property_definitions: mergedPropertyDefinitions,
+    events: mergedEvents,
+    not_found: mergedNotFound,
+    ...(mergedResolved.length > 0 ? { resolved: mergedResolved } : {}),
   };
 
   if (json) {

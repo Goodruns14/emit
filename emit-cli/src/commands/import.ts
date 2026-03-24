@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import * as fs from "fs";
 import * as path from "path";
+import * as readline from "readline";
 import * as yaml from "js-yaml";
 import chalk from "chalk";
 import { parseEventsFile } from "../core/import/parse.js";
@@ -12,9 +13,8 @@ export function registerImport(program: Command): void {
     .description("Import event names from a CSV or JSON file into manual_events")
     .argument("<file>", "Path to CSV or JSON file")
     .option("--column <name>", "Column header containing event names (for multi-column CSVs)")
-    .option("--dry-run", "Show what would be imported without writing")
     .option("--replace", "Replace existing manual_events instead of merging")
-    .action(async (file: string, opts: { column?: string; dryRun?: boolean; replace?: boolean }) => {
+    .action(async (file: string, opts: { column?: string; replace?: boolean }) => {
       const exitCode = await runImport(file, opts);
       process.exit(exitCode);
     });
@@ -22,7 +22,7 @@ export function registerImport(program: Command): void {
 
 async function runImport(
   file: string,
-  opts: { column?: string; dryRun?: boolean; replace?: boolean }
+  opts: { column?: string; replace?: boolean }
 ): Promise<number> {
   // ── Parse the file ────────────────────────────────────────────────────
   let result;
@@ -79,30 +79,39 @@ async function runImport(
     finalEvents = [...existing, ...toAdd];
   }
 
-  // ── Dry run ───────────────────────────────────────────────────────────
-  if (opts.dryRun) {
-    logger.blank();
-    logger.line(chalk.bold("  Dry run — nothing will be written\n"));
-    logger.line(`  Source: ${chalk.cyan(file)} (${format})`);
+  // ── Preview + confirm ────────────────────────────────────────────────
+  const toShow = opts.replace ? events : events.filter(
+    (ev) => !new Set(existing).has(ev)
+  );
 
-    const toShow = opts.replace ? events : events.filter(
-      (ev) => !new Set(existing).has(ev)
-    );
+  logger.blank();
+  logger.line(`  Source: ${chalk.cyan(file)} (${format})`);
+  logger.line(`  ${chalk.green(String(toShow.length))} event(s) to import:`);
+  for (const ev of toShow.slice(0, 20)) {
+    logger.line(`    ${chalk.gray("+")} ${ev}`);
+  }
+  if (toShow.length > 20) {
+    logger.line(`    ${chalk.gray(`... and ${toShow.length - 20} more`)}`);
+  }
+  if (skipped > 0) {
+    logger.line(`  ${chalk.yellow(`${skipped} duplicates skipped within file`)}`);
+  }
+  if (mergeSkipped > 0) {
+    logger.line(`  ${chalk.yellow(`${mergeSkipped} already in manual_events`)}`);
+  }
+  logger.blank();
 
-    logger.line(`  Would import ${chalk.green(String(toShow.length))} event(s):`);
-    for (const ev of toShow.slice(0, 20)) {
-      logger.line(`    ${chalk.gray("+")} ${ev}`);
-    }
-    if (toShow.length > 20) {
-      logger.line(`    ${chalk.gray(`... and ${toShow.length - 20} more`)}`);
-    }
-    if (skipped > 0) {
-      logger.line(`  ${chalk.yellow(`${skipped} duplicates skipped within file`)}`);
-    }
-    if (mergeSkipped > 0) {
-      logger.line(`  ${chalk.yellow(`${mergeSkipped} already in manual_events`)}`);
-    }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>((resolve) => {
+    rl.question("  Save to emit.config.yml? [Y/n]: ", (ans) => {
+      rl.close();
+      resolve(ans);
+    });
+  });
+
+  if (answer.trim().toLowerCase() === "n") {
     logger.blank();
+    logger.line(chalk.gray("  Discarded. Run ") + chalk.cyan("emit import <file>") + chalk.gray(" to try again."));
     return 0;
   }
 

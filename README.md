@@ -58,7 +58,7 @@ emit scan
 Scans your repo for event tracking calls, uses an LLM to extract metadata (descriptions, trigger conditions, properties), and writes `emit.catalog.yml`.
 
 Useful flags:
-- `--dry-run` — preview without writing
+- `--confirm` — preview results and prompt before saving
 - `--event <name>` — scan a single event
 - `--format json` — JSON output
 

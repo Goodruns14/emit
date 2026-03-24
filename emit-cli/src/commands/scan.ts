@@ -25,7 +25,6 @@ import type {
 } from "../types/index.js";
 
 interface ScanOptions {
-  dryRun?: boolean;
   confirm?: boolean;
   topN?: string;
   event?: string;
@@ -41,7 +40,6 @@ export function registerScan(program: Command): void {
   program
     .command("scan")
     .description("Scan repo and extract event metadata into emit.catalog.yml")
-    .option("--dry-run", "Preview output without writing the catalog file")
     .option("--confirm", "After showing results, prompt whether to save the catalog")
     .option("--top-n <number>", "Override config top_n — number of events to scan")
     .option("--event <name>", "Scan a single specific event")
@@ -442,9 +440,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
       logger.blank();
       logger.line(chalk.gray("  Discarded. Run ") + chalk.cyan("emit scan") + chalk.gray(" to try again."));
     }
-  } else if (opts.dryRun) {
-    logger.blank();
-    logger.warn("Dry run — catalog not written");
   } else {
     writeOutput(output, outputPath);
     logger.blank();

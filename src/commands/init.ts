@@ -10,8 +10,8 @@ import { parseEventsFile, getCsvHeaders } from "../core/import/parse.js";
 
 export function registerInit(program: Command): void {
   program
-    .command("init [dir]")
-    .description("Interactive setup wizard — creates emit.config.yml")
+    .command("init [repo-path]")
+    .description("Interactive setup wizard — detects your tracking SDK and creates emit.config.yml (defaults to current directory)")
     .action(async (dir?: string) => {
       const exitCode = await runInit(dir);
       process.exit(exitCode);

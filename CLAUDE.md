@@ -12,7 +12,7 @@ Emit is an open-source CLI tool that automatically generates event metadata cata
 - **Phase 1 (CLI):** Complete — all commands built and working
 - **Phase 2 (GitHub Action):** Complete — pending real-world testing
 - **Phase 3 (Hosted Platform + UI):** Not started
-- **Phase 4 (MCP Server):** Not started
+- **Phase 4 (MCP Server):** Complete — local MCP server with 8 tools, `emit mcp` command
 - **Phase 5 (Implementation Agent):** Not started
 
 See `md files/emit-master-plan.md` for the full roadmap, business model, competitive landscape, and architectural vision.
@@ -21,7 +21,10 @@ See `md files/emit-master-plan.md` for the full roadmap, business model, competi
 
 ```
 src/
-  commands/          # CLI command handlers (init, scan, import, push, status, revert)
+  commands/          # CLI command handlers (init, scan, import, push, status, revert, mcp)
+  mcp/
+    server.ts        # MCP server — registers all 8 tools, stdio transport
+    tools/           # One file per tool (get-event, update-event, get-property, etc.)
   core/
     catalog/         # Catalog read/write, health scoring, search
     destinations/    # Push adapters (Segment, Amplitude, Mixpanel, Snowflake)
@@ -42,7 +45,7 @@ tests/               # Vitest unit tests (run with: npx vitest run tests/)
 
 ```bash
 npm run build              # TypeScript build → dist/
-npx vitest run tests/      # Run unit tests (185 tests across 10 files)
+npx vitest run tests/      # Run unit tests (212 tests across 11 files)
 node dist/cli.js --help    # Run CLI locally
 node dist/cli.js init      # Interactive setup wizard
 node dist/cli.js scan      # Generate catalog from code
@@ -50,6 +53,8 @@ node dist/cli.js import <file>  # Import events from CSV/JSON
 node dist/cli.js push --dry-run # Preview push to destinations
 node dist/cli.js status    # Catalog health report
 node dist/cli.js revert    # Restore event from git history
+node dist/cli.js mcp       # Start local MCP server (stdio)
+node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
 ```
 
 ## Key Files
@@ -57,13 +62,16 @@ node dist/cli.js revert    # Restore event from git history
 | File | Purpose |
 |------|---------|
 | `src/commands/scan.ts` | Core scan logic — event discovery, LLM extraction, catalog output |
+| `src/commands/mcp.ts` | `emit mcp` command — resolves catalog path, starts MCP server |
+| `src/mcp/server.ts` | MCP server — registers 8 tools, connects stdio transport |
+| `src/mcp/tools/` | One file per MCP tool (get-event, update-event, get-property, update-property, list-events, list-not-found, search-events, get-catalog-health) |
 | `src/core/extractor/index.ts` | LLM prompt construction and metadata extraction |
 | `src/core/extractor/claude.ts` | Multi-provider LLM routing (Claude Code, Anthropic, OpenAI, OpenAI-compatible) |
 | `src/core/scanner/index.ts` | Code search — finds tracking calls via grep |
 | `src/core/scanner/search.ts` | Grep patterns for SDK-specific tracking calls |
 | `src/core/scanner/context.ts` | Extracts code context windows around matches |
 | `src/core/reconciler/index.ts` | Confidence scoring — cross-references LLM vs warehouse |
-| `src/utils/config.ts` | Config loading via cosmiconfig, validation, env var resolution |
+| `src/utils/config.ts` | Config loading via cosmiconfig, validation, env var resolution. Also exports `loadConfigLight()` for MCP (skips warehouse/LLM validation) |
 | `src/types/index.ts` | All TypeScript types — EmitConfig, CatalogEvent, LlmProvider, etc. |
 
 ## LLM Providers
@@ -110,7 +118,7 @@ npx vitest run tests/import-parse.test.ts
 npm run build && npx vitest run tests/
 ```
 
-See `md files/emit-user-tests.md` for 21 detailed real-user simulation tests covering init, scan, import, push, status, revert, error handling, caching, and cross-repo behavior.
+See `md files/emit-user-tests.md` for 24 detailed real-user simulation tests covering init, scan, import, push, status, revert, MCP, error handling, caching, and cross-repo behavior.
 
 ## Important Design Decisions
 
@@ -120,10 +128,13 @@ See `md files/emit-user-tests.md` for 21 detailed real-user simulation tests cov
 - **Partial scan merges** — `--event`/`--events` flags merge results into existing catalog (don't overwrite)
 - **Confidence signals uncertainty** — Low confidence is better than wrong confidence. The reconciler downgrades when signals conflict.
 - **Provider validation at config load** — Invalid LLM providers fail fast with clear error messages, not at extraction time
+- **MCP write path goes to file** — `update_event_description` and `update_property_description` write directly to `emit.catalog.yml`. No warehouse write path exists in the local MCP (remote MCP with Snowflake write-through is Phase 4 paid tier, not yet built)
+- **MCP uses `loadConfigLight()`** — The MCP server skips warehouse and LLM credential validation at startup. It only needs to resolve the catalog file path. Pass `--catalog <path>` to bypass config lookup entirely.
 
 ## Common Pitfalls
 
 1. **Vitest picks up test-repo tests** — Always run `npx vitest run tests/` not `npx vitest run` from root
+2. **MCP startup message goes to stderr** — The "emit MCP server started" message writes to stderr intentionally. Stdout is reserved for the MCP protocol stream. Don't change this.
 2. **scan.test.ts timeouts** — Integration tests in `tests/scan.test.ts` call real LLMs and may timeout with default 5s limit
 3. **Config requires a data source** — Must have `warehouse`, `source`, or `manual_events` in config
 4. **File extensions in import** — Only `.csv`, `.tsv`, `.json` accepted. `.yml`/`.yaml`/`.xlsx` are rejected with helpful hints.

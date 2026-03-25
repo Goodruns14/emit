@@ -71,8 +71,54 @@ Shows a catalog health report: confidence breakdown, stale events, flagged items
 | `emit push` | Push catalog to destinations (Segment, Amplitude, Mixpanel, Snowflake) |
 | `emit status` | Show catalog health report |
 | `emit revert` | Restore an event definition from git history |
+| `emit mcp` | Start a local MCP server exposing the catalog to AI agents |
 
 Run `emit <command> --help` for detailed options on each command.
+
+## MCP Server
+
+Emit ships a local [Model Context Protocol](https://modelcontextprotocol.io) server that exposes your event catalog to any MCP-compatible AI agent or tool (Claude Desktop, Cursor, etc.).
+
+```bash
+emit mcp                        # reads catalog path from emit.config.yml
+emit mcp --catalog ./emit.catalog.yml   # explicit path
+```
+
+The server communicates over stdio. Add it to your Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "emit-catalog": {
+      "command": "emit",
+      "args": ["mcp"],
+      "cwd": "/path/to/your-repo"
+    }
+  }
+}
+```
+
+### Tools exposed
+
+| Tool | Description |
+|------|-------------|
+| `get_event_description` | Full metadata for an event — description, when it fires, confidence, properties, source file |
+| `get_property_description` | Metadata for a specific property including edge cases, null rate, sample values |
+| `list_events` | List all located events, optionally filtered by confidence or review status |
+| `list_not_found` | Events that couldn't be located in source code — for catalog maintenance |
+| `search_events` | Full-text search across event names, descriptions, and fires_when text |
+| `get_catalog_health` | Summary: total events, confidence breakdown, events needing review |
+| `update_event_description` | Update an event's description and fires_when — writes to `emit.catalog.yml` |
+| `update_property_description` | Update a property's description — writes to `emit.catalog.yml` |
+
+**Example agent interaction:**
+```
+Agent: "analyze refund patterns in our data"
+→ calls get_event_description("purchase_completed")
+→ sees: bill_amount edge case: "Negative value indicates refund"
+→ constructs accurate Snowflake query
+→ returns trustworthy analysis
+```
 
 ## Configuration
 

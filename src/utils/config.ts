@@ -139,6 +139,24 @@ function validate(config: EmitConfig): void {
   }
 }
 
+/**
+ * Lightweight config loader for the MCP server — resolves the catalog output
+ * path without validating warehouse credentials, LLM API keys, etc.
+ */
+export async function loadConfigLight(searchFrom?: string): Promise<EmitConfig> {
+  const result = await explorer.search(searchFrom ?? process.cwd());
+
+  if (!result || result.isEmpty) {
+    throw new Error(
+      "No emit configuration found.\n" +
+        "  Run `emit init` to create emit.config.yml, or pass --catalog <path> explicitly."
+    );
+  }
+
+  const resolved = resolveEnvVars(result.config) as Partial<EmitConfig>;
+  return applyDefaults(resolved);
+}
+
 export async function loadConfig(searchFrom?: string): Promise<EmitConfig> {
   const result = await explorer.search(searchFrom ?? process.cwd());
 

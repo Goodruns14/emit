@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.emit/
+emit.config.yml
+*.log
 .env
 .env.*
 !.env.example

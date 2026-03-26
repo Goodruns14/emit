@@ -186,19 +186,36 @@ describe("PerEventAdapter", () => {
     expect(events).toHaveLength(2);
   });
 
-  it("getPropertyStats excludes CDP system columns", async () => {
-    mockClient.query.mockResolvedValue([
-      { COLUMN_NAME: "AMOUNT" },
-      { COLUMN_NAME: "CURRENCY" },
-    ]);
+  it("getPropertyStats excludes CDP system columns and computes stats", async () => {
+    mockClient.query
+      // 1st call: get column names
+      .mockResolvedValueOnce([
+        { COLUMN_NAME: "RECEIVED_AT" },
+        { COLUMN_NAME: "UUID_TS" },
+        { COLUMN_NAME: "AMOUNT" },
+        { COLUMN_NAME: "CURRENCY" },
+      ])
+      // 2nd call: count
+      .mockResolvedValueOnce([{ TOTAL: 100 }])
+      // 3rd call: AMOUNT stats
+      .mockResolvedValueOnce([{ NULL_RATE: 5.0, CARDINALITY: 50 }])
+      // 4th call: AMOUNT sample values
+      .mockResolvedValueOnce([{ VAL: "9.99" }, { VAL: "19.99" }])
+      // 5th call: CURRENCY stats
+      .mockResolvedValueOnce([{ NULL_RATE: 0, CARDINALITY: 3 }])
+      // 6th call: CURRENCY sample values
+      .mockResolvedValueOnce([{ VAL: "USD" }, { VAL: "EUR" }, { VAL: "GBP" }]);
 
     const stats = await adapter.getPropertyStats("purchase_completed");
+    // Should exclude RECEIVED_AT and UUID_TS (CDP system columns)
     expect(stats).toHaveLength(2);
     expect(stats[0].property_name).toBe("amount");
-
-    const sql = mockClient.query.mock.calls[0][0] as string;
-    expect(sql).toContain("'RECEIVED_AT'");
-    expect(sql).toContain("'UUID_TS'");
+    expect(stats[0].null_rate).toBe(5.0);
+    expect(stats[0].cardinality).toBe(50);
+    expect(stats[0].sample_values).toEqual(["9.99", "19.99"]);
+    expect(stats[1].property_name).toBe("currency");
+    expect(stats[1].null_rate).toBe(0);
+    expect(stats[1].sample_values).toEqual(["USD", "EUR", "GBP"]);
   });
 
   it("getPropertyStats returns empty array on error", async () => {

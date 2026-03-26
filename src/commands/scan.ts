@@ -255,6 +255,23 @@ async function runScan(opts: ScanOptions): Promise<number> {
     const previousEntry = previousCatalog?.events[event.name];
 
     if (previousEntry?.context_hash === contextHash) {
+      // Code unchanged — skip LLM but still refresh warehouse property stats
+      const propertyStatsForUnchanged: PropertyStat[] = warehouseAdapter
+        ? await warehouseAdapter.getPropertyStats(event.name).catch(() => [])
+        : [];
+
+      const updatedProperties = { ...previousEntry.properties };
+      for (const stat of propertyStatsForUnchanged) {
+        if (updatedProperties[stat.property_name]) {
+          updatedProperties[stat.property_name] = {
+            ...updatedProperties[stat.property_name],
+            null_rate: stat.null_rate,
+            cardinality: stat.cardinality,
+            sample_values: stat.sample_values,
+          };
+        }
+      }
+
       catalog[event.name] = {
         ...previousEntry,
         warehouse_stats: {
@@ -262,6 +279,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
           first_seen: event.first_seen,
           last_seen: event.last_seen,
         },
+        properties: updatedProperties,
       };
       stats[previousEntry.confidence]++;
       unchanged++;

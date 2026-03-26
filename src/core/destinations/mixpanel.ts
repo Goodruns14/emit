@@ -50,24 +50,34 @@ export class MixpanelDestinationAdapter implements DestinationAdapter {
       `${this.serviceAccountUser}:${this.serviceAccountSecret}`
     ).toString("base64");
 
-    const schemas = Object.entries(targetEvents).map(([eventName, event]) => ({
-      entityType: "event",
-      name: eventName,
-      schemaVersion: "1-0-0",
-      metadata: {
-        description: event.description,
-      },
-      properties: Object.entries(event.properties ?? {}).map(([propName, propMeta]) => ({
-        name: propName,
-        metadata: {
+    const schemas = Object.entries(targetEvents).map(([eventName, event]) => {
+      const properties: Record<string, any> = {};
+      for (const [propName, propMeta] of Object.entries(event.properties ?? {})) {
+        properties[propName] = {
+          type: "string",
           description: propMeta.description,
+        };
+      }
+
+      return {
+        entityType: "event",
+        name: eventName,
+        schemaJson: {
+          description: event.description,
+          properties,
+          metadata: {
+            "com.mixpanel": {
+              hidden: false,
+              dropped: false,
+            },
+          },
         },
-      })),
-    }));
+      };
+    });
 
     try {
       const resp = await fetch(
-        `https://api.mixpanel.com/projects/${this.projectId}/schemas`,
+        `https://mixpanel.com/api/app/projects/${this.projectId}/schemas`,
         {
           method: "POST",
           headers: {

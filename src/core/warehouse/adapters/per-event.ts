@@ -93,28 +93,71 @@ export class PerEventAdapter implements WarehouseAdapter {
 
   async getPropertyStats(eventName: string): Promise<PropertyStat[]> {
     const preset = this.getPreset();
-    const excludeCols = preset.per_event.exclude_columns;
-    const tableName = eventName.toUpperCase().replace(/-/g, "_");
-
-    const excludeClause = excludeCols.length > 0
-      ? `AND column_name NOT IN (${excludeCols.map((c) => `'${c}'`).join(", ")})`
-      : "";
+    const excludeCols = new Set(preset.per_event.exclude_columns.map((c) => c.toUpperCase()));
+    const tableName = eventName.toUpperCase().replace(/[-.\s]/g, "_");
+    const schema = this.config.schema;
 
     try {
+      // Get column names first
       const cols = await this.client.query(`
         SELECT COLUMN_NAME
         FROM information_schema.columns
-        WHERE table_schema = '${this.config.schema}'
+        WHERE table_schema = '${schema}'
           AND table_name = '${tableName}'
-          ${excludeClause}
+        ORDER BY ORDINAL_POSITION
       `);
 
-      return cols.map((c: any) => ({
-        property_name: c.COLUMN_NAME.toLowerCase(),
+      const propCols = cols
+        .map((c: any) => c.COLUMN_NAME as string)
+        .filter((name) => !excludeCols.has(name.toUpperCase()));
+
+      if (propCols.length === 0) return [];
+
+      // Get total row count
+      const countRows = await this.client.query(
+        `SELECT COUNT(*) AS total FROM ${schema}.${tableName}`
+      );
+      const total: number = countRows[0]?.TOTAL ?? 0;
+      if (total === 0) return propCols.map((name) => ({
+        property_name: name.toLowerCase(),
         null_rate: 0,
         cardinality: 0,
         sample_values: [],
       }));
+
+      // For each column compute null_rate, cardinality, and sample values
+      const stats: PropertyStat[] = [];
+      for (const col of propCols) {
+        try {
+          const statRows = await this.client.query(`
+            SELECT
+              ROUND(100.0 * SUM(CASE WHEN ${col} IS NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS null_rate,
+              COUNT(DISTINCT ${col}) AS cardinality
+            FROM ${schema}.${tableName}
+          `);
+          const nullRate: number = statRows[0]?.NULL_RATE ?? 0;
+          const cardinality: number = statRows[0]?.CARDINALITY ?? 0;
+
+          const sampleRows = await this.client.query(`
+            SELECT DISTINCT CAST(${col} AS VARCHAR) AS val
+            FROM ${schema}.${tableName}
+            WHERE ${col} IS NOT NULL
+            LIMIT 5
+          `);
+          const sampleValues = sampleRows.map((r: any) => String(r.VAL));
+
+          stats.push({
+            property_name: col.toLowerCase(),
+            null_rate: nullRate,
+            cardinality,
+            sample_values: sampleValues,
+          });
+        } catch {
+          stats.push({ property_name: col.toLowerCase(), null_rate: 0, cardinality: 0, sample_values: [] });
+        }
+      }
+
+      return stats;
     } catch {
       return [];
     }

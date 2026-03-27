@@ -55,7 +55,10 @@ describe("reconcile", () => {
     const stats: PropertyStat[] = [
       { property_name: "bill_amount", null_rate: 50, cardinality: 100, sample_values: [] },
     ];
-    const result = reconcile(baseExtracted, baseContext, baseWarehouseEvent, stats, {});
+    // Provide literals to signal bill_amount was found in code (not warehouse-only)
+    const result = reconcile(baseExtracted, baseContext, baseWarehouseEvent, stats, {
+      bill_amount: ["4999"],
+    });
     expect(result.confidence).toBe("medium");
     expect(result.flags.some((f) => f.includes("50% null rate"))).toBe(true);
   });

@@ -62,13 +62,17 @@ export class MonolithAdapter implements WarehouseAdapter {
     const { table, eventCol, propsCol } = this.getDefaults();
 
     try {
+      const totalRows = await this.client.query(`
+        SELECT COUNT(*) as total
+        FROM ${table}
+        WHERE ${eventCol} = '${eventName}'
+      `);
+      const totalCount: number = totalRows[0]?.TOTAL ?? 0;
+
       const rows = await this.client.query(`
         SELECT
           f.key as property_name,
-          ROUND(
-            SUM(CASE WHEN f.value IS NULL THEN 1 ELSE 0 END) / COUNT(*) * 100,
-            2
-          ) as null_rate,
+          COUNT(*) as flatten_count,
           COUNT(DISTINCT f.value::string) as cardinality,
           ARRAY_AGG(DISTINCT f.value::string) as sample_values
         FROM ${table},
@@ -78,12 +82,19 @@ export class MonolithAdapter implements WarehouseAdapter {
         LIMIT 50
       `);
 
-      return rows.map((r) => ({
-        property_name: r.PROPERTY_NAME,
-        null_rate: r.NULL_RATE || 0,
-        cardinality: r.CARDINALITY || 0,
-        sample_values: (r.SAMPLE_VALUES || []).slice(0, 5),
-      }));
+      return rows.map((r) => {
+        const flattenCount: number = r.FLATTEN_COUNT ?? 0;
+        const null_rate =
+          totalCount > 0
+            ? Math.round(((1 - flattenCount / totalCount) * 100) * 100) / 100
+            : 0;
+        return {
+          property_name: r.PROPERTY_NAME,
+          null_rate,
+          cardinality: r.CARDINALITY || 0,
+          sample_values: (r.SAMPLE_VALUES || []).slice(0, 5),
+        };
+      });
     } catch {
       return [];
     }

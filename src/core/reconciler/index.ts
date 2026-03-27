@@ -25,7 +25,9 @@ export function reconcile(
 
   // ── Warehouse signals vs LLM output ───────────────────────────────
   for (const stat of propertyStats) {
-    if (!extracted.properties[stat.property_name]) {
+    const llmProp = extracted.properties[stat.property_name];
+    const hasCodeEvidence = llmProp && (literalValues[stat.property_name]?.length > 0);
+    if (!hasCodeEvidence) {
       flags.push(
         `Property '${stat.property_name}' exists in warehouse but not identified in code`
       );

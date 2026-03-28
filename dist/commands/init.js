@@ -17,13 +17,19 @@ export function registerInit(program) {
 }
 // Maps npm package names to their tracking function patterns
 const PACKAGE_TO_PATTERN = {
-    "posthog-js": "posthog.capture(",
-    "posthog-node": "posthog.capture(",
-    "@segment/analytics-next": "analytics.track(",
+    // Standard analytics SDKs
+    "posthog-js": "posthog.capture(", // test-repo: posthog, calcom
+    "posthog-node": "posthog.capture(", // test-repo: plane (Python wrapper)
+    "@segment/analytics-next": "analytics.track(", // test-repo: highlight
     "analytics-node": "analytics.track(",
     "@rudderstack/analytics-js": "rudderstack.track(",
     "mixpanel-browser": "mixpanel.track(",
     "@amplitude/analytics-browser": "amplitude.track(",
+    // Framework-specific SDKs
+    "@grafana/runtime": "reportInteraction(", // test-repo: grafana
+    "@sentry/browser": "trackAnalytics(", // test-repo: sentry
+    "@sentry/react": "trackAnalytics(", // test-repo: sentry
+    "@snowplow/browser-tracker": "trackSelfDescribingEvent(", // test-repo: metabase (Snowplow)
 };
 const LLM_DISPLAY_LABELS = {
     "claude-code": "Claude Code (local CLI)",
@@ -145,10 +151,13 @@ async function detectBackendPatterns(paths) {
                     "--include", "*.kt",
                     "--include", "*.scala",
                     "--include", "*.py",
+                    "--include", "*.go",
                     "--exclude-dir", "node_modules",
                     "--exclude-dir", ".git",
                     "--exclude-dir", "target",
                     "--exclude-dir", "build",
+                    "--exclude-dir", "vendor",
+                    "--exclude-dir", "__pycache__",
                 ], { reject: false });
                 const files = stdout.trim().split("\n").filter(Boolean);
                 if (files.length > 0 && !found.includes(pattern)) {
@@ -483,39 +492,74 @@ async function runInit(dir) {
     return 0;
 }
 // ── Common analytics wrapper patterns found in real-world codebases ────────────
+// Each pattern is annotated with the test-repo(s) where it was validated.
 const WRAPPER_PATTERNS = [
+    // Standard SDK patterns
+    "posthog.capture(", // test-repo: posthog, calcom
+    "amplitude.track(", // test-repo: (amplitude SDK)
+    "mixpanel.track(", // test-repo: (mixpanel SDK)
+    // Common wrapper function names
+    "trackEvent(", // test-repo: mattermost (Go backend)
+    "trackAnalytics(", // test-repo: sentry (Amplitude frontend + Python backend)
+    "Analytics.logEvent(",
     "AnalyticsUtil.logEvent(",
     "analytics.logEvent(",
-    "trackEvent(",
-    "Analytics.logEvent(",
     "analyticsService.track(",
     "telemetry.track(",
-    "posthog.capture(",
-    "amplitude.track(",
-    "mixpanel.track(",
+    // Framework-specific telemetry patterns
+    "reportInteraction(", // test-repo: grafana (Rudderstack backend)
+    "reportPageview(", // test-repo: grafana
+    "reportEvent(", // test-repo: kibana (EBT analytics client)
+    "reportUiCounter(", // test-repo: kibana
+    "publicLog2(", // test-repo: vscode (GDPR-classified telemetry)
+    "publicLog(", // test-repo: vscode
+    // Schema-based and typed event patterns
+    "trackSchemaEvent(", // test-repo: metabase (Snowplow schema events)
+    "trackSimpleEvent(", // test-repo: metabase
+    "analytics.event(", // test-repo: datahub (EventType enum)
+    // Custom tracking wrappers
+    "sendEvent(", // test-repo: supabase (studio analytics)
+    "track(", // test-repo: netlify-cli (generic track wrapper)
+    "capture(", // generic capture call
 ];
 // ── Common backend/server-side tracking patterns ──────────────────────────────
+// Patterns for server-side analytics in Java, Python, Go, and Kotlin codebases.
 const BACKEND_PATTERNS = [
+    // Audit/CRUD event patterns
     "AuditEventHelper.capture",
     "AuditEventHelper.log",
     "auditEventHelper.capture",
     "captureEntityCRUDEvent(",
-    "EventPublisher.publish(",
-    "eventPublisher.publish(",
-    "analyticsService.track(",
-    "AnalyticsService.track(",
-    "EventTracker.track(",
     "auditLog(",
     "AuditLog.create(",
+    // Event publisher patterns
+    "EventPublisher.publish(",
+    "eventPublisher.publish(",
+    "EventTracker.track(",
+    // Service-layer analytics
+    "analyticsService.track(",
+    "AnalyticsService.track(",
+    // Python backend patterns
+    "track_event(", // test-repo: plane (Python PostHog)
+    "posthog.capture(", // test-repo: plane (Python PostHog SDK)
+    // Server-side reporting
+    "sendReport(", // test-repo: directus (aggregate usage reports)
+    // Go backend patterns
+    "TrackEvent(", // test-repo: mattermost (Go telemetry)
 ];
 async function detectTrackingPattern(paths) {
+    // Comprehensive pattern list validated against 14 test repos:
+    // vscode, netlify-cli, sentry, grafana, posthog, datahub, metabase,
+    // kibana, twenty, supabase, plane, prisma, mattermost, directus
     const allPatterns = [
+        // Standard SDK patterns (covered by PACKAGE_TO_PATTERN but also grep-detected)
         "analytics.track(",
         "analytics.identify(",
         "rudderanalytics.track(",
+        // All wrapper patterns (validated against real-world test repos)
         ...WRAPPER_PATTERNS,
     ];
-    let best = null;
+    const results = [];
     for (const pattern of allPatterns) {
         for (const searchPath of paths) {
             try {
@@ -529,18 +573,24 @@ async function detectTrackingPattern(paths) {
                     "--include", "*.jsx",
                     "--include", "*.py",
                     "--include", "*.swift",
+                    "--include", "*.go",
+                    "--include", "*.java",
+                    "--include", "*.kt",
                     "--exclude-dir", "node_modules",
                     "--exclude-dir", ".git",
                     "--exclude-dir", "dist",
                     "--exclude-dir", "build",
+                    "--exclude-dir", "vendor",
+                    "--exclude-dir", "target",
+                    "--exclude-dir", "__pycache__",
                 ], { reject: false });
                 const files = stdout.trim().split("\n").filter(Boolean);
-                if (files.length > 0 && (!best || files.length > best.count)) {
-                    best = {
+                if (files.length > 0) {
+                    results.push({
                         pattern,
                         count: files.length,
                         example: files[0],
-                    };
+                    });
                 }
             }
             catch {
@@ -548,12 +598,19 @@ async function detectTrackingPattern(paths) {
             }
         }
     }
+    if (results.length === 0)
+        return null;
+    // Sort by file count descending — the most-used pattern wins
+    results.sort((a, b) => b.count - a.count);
+    const best = results[0];
+    // If the best match is a standard SDK pattern that will already be
+    // detected via PACKAGE_TO_PATTERN, don't double-report it
     const standardPatterns = [
         "analytics.track(",
         "analytics.identify(",
         "rudderanalytics.track(",
     ];
-    if (best && standardPatterns.includes(best.pattern)) {
+    if (standardPatterns.includes(best.pattern)) {
         return null;
     }
     return best;

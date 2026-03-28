@@ -20,19 +20,19 @@ export function registerInit(program: Command): void {
 
 // Maps npm package names to their tracking function patterns
 const PACKAGE_TO_PATTERN: Record<string, string> = {
-  // Standard analytics SDKs
-  "posthog-js": "posthog.capture(",               // test-repo: posthog, calcom
-  "posthog-node": "posthog.capture(",              // test-repo: plane (Python wrapper)
-  "@segment/analytics-next": "analytics.track(",   // test-repo: highlight
+  // Product analytics SDKs
+  "posthog-js": "posthog.capture(",
+  "posthog-node": "posthog.capture(",
+  "@segment/analytics-next": "analytics.track(",
   "analytics-node": "analytics.track(",
   "@rudderstack/analytics-js": "rudderstack.track(",
   "mixpanel-browser": "mixpanel.track(",
   "@amplitude/analytics-browser": "amplitude.track(",
   // Framework-specific SDKs
-  "@grafana/runtime": "reportInteraction(",         // test-repo: grafana
-  "@sentry/browser": "trackAnalytics(",             // test-repo: sentry
-  "@sentry/react": "trackAnalytics(",               // test-repo: sentry
-  "@snowplow/browser-tracker": "trackSelfDescribingEvent(", // test-repo: metabase (Snowplow)
+  "@grafana/runtime": "reportInteraction(",
+  "@sentry/browser": "trackAnalytics(",
+  "@sentry/react": "trackAnalytics(",
+  "@snowplow/browser-tracker": "trackSelfDescribingEvent(",
 };
 
 const LLM_DISPLAY_LABELS: Record<string, string> = {
@@ -545,17 +545,17 @@ async function runInit(dir?: string): Promise<number> {
 }
 
 // ── Common analytics wrapper patterns found in real-world codebases ────────────
-// Each pattern is annotated with the test-repo(s) where it was validated.
+// Validated against 14 open-source test repos with diverse tracking approaches.
 
 const WRAPPER_PATTERNS = [
   // Standard SDK patterns
-  "posthog.capture(",              // test-repo: posthog, calcom
-  "amplitude.track(",              // test-repo: (amplitude SDK)
-  "mixpanel.track(",               // test-repo: (mixpanel SDK)
+  "posthog.capture(",
+  "amplitude.track(",
+  "mixpanel.track(",
 
   // Common wrapper function names
-  "trackEvent(",                   // test-repo: mattermost (Go backend)
-  "trackAnalytics(",               // test-repo: sentry (Amplitude frontend + Python backend)
+  "trackEvent(",
+  "trackAnalytics(",
   "Analytics.logEvent(",
   "AnalyticsUtil.logEvent(",
   "analytics.logEvent(",
@@ -563,26 +563,27 @@ const WRAPPER_PATTERNS = [
   "telemetry.track(",
 
   // Framework-specific telemetry patterns
-  "reportInteraction(",            // test-repo: grafana (Rudderstack backend)
-  "reportPageview(",               // test-repo: grafana
-  "reportEvent(",                  // test-repo: kibana (EBT analytics client)
-  "reportUiCounter(",              // test-repo: kibana
-  "publicLog2(",                   // test-repo: vscode (GDPR-classified telemetry)
-  "publicLog(",                    // test-repo: vscode
+  "reportInteraction(",
+  "reportPageview(",
+  "reportEvent(",
+  "reportUiCounter(",
+  "publicLog2(",
+  "publicLog(",
 
   // Schema-based and typed event patterns
-  "trackSchemaEvent(",             // test-repo: metabase (Snowplow schema events)
-  "trackSimpleEvent(",             // test-repo: metabase
-  "analytics.event(",              // test-repo: datahub (EventType enum)
+  "trackSchemaEvent(",
+  "trackSimpleEvent(",
+  "analytics.event(",
 
   // Custom tracking wrappers
-  "sendEvent(",                    // test-repo: supabase (studio analytics)
-  "track(",                        // test-repo: netlify-cli (generic track wrapper)
-  "capture(",                      // generic capture call
+  "sendEvent(",
+  "track(",
+  "capture(",
 ];
 
 // ── Common backend/server-side tracking patterns ──────────────────────────────
 // Patterns for server-side analytics in Java, Python, Go, and Kotlin codebases.
+// Validated against open-source test repos with backend tracking.
 
 const BACKEND_PATTERNS = [
   // Audit/CRUD event patterns
@@ -603,14 +604,14 @@ const BACKEND_PATTERNS = [
   "AnalyticsService.track(",
 
   // Python backend patterns
-  "track_event(",                  // test-repo: plane (Python PostHog)
-  "posthog.capture(",              // test-repo: plane (Python PostHog SDK)
+  "track_event(",
+  "posthog.capture(",
 
   // Server-side reporting
-  "sendReport(",                   // test-repo: directus (aggregate usage reports)
+  "sendReport(",
 
   // Go backend patterns
-  "TrackEvent(",                   // test-repo: mattermost (Go telemetry)
+  "TrackEvent(",
 ];
 
 interface DetectedPattern {
@@ -622,9 +623,8 @@ interface DetectedPattern {
 async function detectTrackingPattern(
   paths: string[]
 ): Promise<DetectedPattern | null> {
-  // Comprehensive pattern list validated against 14 test repos:
-  // vscode, netlify-cli, sentry, grafana, posthog, datahub, metabase,
-  // kibana, twenty, supabase, plane, prisma, mattermost, directus
+  // Comprehensive pattern list validated against 14 open-source test repos
+  // covering product analytics, framework telemetry, schema-based, and custom wrappers
   const allPatterns = [
     // Standard SDK patterns (covered by PACKAGE_TO_PATTERN but also grep-detected)
     "analytics.track(",

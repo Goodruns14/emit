@@ -25,13 +25,28 @@ export function resolveEnumStringValue(
 ): string | null {
   for (const repoPath of repoPaths) {
     try {
+      // Strategy 1: Look for direct string assignment (e.g., FOO = "bar")
       const result = execSync(
-        `grep -rn "${constantName}\\s*=" "${repoPath}" --include="*.ts" --include="*.tsx" --include="*.java" 2>/dev/null | grep -v "node_modules" | head -5`,
+        `grep -rn "${constantName}\\s*=" "${repoPath}" --include="*.ts" --include="*.tsx" --include="*.java" --include="*.py" 2>/dev/null | grep -v "node_modules" | head -5`,
         { encoding: "utf8" }
       ).trim();
-      if (!result) continue;
-      const match = result.match(/=\s*["']([^"']+)["']/);
-      if (match) return match[1];
+      if (result) {
+        const match = result.match(/=\s*["']([^"']+)["']/);
+        if (match) return match[1];
+      }
+
+      // Strategy 2: Look for enum member without explicit value
+      // (e.g., "LogInEvent," in "enum EventType { LogInEvent, ... }")
+      // In this case the warehouse event name is typically the member name itself
+      const enumResult = execSync(
+        `grep -rn "\\b${constantName}\\b" "${repoPath}" --include="*.ts" --include="*.tsx" 2>/dev/null | grep -v "node_modules" | grep -E "(enum|EventType|type:)" | head -3`,
+        { encoding: "utf8" }
+      ).trim();
+      if (enumResult) {
+        // If the constant appears in an enum definition without a string value,
+        // the event name IS the constant name (e.g., "LogInEvent")
+        return constantName;
+      }
     } catch {
       // no match in this path
     }

@@ -38,6 +38,7 @@ export const FILE_EXTENSIONS = [
   "*.kt",
   "*.swift",
   "*.py",
+  "*.go",
 ];
 
 const EXCLUDE_DIRS = ["node_modules", "bazel-", "target/", ".git", "dist/", "build/"];

@@ -10,3 +10,5 @@ emit.config.yml
 .DS_Store
 test-repos/
 md files/
+action/*.js
+action/*.js.map

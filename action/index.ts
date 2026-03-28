@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   if (isMainPush && process.env.EMIT_AUTO_PUSH === "true") {
     console.log("Push-to-main detected — running full scan + push.");
     const catalogPath = resolveCatalogPath();
-    const cliPath = path.resolve(__dirname, "..", "dist", "cli.js");
+    const cliPath = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
 
     // Run full scan (all events)
     try {
@@ -270,7 +270,7 @@ function getEventsFromExistingCatalog(catalogPath: string, changedFiles: string[
  * Run `emit scan --events <names> --format json` and return stdout.
  */
 function runEmitScan(eventNames: string[]): string | null {
-  const cliPath = path.resolve(__dirname, "..", "dist", "cli.js");
+  const cliPath = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
   try {
     const stdout = execFileSync("node", [
       cliPath,

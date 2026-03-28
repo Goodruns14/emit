@@ -74,4 +74,4 @@ runs:
         SNOWFLAKE_DATABASE: ${{ inputs.snowflake_database }}
         SNOWFLAKE_SCHEMA: ${{ inputs.snowflake_schema }}
         GITHUB_TOKEN: ${{ github.token }}
-      run: node ${{ github.action_path }}/dist/index.js
+      run: node ${{ github.action_path }}/index.js

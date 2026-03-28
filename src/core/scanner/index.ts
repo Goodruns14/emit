@@ -1,5 +1,5 @@
 import type { CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant } from "./search.js";
+import { searchDirect, searchConstant, searchBroad, generateCasingVariants } from "./search.js";
 import { extractContext, resolveEnumStringValue } from "./context.js";
 
 export class RepoScanner {
@@ -53,20 +53,46 @@ export class RepoScanner {
       };
     }
 
-    // ── Strategy 2: constant name search (e.g. ENTITY_DOWNLOAD) ───────
-    const constantName = eventName.toUpperCase().replace(/-/g, "_").replace(/\s/g, "_");
-    const constantMatches = await searchConstant(
-      constantName,
-      this.paths,
-      this.sdk,
-      this.customPatterns,
-      this.backendPatterns
-    );
+    // ── Strategy 2: constant/enum search with casing variants ─────────
+    // Try UPPER_SNAKE_CASE, PascalCase, camelCase, etc.
+    const variants = generateCasingVariants(eventName);
+    for (const variant of variants) {
+      if (variant === eventName) continue; // already tried in direct search
+      const constantMatches = await searchConstant(
+        variant,
+        this.paths,
+        this.sdk,
+        this.customPatterns,
+        this.backendPatterns
+      );
 
-    if (constantMatches.length > 0) {
-      const primary = constantMatches[0];
-      const segmentEventName = resolveEnumStringValue(constantName, this.paths) ?? undefined;
-      const allCallSites: CallSite[] = constantMatches.map((m) => ({
+      if (constantMatches.length > 0) {
+        const primary = constantMatches[0];
+        const segmentEventName = resolveEnumStringValue(variant, this.paths) ?? undefined;
+        const allCallSites: CallSite[] = constantMatches.map((m) => ({
+          file_path: m.file,
+          line_number: m.line,
+          context: extractContext(m.file, m.line, 15),
+        }));
+
+        return {
+          file_path: primary.file,
+          line_number: primary.line,
+          context: extractContext(primary.file, primary.line, 50),
+          match_type: "constant",
+          segment_event_name: segmentEventName,
+          all_call_sites: allCallSites,
+        };
+      }
+    }
+
+    // ── Strategy 3: broad search fallback ────────────────────────────
+    // Search for all casing variants without pattern filtering,
+    // then pick the best match near a tracking call.
+    const broadMatches = await searchBroad(eventName, this.paths);
+    if (broadMatches.length > 0) {
+      const primary = broadMatches[0];
+      const allCallSites: CallSite[] = broadMatches.slice(0, 10).map((m) => ({
         file_path: m.file,
         line_number: m.line,
         context: extractContext(m.file, m.line, 15),
@@ -76,8 +102,7 @@ export class RepoScanner {
         file_path: primary.file,
         line_number: primary.line,
         context: extractContext(primary.file, primary.line, 50),
-        match_type: "constant",
-        segment_event_name: segmentEventName,
+        match_type: "broad",
         all_call_sites: allCallSites,
       };
     }

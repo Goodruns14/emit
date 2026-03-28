@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import { execa } from "execa";
 import type { SdkType } from "../../types/index.js";
 
@@ -37,12 +38,79 @@ export const FILE_EXTENSIONS = [
   "*.kt",
   "*.swift",
   "*.py",
+  "*.go",
 ];
 
 const EXCLUDE_DIRS = ["node_modules", "bazel-", "target/", ".git", "dist/", "build/"];
 
 function buildExcludeArgs(): string[] {
   return EXCLUDE_DIRS.flatMap((d) => ["--exclude-dir", d]);
+}
+
+/**
+ * Check if a grep result line contains a genuine tracking call,
+ * not just a comment, variable name, or import.
+ */
+function isTrackingCallLine(line: string, patterns: string[]): boolean {
+  // Strip file:line: prefix to get code content
+  const colonIdx = line.indexOf(":");
+  const colonIdx2 = line.indexOf(":", colonIdx + 1);
+  const code = colonIdx2 !== -1 ? line.slice(colonIdx2 + 1) : line;
+  const trimmed = code.trimStart();
+
+  // Skip pure comments
+  if (trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) {
+    return false;
+  }
+
+  // Skip import/require lines
+  if (/^\s*(import\s|from\s|require\()/.test(trimmed)) {
+    return false;
+  }
+
+  // Check if any pattern appears as a function call (with opening paren)
+  if (patterns.length > 0) {
+    return patterns.some((p) => {
+      // Pattern already includes "(", check for the full pattern
+      if (p.endsWith("(")) {
+        // Use the full pattern with paren — exact match
+        return code.includes(p);
+      }
+      // Pattern without paren — match with word boundary via the dot or end of identifier
+      const base = p.replace(/\($/, "");
+      return code.includes(p) || code.includes(base + "(");
+    });
+  }
+
+  // Fallback: require actual call syntax, not just keyword mentions
+  return /\b(track|identify|capture|record|audit)\s*\(/.test(code);
+}
+
+/**
+ * Check if a tracking pattern appears within a few lines of the match.
+ * Handles multi-line calls like:
+ *   analytics.track(
+ *     "event_name",
+ *     { prop: "value" }
+ *   )
+ */
+function hasNearbyTrackingCall(
+  filePath: string,
+  lineNumber: number,
+  patterns: string[],
+  range = 5
+): boolean {
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    const lines = content.split("\n");
+    const start = Math.max(0, lineNumber - 1 - range);
+    const end = Math.min(lines.length, lineNumber - 1 + range);
+    const window = lines.slice(start, end).join("\n");
+
+    return patterns.some((p) => window.includes(p));
+  } catch {
+    return false;
+  }
 }
 
 export function parseCallSites(output: string): SearchMatch[] {
@@ -92,26 +160,26 @@ export async function searchDirect(
 
       if (!stdout.trim()) continue;
 
-      // Filter to lines containing actual tracking calls
+      // Filter to lines containing actual tracking calls (not comments/imports)
       const filtered = stdout
         .split("\n")
-        .filter((line) => {
-          const lower = line.toLowerCase();
-          if (allPatterns.length > 0) {
-            return allPatterns.some((p) => line.includes(p.replace("(", "")));
-          }
-          return (
-            lower.includes("track") ||
-            lower.includes("identify") ||
-            lower.includes("page") ||
-            lower.includes("audit") ||
-            lower.includes("record")
-          );
-        })
+        .filter((line) => isTrackingCallLine(line, allPatterns))
         .join("\n");
 
       if (filtered.trim()) {
         return parseCallSites(filtered);
+      }
+
+      // Multi-line fallback: event name might be on a different line
+      // than the tracking function call. Check nearby lines for patterns.
+      if (allPatterns.length > 0) {
+        const candidates = parseCallSites(stdout);
+        const multiLineMatches = candidates.filter((m) =>
+          hasNearbyTrackingCall(m.file, m.line, allPatterns)
+        );
+        if (multiLineMatches.length > 0) {
+          return multiLineMatches;
+        }
       }
     } catch {
       // grep exit 1 = no matches, that's fine
@@ -237,20 +305,7 @@ export async function searchConstant(
 
       const filtered = stdout
         .split("\n")
-        .filter((line) => {
-          const lower = line.toLowerCase();
-          if (allPatterns.length > 0) {
-            return allPatterns.some((p) => line.includes(p.replace("(", "")));
-          }
-          return (
-            lower.includes("track") ||
-            lower.includes("identify") ||
-            lower.includes("page") ||
-            lower.includes("audit") ||
-            lower.includes("record") ||
-            lower.includes("capture")
-          );
-        })
+        .filter((line) => isTrackingCallLine(line, allPatterns))
         .join("\n");
 
       if (filtered.trim()) {

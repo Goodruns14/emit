@@ -20,6 +20,7 @@ export function registerInit(program: Command): void {
 
 // Maps npm package names to their tracking function patterns
 const PACKAGE_TO_PATTERN: Record<string, string> = {
+  // Product analytics SDKs
   "posthog-js": "posthog.capture(",
   "posthog-node": "posthog.capture(",
   "@segment/analytics-next": "analytics.track(",
@@ -27,6 +28,11 @@ const PACKAGE_TO_PATTERN: Record<string, string> = {
   "@rudderstack/analytics-js": "rudderstack.track(",
   "mixpanel-browser": "mixpanel.track(",
   "@amplitude/analytics-browser": "amplitude.track(",
+  // Framework-specific SDKs
+  "@grafana/runtime": "reportInteraction(",
+  "@sentry/browser": "trackAnalytics(",
+  "@sentry/react": "trackAnalytics(",
+  "@snowplow/browser-tracker": "trackSelfDescribingEvent(",
 };
 
 const LLM_DISPLAY_LABELS: Record<string, string> = {
@@ -130,6 +136,7 @@ async function collectEventsInline(): Promise<string[]> {
 async function detectTrackPatterns(paths: string[]): Promise<string[]> {
   const patterns: string[] = [];
 
+  // Step 1: Deterministic — check package.json for known SDK packages
   for (const searchPath of paths) {
     const pkgPath = path.resolve(searchPath, "package.json");
     if (fs.existsSync(pkgPath)) {
@@ -147,9 +154,17 @@ async function detectTrackPatterns(paths: string[]): Promise<string[]> {
     }
   }
 
+  // Step 2: Dynamic — grep for function calls matching analytics naming conventions.
+  // This discovers custom wrappers (trackAnalytics, reportInteraction, publicLog2, etc.)
+  // without needing to enumerate every possible function name.
   const detected = await detectTrackingPattern(paths);
-  if (detected && !patterns.includes(detected.pattern)) {
-    patterns.push(detected.pattern);
+  for (const candidate of detected) {
+    if (!patterns.includes(candidate.pattern)) {
+      patterns.push(candidate.pattern);
+      // Only take the top pattern from dynamic detection to avoid noise.
+      // Package-based patterns are all kept since they're deterministic.
+      break;
+    }
   }
 
   return patterns;
@@ -171,10 +186,8 @@ async function detectBackendPatterns(paths: string[]): Promise<string[]> {
             "--include", "*.kt",
             "--include", "*.scala",
             "--include", "*.py",
-            "--exclude-dir", "node_modules",
-            "--exclude-dir", ".git",
-            "--exclude-dir", "target",
-            "--exclude-dir", "build",
+            "--include", "*.go",
+            ...DETECT_EXCLUDE,
           ],
           { reject: false }
         );
@@ -535,34 +548,66 @@ async function runInit(dir?: string): Promise<number> {
   return 0;
 }
 
-// ── Common analytics wrapper patterns found in real-world codebases ────────────
+// ── Keywords that signal an analytics/tracking function call ──────────────────
+// Used by dynamic detection to find tracking calls without enumerating every
+// possible wrapper name. A function containing any of these stems (e.g.
+// "trackAnalytics", "reportInteraction", "sendEvent") is a candidate.
 
-const WRAPPER_PATTERNS = [
-  "AnalyticsUtil.logEvent(",
-  "analytics.logEvent(",
-  "trackEvent(",
-  "Analytics.logEvent(",
-  "analyticsService.track(",
-  "telemetry.track(",
-  "posthog.capture(",
-  "amplitude.track(",
-  "mixpanel.track(",
+const TRACKING_STEMS = [
+  "track",
+  "capture",
+  "report",
+  "log",
+  "send",
+  "emit",
+  "record",
+  "identify",
+];
+
+// Noise patterns to exclude from dynamic detection — these match the keyword
+// stems but are never analytics tracking calls.
+const DETECTION_NOISE = [
+  /\b(console|debug|error|warn|info)\.(log|trace)\b/,     // logging, not tracking
+  /\b(track|capture)(Error|Exception|Stack|Warning)\b/i,   // error tracking, not events
+  /\baddEventListener\b/,                                  // DOM events
+  /\b(keydown|keyup|onclick|onchange|scroll)\b/i,          // UI events
+  /\breport(Error|Warning|Diagnostic|Coverage)\b/,         // reporting infrastructure
+  /\bsend(Request|Response|Message|Mail|Email|Notification)\b/, // network/comms
+  /\b(emit|record)(Warning|Error|Diagnostic)\b/,           // compiler/linter
+  /\blog(Debug|Info|Warn|Error|Fatal|Level)\b/,            // structured logging
 ];
 
 // ── Common backend/server-side tracking patterns ──────────────────────────────
+// These use a static list because backend patterns are harder to detect
+// dynamically (fewer call sites, different naming conventions).
 
 const BACKEND_PATTERNS = [
+  // Audit/CRUD event patterns
   "AuditEventHelper.capture",
   "AuditEventHelper.log",
   "auditEventHelper.capture",
   "captureEntityCRUDEvent(",
-  "EventPublisher.publish(",
-  "eventPublisher.publish(",
-  "analyticsService.track(",
-  "AnalyticsService.track(",
-  "EventTracker.track(",
   "auditLog(",
   "AuditLog.create(",
+
+  // Event publisher patterns
+  "EventPublisher.publish(",
+  "eventPublisher.publish(",
+  "EventTracker.track(",
+
+  // Service-layer analytics
+  "analyticsService.track(",
+  "AnalyticsService.track(",
+
+  // Python backend patterns
+  "track_event(",
+  "posthog.capture(",
+
+  // Server-side reporting
+  "sendReport(",
+
+  // Go backend patterns
+  "TrackEvent(",
 ];
 
 interface DetectedPattern {
@@ -571,64 +616,106 @@ interface DetectedPattern {
   example: string;
 }
 
+// File extensions and exclude dirs used by all detection greps
+const DETECT_INCLUDE = [
+  "--include", "*.ts", "--include", "*.tsx",
+  "--include", "*.js", "--include", "*.jsx",
+  "--include", "*.py", "--include", "*.go",
+  "--include", "*.java", "--include", "*.kt",
+  "--include", "*.swift",
+];
+const DETECT_EXCLUDE = [
+  "--exclude-dir", "node_modules",
+  "--exclude-dir", ".git",
+  "--exclude-dir", "dist",
+  "--exclude-dir", "build",
+  "--exclude-dir", "vendor",
+  "--exclude-dir", "target",
+  "--exclude-dir", "__pycache__",
+  "--exclude-dir", "__tests__",
+  "--exclude-dir", "test",
+];
+
+/**
+ * Dynamically discover tracking function patterns by grepping for function calls
+ * whose names contain analytics-related stems (track, capture, report, etc.).
+ * Returns candidates ranked by call-site frequency — the most-used pattern
+ * is almost always the real tracking function.
+ */
 async function detectTrackingPattern(
   paths: string[]
-): Promise<DetectedPattern | null> {
-  const allPatterns = [
-    "analytics.track(",
-    "analytics.identify(",
-    "rudderanalytics.track(",
-    ...WRAPPER_PATTERNS,
-  ];
+): Promise<DetectedPattern[]> {
+  // Build a regex that matches function calls containing any tracking stem.
+  // Matches: trackAnalytics(, reportInteraction(, posthog.capture(, publicLog2(, etc.
+  // Note: grep -E doesn't support (?:), so we use a plain group.
+  const stemAlternation = TRACKING_STEMS.join("|");
+  const pattern = `[a-zA-Z_.]*(${stemAlternation})[a-zA-Z0-9_]*\\s*\\(`;
 
-  let best: DetectedPattern | null = null;
+  const callCounts = new Map<string, { count: number; example: string }>();
 
-  for (const pattern of allPatterns) {
-    for (const searchPath of paths) {
-      try {
-        const { stdout } = await execa(
-          "grep",
-          [
-            "-rl",
-            pattern,
-            searchPath,
-            "--include", "*.ts",
-            "--include", "*.tsx",
-            "--include", "*.js",
-            "--include", "*.jsx",
-            "--include", "*.py",
-            "--include", "*.swift",
-            "--exclude-dir", "node_modules",
-            "--exclude-dir", ".git",
-            "--exclude-dir", "dist",
-            "--exclude-dir", "build",
-          ],
-          { reject: false }
-        );
-        const files = stdout.trim().split("\n").filter(Boolean);
-        if (files.length > 0 && (!best || files.length > best.count)) {
-          best = {
-            pattern,
-            count: files.length,
-            example: files[0],
-          };
+  for (const searchPath of paths) {
+    try {
+      const { stdout } = await execa(
+        "grep",
+        [
+          "-rnoEi",
+          pattern,
+          searchPath,
+          ...DETECT_INCLUDE,
+          ...DETECT_EXCLUDE,
+        ],
+        { reject: false }
+      );
+
+      if (!stdout.trim()) continue;
+
+      for (const line of stdout.split("\n")) {
+        if (!line.trim()) continue;
+
+        // Extract the matched function call pattern (file:line:match)
+        const colonIdx = line.indexOf(":");
+        const colonIdx2 = line.indexOf(":", colonIdx + 1);
+        if (colonIdx2 === -1) continue;
+
+        const filePath = line.slice(0, colonIdx);
+        const matched = line.slice(colonIdx2 + 1).trim();
+
+        // Skip noise patterns
+        if (DETECTION_NOISE.some((rx) => rx.test(matched))) continue;
+
+        // Skip test/spec files
+        if (/\.(test|spec|mock|stub)\.[a-z]+$/.test(filePath)) continue;
+
+        // Normalize: collapse whitespace before ( and ensure trailing (
+        const normalized = matched.replace(/\s+\($/, "(").replace(/\s*$/, "");
+        const fnCall = normalized.endsWith("(") ? normalized : normalized + "(";
+
+        const existing = callCounts.get(fnCall);
+        if (existing) {
+          existing.count++;
+        } else {
+          callCounts.set(fnCall, { count: 1, example: filePath });
         }
-      } catch {
-        // grep exit 1 = no matches
       }
+    } catch {
+      // grep exit 1 = no matches
     }
   }
 
-  const standardPatterns = [
-    "analytics.track(",
-    "analytics.identify(",
-    "rudderanalytics.track(",
-  ];
-  if (best && standardPatterns.includes(best.pattern)) {
-    return null;
+  // Filter to patterns with enough call sites to be real tracking functions
+  const MIN_CALL_SITES = 2;
+  const results: DetectedPattern[] = [];
+
+  for (const [fnCall, data] of callCounts) {
+    if (data.count >= MIN_CALL_SITES) {
+      results.push({ pattern: fnCall, count: data.count, example: data.example });
+    }
   }
 
-  return best;
+  // Sort by frequency — the most-used tracking pattern wins
+  results.sort((a, b) => b.count - a.count);
+
+  return results;
 }
 
 async function isClaudeCodeInstalled(): Promise<boolean> {

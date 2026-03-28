@@ -30,7 +30,7 @@ export interface CodeContext {
   file_path: string;
   line_number: number;
   context: string;
-  match_type: "direct" | "constant" | "not_found";
+  match_type: "direct" | "constant" | "broad" | "not_found";
   segment_event_name?: string;
   all_call_sites: CallSite[];
 }

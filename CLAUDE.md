@@ -91,6 +91,8 @@ Valid providers are enforced at config load time. The `LlmProvider` type is defi
 
 Test repos live in `test-repos/` (gitignored). Used for integration testing:
 
+### Original repos
+
 | Repo | SDK Pattern | Notes |
 |------|-------------|-------|
 | `calcom` | `posthog.capture(` | PostHog, TypeScript monorepo |
@@ -100,9 +102,38 @@ Test repos live in `test-repos/` (gitignored). Used for integration testing:
 | `dify` | Custom | AI platform |
 | `rainbow` | Custom | Smaller repo |
 
+### Expanded test suite (14 repos)
+
+Added to stress-test emit across diverse real-world codebases:
+
+| Repo | SDK Pattern | Category | Events | Discovery | Notes |
+|------|-------------|----------|--------|-----------|-------|
+| `vscode` | `publicLog2(` | Custom telemetry | 12 | 100% | TypeScript generics + GDPR classifications |
+| `netlify-cli` | `track(` | Custom CLI | 10 | 100% | Validated event naming: `cli:{object}_{action}` |
+| `sentry` | `trackAnalytics(` | Multi-provider | 664+ | 100% | Amplitude frontend + Python backend analytics |
+| `grafana` | `reportInteraction(` | Framework telemetry | 366+ | 100% | Rudderstack backend, `grafana_*` namespace |
+| `posthog` | `posthog.capture(` | Self-dogfooding | 459+ | 100% | PostHog uses their own product |
+| `datahub` | `analytics.event(` | Enum-based events | 40+ | 100% | EventType enum, plugin architecture |
+| `metabase` | `trackSchemaEvent(` | Schema events | 70+ | 57% | Snowplow schema-based, event names in object props |
+| `kibana` | `reportEvent(` | Framework telemetry | 46+ | 67% | EVENT_TYPE constants, EBT analytics client |
+| `twenty` | `.track({` | Server monitoring | ~13 | 33% | Object params, not string event names |
+| `supabase` | `sendEvent(` | Custom studio | 1 | 50% | Most telemetry via platform API, not client code |
+| `plane` | `track_event(` | Python PostHog | 4 | 0%* | Events in Python backend, not TS. Tests .py scanning |
+| `prisma` | `checkpoint.` | OpenTelemetry | 1 | 17% | OTel spans ≠ analytics events. Tests edge case |
+| `mattermost` | N/A | Perf telemetry | 0 | 0% | Go backend telemetry only, no JS event tracking |
+| `directus` | `track(` | Aggregate reports | 0 | 0% | Server-side usage reports, not discrete events |
+
+*Plane events are in Python files which emit supports, but the event names are defined as constants referenced indirectly.
+
+**Key findings:**
+- Scanner achieves **100% discovery** for repos with standard `trackFn("event_name")` patterns
+- **Enum/constant resolution** improved: now tries PascalCase, camelCase, UPPER_SNAKE_CASE variants + broad search fallback
+- Repos with **object-param tracking** (twenty), **server-side only** (mattermost, directus), or **aggregate telemetry** (prisma) are intentionally hard edge cases
+- The `claude-code` LLM provider has JSON parse reliability issues — `anthropic` provider recommended for production
+
 Each has its own `emit.config.yml`. Run tests against them with:
 ```bash
-cd test-repos/calcom && node ../../dist/cli.js scan --format json
+cd test-repos/calcom && NODE_PATH=$(pwd)/../../node_modules node ../../dist/cli.js scan --format json
 ```
 
 ## Testing

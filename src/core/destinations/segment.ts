@@ -43,8 +43,14 @@ export class SegmentDestinationAdapter implements DestinationAdapter {
       return result;
     }
 
-    // Fetch existing rules
-    const existingRules = await this.fetchRules();
+    // Fetch existing rules (throws on auth/network errors)
+    let existingRules: SegmentRule[];
+    try {
+      existingRules = await this.fetchRules();
+    } catch (err: any) {
+      result.errors.push(err.message);
+      return result;
+    }
     const existingByKey = new Map(existingRules.map((r) => [r.key, r]));
 
     const rulesToUpdate: any[] = [];
@@ -112,7 +118,10 @@ export class SegmentDestinationAdapter implements DestinationAdapter {
         },
       }
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      throw new Error(`Segment API error ${resp.status}: ${body.slice(0, 200)}`);
+    }
     const data = (await resp.json()) as { data: { rules: SegmentRule[] } };
     return data?.data?.rules?.filter((r) => r.type === "TRACK") ?? [];
   }

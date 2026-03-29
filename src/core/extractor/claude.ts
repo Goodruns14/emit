@@ -66,15 +66,29 @@ async function callClaudeCode(prompt: string): Promise<string> {
 async function callAnthropic(
   prompt: string,
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  retries = 3
 ): Promise<string> {
   const client = getAnthropicClient();
-  const response = await client.messages.create({
-    model,
-    max_tokens: maxTokens,
-    messages: [{ role: "user", content: prompt }],
-  });
-  return response.content[0].type === "text" ? response.content[0].text : "";
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      messages: [{ role: "user", content: prompt }],
+    });
+    return response.content[0].type === "text" ? response.content[0].text : "";
+  } catch (err: any) {
+    // Retry on rate limit (429) with a 65s wait to allow the 1-minute window to reset
+    if (err?.status === 429 && retries > 0) {
+      const waitMs = 65_000;
+      process.stderr.write(
+        `[emit] Rate limit hit — waiting ${waitMs / 1000}s before retry (${retries} left)...\n`
+      );
+      await new Promise((r) => setTimeout(r, waitMs));
+      return callAnthropic(prompt, model, maxTokens, retries - 1);
+    }
+    throw err;
+  }
 }
 
 async function callOpenAICompat(

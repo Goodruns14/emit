@@ -91,12 +91,11 @@ async function runScan(opts: ScanOptions): Promise<number> {
 
   if (usingManualEvents) {
     if (!json) logger.info(`Using ${config.manual_events!.length} manually specified events (warehouse skipped)`);
-    events = config.manual_events!.map((name) => ({
-      name,
-      daily_volume: 0,
-      first_seen: "unknown",
-      last_seen: "unknown",
-    }));
+    events = config.manual_events!.map((nameOrObj: any) => {
+      // Handle both string[] and {name: string}[] YAML formats
+      const name = typeof nameOrObj === "string" ? nameOrObj : String(nameOrObj?.name ?? nameOrObj);
+      return { name, daily_volume: 0, first_seen: "unknown", last_seen: "unknown" };
+    });
   } else if (config.warehouse) {
     if (!json) logger.spin("Connecting to Snowflake...");
     try {

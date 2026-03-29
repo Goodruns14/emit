@@ -16,9 +16,9 @@ export function extractContext(
     // This prevents cross-contamination when multiple tracking calls are in the same file.
     const funcBounds = findEnclosingFunction(lines, idx);
     if (funcBounds) {
-      // Expand slightly beyond function bounds for import context, but cap at ±10 lines
-      const start = Math.max(0, funcBounds.start - 5);
-      const end = Math.min(lines.length, funcBounds.end + 5);
+      // Expand before for import context, but do NOT expand after to avoid bleeding into next function
+      const start = Math.max(0, funcBounds.start - 3);
+      const end = Math.min(lines.length, funcBounds.end + 1);
       return lines.slice(start, end).join("\n");
     }
 
@@ -32,50 +32,43 @@ export function extractContext(
 }
 
 /**
- * Find the start and end lines of the enclosing function around a given line.
- * Uses brace-counting to detect function boundaries.
- * Returns null if no function boundary is found (e.g., top-level code).
+ * Find the enclosing function boundaries around a given line.
+ * Uses function declaration markers (not brace-counting) to avoid confusion
+ * with TypeScript parameter types like `(params: { ... })`.
  */
 function findEnclosingFunction(
   lines: string[],
   targetIdx: number
 ): { start: number; end: number } | null {
-  // Search backwards for function start
-  let start = targetIdx;
-  const funcPattern =
-    /^\s*(?:export\s+)?(?:async\s+)?(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>|\w+\s*\([^)]*\)\s*(?::\s*\w+[^{]*)?\s*\{)/;
+  const funcDeclPattern =
+    /^\s*(?:\/\*\*.*\*\/\s*)?(?:export\s+)?(?:async\s+)?function\s+\w+/;
 
+  // Search backwards for the function declaration containing our target line
+  let start = -1;
   for (let i = targetIdx; i >= Math.max(0, targetIdx - 80); i--) {
-    if (funcPattern.test(lines[i])) {
+    if (funcDeclPattern.test(lines[i])) {
       start = i;
       break;
     }
   }
 
-  if (start === targetIdx && targetIdx > 0) {
-    // Didn't find a function declaration — fall back to null
-    return null;
-  }
+  if (start === -1) return null;
 
-  // Count braces from function start to find the closing brace
-  let braceDepth = 0;
-  let foundOpen = false;
-  for (let i = start; i < Math.min(lines.length, start + 200); i++) {
-    for (const ch of lines[i]) {
-      if (ch === "{") {
-        braceDepth++;
-        foundOpen = true;
-      } else if (ch === "}") {
-        braceDepth--;
-        if (foundOpen && braceDepth === 0) {
-          return { start, end: i };
-        }
+  // Search forwards for the next function declaration (or EOF) to find the end
+  let end = lines.length - 1;
+  for (let i = targetIdx + 1; i < Math.min(lines.length, start + 200); i++) {
+    if (funcDeclPattern.test(lines[i])) {
+      // End at the line before the next function (or its JSDoc comment)
+      end = i - 1;
+      // Also skip blank lines and JSDoc comments above the next function
+      while (end > targetIdx && /^\s*($|\/\*\*)/.test(lines[end])) {
+        end--;
       }
+      break;
     }
   }
 
-  // If brace matching failed, return null to use fallback
-  return null;
+  return { start, end };
 }
 
 export function resolveEnumStringValue(

@@ -133,5 +133,22 @@ export function extractAllLiteralValues(
     if (SKIP.has(key)) delete combined[key];
   }
 
+  // Remove keys that are likely TypeScript type annotation params (camelCase)
+  // rather than actual tracking payload properties (usually snake_case).
+  // A literal like `metricType: "gauge"` in a TS params type is noise;
+  // the real payload uses `metric_type: params.metricType` (no string literal).
+  for (const key of Object.keys(combined)) {
+    // If the key matches a line that looks like a TS type annotation (followed by `;` or `|`)
+    // in any of the contexts, it's probably a param type, not a payload property.
+    const isTypeAnnotation = allContexts.some((ctx) => {
+      if (!ctx) return false;
+      const typePattern = new RegExp(
+        `\\b${key}\\s*[:?]\\s*["'][^"']*["']\\s*[|;]`
+      );
+      return typePattern.test(ctx);
+    });
+    if (isTypeAnnotation) delete combined[key];
+  }
+
   return combined;
 }

@@ -71,6 +71,8 @@ async function main(): Promise<void> {
       }
     } catch (err: any) {
       console.error("emit scan failed on main push:", err.message);
+      if (err.stdout) console.error("scan stdout:", err.stdout.toString().slice(0, 2000));
+      if (err.stderr) console.error("scan stderr:", err.stderr.toString().slice(0, 2000));
     }
 
     return; // Skip PR comment flow

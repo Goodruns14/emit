@@ -23,13 +23,26 @@ async function main(): Promise<void> {
     const cliPath = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
 
     // Run full scan (all events)
+    // Note: emit scan exits 2 (not 1) for low-confidence/not-found events — that's a warning,
+    // not a hard failure. The JSON output is still valid and we should use it.
     try {
-      const scanOutput = execFileSync("node", [cliPath, "scan", "--format", "json"], {
-        encoding: "utf8",
-        timeout: 300_000,
-        maxBuffer: 50 * 1024 * 1024,
-        env: process.env,
-      }).trim();
+      let scanOutput: string;
+      try {
+        scanOutput = execFileSync("node", [cliPath, "scan", "--format", "json"], {
+          encoding: "utf8",
+          timeout: 300_000,
+          maxBuffer: 50 * 1024 * 1024,
+          env: process.env,
+        }).trim();
+      } catch (scanErr: any) {
+        if (scanErr?.status === 2 && scanErr?.stdout?.trim()) {
+          // Exit code 2 = completed with low-confidence/not-found events — JSON is valid
+          console.warn("emit scan completed with warnings (exit 2) — using output");
+          scanOutput = scanErr.stdout.trim();
+        } else {
+          throw scanErr;
+        }
+      }
 
       if (scanOutput) {
         const catalog: EmitCatalog = JSON.parse(scanOutput);
@@ -291,6 +304,11 @@ function runEmitScan(eventNames: string[]): string | null {
     });
     return stdout.trim() || null;
   } catch (err: any) {
+    // Exit code 2 = scan completed with low-confidence/not-found events — JSON is still valid
+    if (err?.status === 2 && err?.stdout?.trim()) {
+      console.warn("emit scan exited with warnings (exit 2) — using output");
+      return err.stdout.trim();
+    }
     console.error("emit scan failed:", err.message);
     if (err.stdout) console.error("stdout:", err.stdout.toString().slice(0, 1000));
     if (err.stderr) console.error("stderr:", err.stderr.toString().slice(0, 1000));

@@ -88,13 +88,23 @@ function buildEventChange(
   event: CatalogEvent,
   type: "added" | "removed"
 ): EventChange {
+  // Include properties for added events so the PR comment can show them
+  const property_changes: PropertyChange[] =
+    type === "added"
+      ? Object.entries(event.properties).map(([propName, prop]) => ({
+          property: propName,
+          type: "added" as const,
+          after: prop.description,
+        }))
+      : [];
+
   return {
     event: name,
     type,
     description: event.description,
     confidence: event.confidence,
     confidence_changed: false,
-    property_changes: [],
+    property_changes,
     fields_changed: [],
   };
 }

@@ -131,6 +131,26 @@ export function parseCallSites(output: string): SearchMatch[] {
     .filter((m): m is SearchMatch => m !== null);
 }
 
+/**
+ * Filter call sites to only include lines where the event name is an exact
+ * quoted string match, not a substring of a longer event name.
+ * e.g. grep for "Create Comment" also matches "Create Comment Failed" —
+ * this filter removes the false match.
+ */
+export function filterExactEventMatches(
+  matches: SearchMatch[],
+  eventName: string
+): SearchMatch[] {
+  // Escape regex special chars in the event name
+  const escaped = eventName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match event name followed by a quote char (', ", `) — not followed by more word chars
+  const exactPattern = new RegExp(`['"\`]${escaped}['"\`]`);
+  const filtered = matches.filter((m) => exactPattern.test(m.rawLine));
+  // If filtering removes everything, return original matches as fallback
+  // (event name might be in a constant, not a string literal)
+  return filtered.length > 0 ? filtered : matches;
+}
+
 export async function searchDirect(
   eventName: string,
   paths: string[],

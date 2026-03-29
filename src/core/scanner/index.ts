@@ -1,5 +1,5 @@
 import type { CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant, searchBroad, generateCasingVariants } from "./search.js";
+import { searchDirect, searchConstant, searchBroad, generateCasingVariants, filterExactEventMatches } from "./search.js";
 import { extractContext, resolveEnumStringValue } from "./context.js";
 
 export class RepoScanner {
@@ -37,8 +37,10 @@ export class RepoScanner {
     );
 
     if (directMatches.length > 0) {
-      const primary = directMatches[0];
-      const allCallSites: CallSite[] = directMatches.map((m) => ({
+      // Filter out substring matches (e.g. "Create Comment" matching "Create Comment Failed")
+      const exactMatches = filterExactEventMatches(directMatches, eventName);
+      const primary = exactMatches[0];
+      const allCallSites: CallSite[] = exactMatches.map((m) => ({
         file_path: m.file,
         line_number: m.line,
         context: extractContext(m.file, m.line, 15),

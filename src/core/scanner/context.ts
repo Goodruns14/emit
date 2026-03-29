@@ -32,21 +32,40 @@ export function extractContext(
 }
 
 /**
+ * Patterns that mark the start of a function scope.
+ * Order matters: more specific patterns first.
+ */
+const FUNC_START_PATTERNS: RegExp[] = [
+  // Traditional: export async function foo(
+  /^\s*(?:\/\*\*.*\*\/\s*)?(?:export\s+)?(?:async\s+)?function\s+\w+/,
+  // Arrow assigned to const/let/var: const foo = async () =>
+  // Also matches: const foo = (params) => {
+  /^\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)\s*(?::\s*\S+\s*)?=>|\w+\s*=>)/,
+  // Arrow assigned to const with type annotation: const foo: Type = () =>
+  /^\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*:\s*\S+\s*=\s*(?:async\s+)?(?:\(|[a-z])/,
+  // React component: const Foo = ({ prop }) => { (capitalized name, common React pattern)
+  /^\s*(?:export\s+)?(?:const|let)\s+[A-Z]\w+\s*=\s*(?:React\.memo\()?(?:async\s+)?\(/,
+  // Class method or object method: methodName() { or async methodName() {
+  /^\s{2,}(?:async\s+)?\w+\s*\([^)]*\)\s*(?::\s*\S+\s*)?\{/,
+];
+
+/**
  * Find the enclosing function boundaries around a given line.
- * Uses function declaration markers (not brace-counting) to avoid confusion
- * with TypeScript parameter types like `(params: { ... })`.
+ * Matches function declarations, arrow functions, class/object methods,
+ * and React component definitions.
  */
 function findEnclosingFunction(
   lines: string[],
   targetIdx: number
 ): { start: number; end: number } | null {
-  const funcDeclPattern =
-    /^\s*(?:\/\*\*.*\*\/\s*)?(?:export\s+)?(?:async\s+)?function\s+\w+/;
+  function isFuncStart(line: string): boolean {
+    return FUNC_START_PATTERNS.some((p) => p.test(line));
+  }
 
   // Search backwards for the function declaration containing our target line
   let start = -1;
   for (let i = targetIdx; i >= Math.max(0, targetIdx - 80); i--) {
-    if (funcDeclPattern.test(lines[i])) {
+    if (isFuncStart(lines[i])) {
       start = i;
       break;
     }
@@ -57,7 +76,7 @@ function findEnclosingFunction(
   // Search forwards for the next function declaration (or EOF) to find the end
   let end = lines.length - 1;
   for (let i = targetIdx + 1; i < Math.min(lines.length, start + 200); i++) {
-    if (funcDeclPattern.test(lines[i])) {
+    if (isFuncStart(lines[i])) {
       // End at the line before the next function (or its JSDoc comment)
       end = i - 1;
       // Also skip blank lines and JSDoc comments above the next function
@@ -131,6 +150,35 @@ export function extractAllLiteralValues(
   ]);
   for (const key of Object.keys(combined)) {
     if (SKIP.has(key)) delete combined[key];
+  }
+
+  // Remove CSS-in-JS properties that leak from inline style={{ }} objects
+  // when the context window includes JSX near the tracking call.
+  const CSS_PROPS = new Set([
+    "zIndex", "overflow", "backgroundColor", "background", "backgroundImage",
+    "marginTop", "marginBottom", "marginLeft", "marginRight", "margin",
+    "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "padding",
+    "fontSize", "fontWeight", "fontFamily", "fontStyle", "lineHeight",
+    "textAlign", "textDecoration", "textTransform", "letterSpacing",
+    "whiteSpace", "wordBreak", "wordWrap", "overflowWrap",
+    "color", "border", "borderRadius", "borderColor", "borderWidth",
+    "borderStyle", "borderTop", "borderBottom", "borderLeft", "borderRight",
+    "display", "position", "visibility", "float", "clear",
+    "width", "height", "maxWidth", "maxHeight", "minWidth", "minHeight",
+    "top", "bottom", "left", "right",
+    "opacity", "cursor", "pointerEvents", "userSelect",
+    "transform", "transition", "animation", "animationName",
+    "boxShadow", "boxSizing", "outline", "outlineColor",
+    "flexDirection", "justifyContent", "alignItems", "alignSelf",
+    "flexWrap", "flexGrow", "flexShrink", "flexBasis",
+    "gap", "rowGap", "columnGap",
+    "gridTemplateColumns", "gridTemplateRows", "gridColumn", "gridRow",
+    "objectFit", "objectPosition", "verticalAlign",
+    "content", "listStyle", "listStyleType",
+    "stroke", "strokeWidth", "fill",
+  ]);
+  for (const key of Object.keys(combined)) {
+    if (CSS_PROPS.has(key)) delete combined[key];
   }
 
   // Remove keys that are likely TypeScript type annotation params (camelCase)

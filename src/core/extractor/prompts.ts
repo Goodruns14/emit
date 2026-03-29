@@ -67,6 +67,8 @@ Return ONLY a valid JSON object with this exact structure. No preamble, no markd
 }
 
 Rules:
+- CRITICAL: Only extract properties from the specific \`${eventName}\` tracking call. The code context may contain OTHER tracking calls for different events nearby — completely ignore those. Look for the exact call that fires "${eventName}" and extract ONLY the properties passed in that specific call's payload object.
+- If a property like "metricType" or "severity" belongs to a DIFFERENT event's tracking call visible in the context, do NOT include it.
 - If you cannot determine something confidently, say so explicitly
 - Never guess. Low confidence is better than wrong confidence.
 - Edge cases must be visible in the code — do not invent them

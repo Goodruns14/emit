@@ -7,6 +7,7 @@ import * as yaml from "js-yaml";
 import { execa } from "execa";
 import { logger } from "../utils/logger.js";
 import { parseEventsFile, getCsvHeaders } from "../core/import/parse.js";
+import { discoverBackendPatterns } from "../core/scanner/discovery.js";
 
 export function registerInit(program: Command): void {
   program
@@ -33,6 +34,14 @@ const PACKAGE_TO_PATTERN: Record<string, string> = {
   "@sentry/browser": "trackAnalytics(",
   "@sentry/react": "trackAnalytics(",
   "@snowplow/browser-tracker": "trackSelfDescribingEvent(",
+};
+
+// Maps npm package names to SDK types for config generation
+const PACKAGE_TO_SDK: Record<string, string> = {
+  "@segment/analytics-next": "segment",
+  "analytics-node": "segment",
+  "@rudderstack/analytics-js": "rudderstack",
+  "@snowplow/browser-tracker": "snowplow",
 };
 
 const LLM_DISPLAY_LABELS: Record<string, string> = {
@@ -133,6 +142,24 @@ async function collectEventsInline(): Promise<string[]> {
 
 // ── Detection helpers ──────────────────────────────────────────────────────────
 
+function detectSdkType(paths: string[]): string {
+  for (const searchPath of paths) {
+    const pkgPath = path.resolve(searchPath, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        for (const [pkgName, sdkType] of Object.entries(PACKAGE_TO_SDK)) {
+          if (deps[pkgName]) return sdkType;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+  }
+  return "custom";
+}
+
 async function detectTrackPatterns(paths: string[]): Promise<string[]> {
   const patterns: string[] = [];
 
@@ -171,8 +198,11 @@ async function detectTrackPatterns(paths: string[]): Promise<string[]> {
 }
 
 async function detectBackendPatterns(paths: string[]): Promise<string[]> {
-  const found: string[] = [];
+  const discovered = await discoverBackendPatterns(paths);
+  if (discovered.length > 0) return discovered;
 
+  // Fallback: check hardcoded patterns if broad discovery found nothing
+  const found: string[] = [];
   for (const pattern of BACKEND_PATTERNS) {
     for (const searchPath of paths) {
       try {
@@ -200,7 +230,6 @@ async function detectBackendPatterns(paths: string[]): Promise<string[]> {
       }
     }
   }
-
   return found;
 }
 
@@ -213,8 +242,19 @@ async function detectLlmProvider(): Promise<string | null> {
 
 // ── Config builders ────────────────────────────────────────────────────────────
 
-function buildConfig(patterns: string[], llmProvider: string, backendPatterns?: string[]): string {
-  let yml = "repo:\n  paths:\n    - ./\n  sdk: custom\n";
+function buildConfig(
+  patterns: string[],
+  llmProvider: string,
+  backendPatterns?: string[],
+  sdk?: string,
+  repoPaths?: string[],
+): string {
+  const paths = repoPaths && repoPaths.length > 0 ? repoPaths : ["./"];
+  let yml = "repo:\n  paths:\n";
+  for (const rp of paths) {
+    yml += `    - ${rp}\n`;
+  }
+  yml += `  sdk: ${sdk || "custom"}\n`;
   if (patterns.length === 1) {
     yml += `  track_pattern: "${patterns[0]}"\n`;
   } else if (patterns.length > 1) {
@@ -272,25 +312,39 @@ function appendManualEvents(configPath: string, events: string[]): void {
 async function askLlmProvider(p: ReturnType<typeof createPrompter>): Promise<string> {
   logger.blank();
   logger.line("  Which LLM should emit use to analyze your events?");
-  logger.line("    1) Claude Code (local CLI — uses your active session)");
-  logger.line("    2) Anthropic API (requires ANTHROPIC_API_KEY)");
-  logger.line("    3) OpenAI API (requires OPENAI_API_KEY)");
+  logger.line("    1) Claude Code (local CLI — requires Claude Code installed)");
+  logger.line("    2) Anthropic API (requires ANTHROPIC_API_KEY env var)");
+  logger.line("    3) OpenAI API (requires OPENAI_API_KEY env var)");
   logger.blank();
-  const choice = (await p.ask("  Choice [1]: ")) || "1";
-  if (choice === "2") return "anthropic";
-  if (choice === "3") return "openai";
-  return "claude-code";
+
+  // Loop until valid input
+  while (true) {
+    const choice = (await p.ask("  Choice [1]: ")).trim() || "1";
+    if (choice === "1") return "claude-code";
+    if (choice === "2") return "anthropic";
+    if (choice === "3") return "openai";
+    logger.line(chalk.yellow("  Please enter 1, 2, or 3."));
+  }
 }
 
 async function askTrackPatterns(p: ReturnType<typeof createPrompter>): Promise<string[]> {
   logger.blank();
   logger.line("  What function(s) track events in your code?");
   logger.line(chalk.gray("  (comma-separated, e.g. analytics.track, posthog.capture)"));
+  logger.line(chalk.gray("  Emit will search for these as grep patterns, e.g. analytics.track("));
   const answer = await p.ask("  > ");
   if (!answer.trim()) return [];
   return answer
     .split(",")
-    .map((s) => s.trim())
+    .map((s) => {
+      let p = s.trim();
+      if (!p) return "";
+      // Remove trailing ) if user typed analytics.track()
+      p = p.replace(/\(\)$/, "(");
+      // Ensure pattern ends with ( for grep matching
+      if (!p.endsWith("(")) p += "(";
+      return p;
+    })
     .filter(Boolean);
 }
 
@@ -442,10 +496,22 @@ async function runInit(dir?: string): Promise<number> {
     llm = result.llm;
   }
 
+  // ── Ask for repo paths ──────────────────────────────────────────────────
+  logger.blank();
+  logger.line("  Which directories contain your tracking code?");
+  logger.line(chalk.gray("  (comma-separated, default: ./)"));
+  const pathAnswer = await p.ask("  > ");
+  const repoPaths = pathAnswer.trim()
+    ? pathAnswer.split(",").map((s) => s.trim()).filter(Boolean)
+    : ["./"];
+
+  // ── Detect SDK type from packages ──────────────────────────────────────
+  const detectedSdk = detectSdkType(scanPaths);
+
   // Close readline before switching to raw mode
   p.close();
 
-  const configYml = buildConfig(patterns, llm, detectedBackend);
+  const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths);
   fs.writeFileSync(configPath, configYml);
 
   logger.blank();
@@ -488,9 +554,17 @@ async function runInit(dir?: string): Promise<number> {
           logger.line(`    ${i + 1}) ${h}`);
         });
         logger.blank();
-        const choice = (await p2.ask("  Column [1]: ")) || "1";
-        const idx = Math.max(0, Math.min(parseInt(choice, 10) - 1, headers.length - 1));
-        selectedColumn = headers[isNaN(idx) ? 0 : idx];
+        let colIdx = 0;
+        while (true) {
+          const choice = (await p2.ask("  Column [1]: ")).trim() || "1";
+          const parsed = parseInt(choice, 10);
+          if (!isNaN(parsed) && parsed >= 1 && parsed <= headers.length) {
+            colIdx = parsed - 1;
+            break;
+          }
+          logger.line(chalk.yellow(`  Please enter a number between 1 and ${headers.length}.`));
+        }
+        selectedColumn = headers[colIdx];
       }
       p2.close();
 
@@ -511,6 +585,37 @@ async function runInit(dir?: string): Promise<number> {
       logger.blank();
       logger.line(chalk.gray("  Skipped — you can add events later with: emit import <file>"));
     }
+  }
+
+  // ── Validate config has a data source ────────────────────────────────────
+  // Re-read to check if manual_events were added in Step 2
+  const written = yaml.load(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  const hasDataSource =
+    !!written["warehouse"] ||
+    !!written["source"] ||
+    (Array.isArray(written["manual_events"]) && (written["manual_events"] as unknown[]).length > 0);
+
+  if (!hasDataSource) {
+    logger.blank();
+    logger.warn(
+      "Your config has no event source yet (no warehouse, source, or manual_events)."
+    );
+    logger.line(
+      chalk.gray("  emit scan will fail until you add one. Options:")
+    );
+    logger.line(
+      chalk.gray("  • Add events:     ") + chalk.cyan("emit import <file>")
+    );
+    logger.line(
+      chalk.gray("  • Add manually:   add ") +
+        chalk.cyan("manual_events:") +
+        chalk.gray(" to emit.config.yml")
+    );
+    logger.line(
+      chalk.gray("  • Add warehouse:  add ") +
+        chalk.cyan("warehouse:") +
+        chalk.gray(" section to emit.config.yml")
+    );
   }
 
   // ── Step 3: Scan ──────────────────────────────────────────────────────────

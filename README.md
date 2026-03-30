@@ -26,6 +26,17 @@ Then verify:
 emit --help
 ```
 
+> **Permission error on macOS?** If you see `EACCES: permission denied` when running the install command, your system npm is writing to a root-owned directory. Fix it by redirecting npm's global prefix to a user-owned location:
+>
+> ```bash
+> mkdir ~/.npm-global
+> npm config set prefix '~/.npm-global'
+> echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.zshrc && source ~/.zshrc
+> npm install -g emit-catalog
+> ```
+>
+> Alternatively, install Node.js via [nvm](https://github.com/nvm-sh/nvm) or [Homebrew](https://brew.sh) to avoid this issue entirely.
+
 ## Quickstart
 
 ### 1. Initialize
@@ -74,6 +85,78 @@ Shows a catalog health report: confidence breakdown, stale events, flagged items
 | `emit mcp` | Start a local MCP server exposing the catalog to AI agents |
 
 Run `emit <command> --help` for detailed options on each command.
+
+## GitHub Action
+
+Emit ships a GitHub Action that keeps your catalog current on every PR.
+
+### Setup
+
+1. **Add your API key** as a repository secret:
+
+   `Settings > Secrets and variables > Actions > New repository secret`
+   - Name: `ANTHROPIC_API_KEY`
+   - Value: your key from [console.anthropic.com](https://console.anthropic.com)
+
+2. **Create a workflow file** at `.github/workflows/emit.yml`:
+
+```yaml
+name: Emit Catalog Check
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths:
+      - "src/**"  # adjust to match your instrumentation code
+
+jobs:
+  emit:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write  # required if using auto_commit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: emit-io/emit-catalog/action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### What it does
+
+On each PR that touches instrumentation files, the action:
+- Detects which events are affected by the change
+- Runs `emit scan` on those events
+- Posts a PR comment showing new, modified, and removed events
+- Flags low-confidence definitions for review
+
+### Options
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `anthropic_api_key` | (required) | Anthropic API key for LLM extraction |
+| `base_branch` | `main` | Branch to compare against |
+| `auto_commit` | `false` | Auto-commit updated catalog to PR branch |
+| `auto_push` | `false` | Run `emit push` on merge to main (requires destination credentials) |
+
+### Push-to-main flow
+
+To automatically sync destinations when PRs merge:
+
+```yaml
+on:
+  push:
+    branches: [main]
+
+# ... same job setup as above, plus:
+      - uses: emit-io/emit-catalog/action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          auto_push: true
+```
+
+Set destination credentials (e.g., `SEGMENT_API_TOKEN`, `AMPLITUDE_API_KEY`) as repository secrets.
 
 ## MCP Server
 

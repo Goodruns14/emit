@@ -11,6 +11,15 @@ import { postOrUpdateComment } from "./github.js";
 import type { EmitCatalog, SdkType } from "../dist/types/index.js";
 
 async function main(): Promise<void> {
+  // ── Early validation ────────────────────────────────────────────
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error("ERROR: ANTHROPIC_API_KEY is not set.");
+    console.error("  Add it as a repository or organization secret:");
+    console.error("  Settings > Secrets and variables > Actions > New repository secret");
+    console.error("  Get your key at https://console.anthropic.com");
+    process.exit(1);
+  }
+
   const baseBranch = process.env.EMIT_BASE_BRANCH ?? "main";
 
   // ── Detect push-to-main ─────────────────────────────────────────

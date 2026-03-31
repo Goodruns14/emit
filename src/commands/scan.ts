@@ -13,6 +13,7 @@ import { extractAllLiteralValues } from "../core/scanner/context.js";
 import { MetadataExtractor } from "../core/extractor/index.js";
 import { reconcile } from "../core/reconciler/index.js";
 import { writeOutput } from "../core/writer/index.js";
+import { runStatus } from "./status.js";
 import type {
   WarehouseEvent,
   PropertyStat,
@@ -61,7 +62,17 @@ export function registerScan(program: Command): void {
       "Use LLM to find renamed/missing events. Pass comma-separated names, or omit for all not-found events"
     )
     .action(async (opts: ScanOptions) => {
-      const exitCode = await runScan(opts);
+      let exitCode: number;
+      try {
+        exitCode = await runScan(opts);
+      } catch (err: any) {
+        process.stderr.write(`\n${err.message ?? err}\n`);
+        process.exit(1);
+        return;
+      }
+      if ((exitCode === 0 || exitCode === 2) && opts.format !== "json" && !opts.dryRun) {
+        await runStatus({ format: opts.format });
+      }
       process.exit(exitCode);
     });
 }
@@ -502,36 +513,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
     logger.info(`Written to ${outputPath}`);
   }
 
-  // ── Summary ───────────────────────────────────────────────────────
-  if (!json) {
-    logger.blank();
-    logger.line(chalk.gray("─".repeat(45)));
-    const summaryRows: { label: string; value: any; warn?: boolean }[] = [
-      { label: "Events located:", value: `${located.length}/${events.length}` },
-    ];
-    if (unchanged > 0) {
-      summaryRows.push(
-        { label: "Unchanged:", value: `${unchanged} (carried forward)` },
-        { label: "Re-extracted:", value: reExtracted },
-      );
-    }
-    summaryRows.push(
-      { label: "High confidence:", value: stats.high },
-      { label: "Medium confidence:", value: stats.medium },
-      {
-        label: "Low confidence:",
-        value: stats.low > 0 ? `${stats.low}  ⚠ review recommended` : stats.low,
-        warn: stats.low > 0,
-      },
-      { label: "Not found:", value: finalNotFound.length, warn: finalNotFound.length > 0 },
-    );
-    if (resolvedEvents.length > 0) {
-      summaryRows.push({ label: "Resolved (renamed):", value: resolvedEvents.length });
-    }
-    logger.summary(summaryRows);
-    logger.line(chalk.gray("─".repeat(45)));
-    logger.blank();
-  }
+  // Summary is handled by runStatus() after scan completes (called from the action handler)
 
   // Disconnect
   if (warehouseAdapter) await warehouseAdapter.disconnect().catch(() => {});

@@ -704,8 +704,9 @@ async function runInit(dir?: string): Promise<number> {
   logger.blank();
   logger.line(chalk.bold("  What's next"));
   logger.line(chalk.gray("  " + "─".repeat(40)));
-  logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan anytime")}`);
-  logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events")}`);
+  logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
+  logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
+  logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);
   logger.blank();
 
   return 0;

@@ -1,4 +1,4 @@
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import Anthropic from "@anthropic-ai/sdk";
 import type { LlmCallConfig } from "../../types/index.js";
@@ -45,22 +45,47 @@ async function findClaudeBinary(): Promise<string> {
 
 async function callClaudeCode(prompt: string): Promise<string> {
   const bin = await findClaudeBinary();
-  try {
-    const { stdout } = await execFileAsync(bin, ["-p", prompt], {
+
+  return new Promise<string>((resolve, reject) => {
+    // Pipe prompt via stdin instead of as a CLI argument to avoid
+    // arg-length limits and the "no stdin data" warning.
+    const child = spawn(bin, ["-p", "-"], {
+      stdio: ["pipe", "pipe", "pipe"],
       timeout: 120_000,
-      maxBuffer: 10 * 1024 * 1024,
     });
-    return stdout.trim();
-  } catch (err: any) {
-    if (err.code === "ENOENT") {
-      throw new Error(
-        "Claude Code CLI not found on PATH.\n" +
-          "  Install: npm install -g @anthropic-ai/claude-code\n" +
-          "  Or switch to a different provider: emit init"
-      );
-    }
-    throw new Error(`Claude Code CLI error: ${err.message}`);
-  }
+
+    child.stdin!.end(prompt);
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    child.stdout!.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr!.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+    child.on("error", (err: any) => {
+      if (err.code === "ENOENT") {
+        reject(new Error(
+          "Claude Code CLI not found on PATH.\n" +
+            "  Install: npm install -g @anthropic-ai/claude-code\n" +
+            "  Or switch to a different provider: emit init"
+        ));
+      } else {
+        reject(new Error(`Claude Code CLI error: ${err.message}`));
+      }
+    });
+
+    child.on("close", (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString().trim();
+      const stderr = Buffer.concat(stderrChunks).toString().trim();
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        const detail = stderr || stdout || `exited with code ${code}`;
+        const truncated = detail.length > 500 ? detail.slice(0, 500) + "..." : detail;
+        reject(new Error(`Claude Code CLI error: ${truncated}`));
+      }
+    });
+  });
 }
 
 async function callAnthropic(

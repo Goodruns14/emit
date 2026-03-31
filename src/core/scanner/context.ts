@@ -22,9 +22,10 @@ export function extractContext(
       return lines.slice(start, end).join("\n");
     }
 
-    // Fallback: fixed window
-    const start = Math.max(0, idx - window);
-    const end = Math.min(lines.length, idx + window);
+    // Fallback: expanded window (no function boundary found = uncertainty, scan more)
+    const expanded = window * 2;
+    const start = Math.max(0, idx - expanded);
+    const end = Math.min(lines.length, idx + expanded);
     return lines.slice(start, end).join("\n");
   } catch {
     return "";
@@ -64,7 +65,7 @@ function findEnclosingFunction(
 
   // Search backwards for the function declaration containing our target line
   let start = -1;
-  for (let i = targetIdx; i >= Math.max(0, targetIdx - 80); i--) {
+  for (let i = targetIdx; i >= Math.max(0, targetIdx - 200); i--) {
     if (isFuncStart(lines[i])) {
       start = i;
       break;

@@ -16,7 +16,7 @@ export function registerStatus(program: Command): void {
     });
 }
 
-async function runStatus(opts: { format?: string }): Promise<number> {
+export async function runStatus(opts: { format?: string }): Promise<number> {
   const json = opts.format === "json";
 
   let config;

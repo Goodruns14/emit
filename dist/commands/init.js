@@ -1,6 +1,7 @@
 import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import chalk from "chalk";
 import * as yaml from "js-yaml";
 import { execa } from "execa";
@@ -140,9 +141,8 @@ function detectSdkType(paths) {
     }
     return "custom";
 }
-async function detectTrackPatterns(paths) {
+async function detectPatternsFromPackageJson(paths) {
     const patterns = [];
-    // Step 1: Deterministic — check package.json for known SDK packages
     for (const searchPath of paths) {
         const pkgPath = path.resolve(searchPath, "package.json");
         if (fs.existsSync(pkgPath)) {
@@ -158,18 +158,6 @@ async function detectTrackPatterns(paths) {
             catch {
                 // ignore parse errors
             }
-        }
-    }
-    // Step 2: Dynamic — grep for function calls matching analytics naming conventions.
-    // This discovers custom wrappers (trackAnalytics, reportInteraction, publicLog2, etc.)
-    // without needing to enumerate every possible function name.
-    const detected = await detectTrackingPattern(paths);
-    for (const candidate of detected) {
-        if (!patterns.includes(candidate.pattern)) {
-            patterns.push(candidate.pattern);
-            // Only take the top pattern from dynamic detection to avoid noise.
-            // Package-based patterns are all kept since they're deterministic.
-            break;
         }
     }
     return patterns;
@@ -357,25 +345,132 @@ async function runInit(dir) {
     const configPath = path.resolve(repoDir, "emit.config.yml");
     logger.blank();
     logger.line(chalk.bold("  Welcome to emit."));
-    // ── Step 1: Detect & configure ────────────────────────────────────────────
-    showStep(1, 3);
     const scanPaths = [repoDir];
+    // Check for existing config — support re-running init to merge new patterns
+    let existingConfig = null;
+    if (fs.existsSync(configPath)) {
+        try {
+            existingConfig = yaml.load(fs.readFileSync(configPath, "utf8"));
+        }
+        catch { /* ignore parse errors */ }
+    }
+    // ── Step 1: Collect events ──────────────────────────────────────────────
+    showStep(1, 3);
+    logger.line("  How would you like to add your events?");
+    logger.blank();
+    const eventChoice = await arrowSelect([
+        { label: "Type them in now", value: "inline" },
+        { label: "Load from a file  (CSV, plain text, or JSON)", value: "file" },
+        { label: "Skip — I'll do it later", value: "skip" },
+    ]);
+    let collectedEvents = [];
+    if (eventChoice === "inline") {
+        collectedEvents = await collectEventsInline();
+        if (collectedEvents.length > 0) {
+            logger.blank();
+            logger.succeed(`${collectedEvents.length} event${collectedEvents.length === 1 ? "" : "s"} collected`);
+        }
+        else {
+            logger.blank();
+            logger.line(chalk.gray("  No events added — you can add them later in emit.config.yml"));
+        }
+    }
+    else if (eventChoice === "file") {
+        const p2 = createPrompter();
+        logger.blank();
+        logger.line(chalk.gray("  Provide a CSV, plain text, or JSON file with one event name per row."));
+        const filePath = await p2.ask("  File path: ");
+        if (filePath.trim()) {
+            // Resolve relative paths against the target repo dir
+            const resolvedFilePath = path.isAbsolute(filePath.trim())
+                ? filePath.trim()
+                : path.resolve(repoDir, filePath.trim());
+            let selectedColumn;
+            const headers = getCsvHeaders(resolvedFilePath);
+            if (headers) {
+                logger.blank();
+                logger.line("  Multiple columns found. Which column has the event names?");
+                headers.forEach((h, i) => {
+                    logger.line(`    ${i + 1}) ${h}`);
+                });
+                logger.blank();
+                let colIdx = 0;
+                while (true) {
+                    const choice = (await p2.ask("  Column [1]: ")).trim() || "1";
+                    const parsed = parseInt(choice, 10);
+                    if (!isNaN(parsed) && parsed >= 1 && parsed <= headers.length) {
+                        colIdx = parsed - 1;
+                        break;
+                    }
+                    logger.line(chalk.yellow(`  Please enter a number between 1 and ${headers.length}.`));
+                }
+                selectedColumn = headers[colIdx];
+            }
+            p2.close();
+            try {
+                const { events, skipped } = parseEventsFile(resolvedFilePath, selectedColumn ? { column: selectedColumn } : undefined);
+                collectedEvents = events;
+                logger.blank();
+                const parts = [`${events.length} event${events.length === 1 ? "" : "s"} loaded`];
+                if (skipped > 0)
+                    parts.push(`${skipped} duplicates skipped`);
+                logger.succeed(parts.join(" · "));
+            }
+            catch (err) {
+                logger.blank();
+                logger.warn(`Could not load file: ${err.message}`);
+                logger.line(chalk.gray("  You can add events later with: emit import <file>"));
+            }
+        }
+        else {
+            p2.close();
+            logger.blank();
+            logger.line(chalk.gray("  Skipped — you can add events later with: emit import <file>"));
+        }
+    }
+    // ── Step 2: Detect & configure ──────────────────────────────────────────
+    showStep(2, 3);
     logger.spin("Detecting your setup...");
-    const detectedPatterns = await detectTrackPatterns(scanPaths);
+    const packagePatterns = await detectPatternsFromPackageJson(scanPaths);
     const detectedBackend = await detectBackendPatterns(scanPaths);
     const detectedLlm = await detectLlmProvider();
-    logger.succeed("Detection complete");
-    logger.blank();
-    // Create prompter AFTER spinner finishes to avoid stdin conflicts
-    const p = createPrompter();
-    if (detectedPatterns.length > 0) {
-        const patternDisplay = detectedPatterns.length === 1
-            ? chalk.cyan(detectedPatterns[0])
-            : chalk.cyan(detectedPatterns.join(", "));
-        logger.line(`  ${chalk.green("✓")} Detected ${patternDisplay} in files`);
+    const detectedSdk = detectSdkType(scanPaths);
+    let patterns;
+    if (collectedEvents.length > 0) {
+        // Use real event names to discover tracking patterns
+        const eventPatterns = await detectPatternsFromEvents(collectedEvents, scanPaths);
+        // Merge: event-based patterns + package.json patterns, deduplicated
+        const allPatterns = [...eventPatterns.map((p) => p.pattern)];
+        for (const pp of packagePatterns) {
+            if (!allPatterns.includes(pp))
+                allPatterns.push(pp);
+        }
+        patterns = allPatterns;
+        if (patterns.length > 0) {
+            logger.succeed("Detection complete");
+            logger.blank();
+            for (const ep of eventPatterns) {
+                logger.line(`  ${chalk.green("✓")} Detected ${chalk.cyan(ep.pattern)} (${ep.count} event${ep.count === 1 ? "" : "s"} matched)`);
+            }
+        }
+        else {
+            logger.succeed("Detection complete");
+            logger.blank();
+            logger.line(`  ${chalk.yellow("⚠")} No tracking patterns found from event names`);
+        }
     }
     else {
-        logger.line(`  ${chalk.yellow("⚠")} No frontend tracking patterns detected`);
+        // No events — use package.json patterns or ask manually
+        patterns = packagePatterns;
+        logger.succeed("Detection complete");
+        logger.blank();
+        if (packagePatterns.length > 0) {
+            const patternDisplay = chalk.cyan(packagePatterns.join(", "));
+            logger.line(`  ${chalk.green("✓")} Detected ${patternDisplay} from package.json`);
+        }
+        else {
+            logger.line(`  ${chalk.yellow("⚠")} No tracking patterns detected`);
+        }
     }
     if (detectedBackend.length > 0) {
         const backendDisplay = chalk.cyan(detectedBackend.join(", "));
@@ -387,11 +482,15 @@ async function runInit(dir) {
     else {
         logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
     }
-    let patterns;
+    // Create prompter AFTER spinner finishes to avoid stdin conflicts
+    const p = createPrompter();
     let llm;
-    if (detectedPatterns.length > 0 && detectedLlm) {
-        showSummary(detectedPatterns, detectedLlm, detectedBackend);
-        const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
+    if (patterns.length > 0 && detectedLlm) {
+        showSummary(patterns, detectedLlm, detectedBackend);
+        const scanPrompt = collectedEvents.length > 0
+            ? "  Look right? Save config and run first scan [Y/n]: "
+            : "  Look right? [Y/n]: ";
+        const confirm = (await p.ask(scanPrompt)) || "y";
         if (confirm.trim().toLowerCase() === "n") {
             logger.blank();
             logger.line("  What needs fixing?");
@@ -401,24 +500,23 @@ async function runInit(dir) {
             logger.blank();
             const fixChoice = (await p.ask("  Choice: ")) || "1";
             const what = fixChoice === "2" ? "llm" : fixChoice === "3" ? "both" : "patterns";
-            const corrected = await askCorrection(what, p, detectedPatterns, detectedLlm);
+            const corrected = await askCorrection(what, p, patterns, detectedLlm);
             patterns = corrected.patterns;
             llm = corrected.llm;
         }
         else {
-            patterns = detectedPatterns;
             llm = detectedLlm;
         }
     }
-    else if (detectedPatterns.length > 0) {
-        showSummary(detectedPatterns, "", detectedBackend);
-        const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
+    else if (patterns.length > 0) {
+        showSummary(patterns, "", detectedBackend);
+        const scanPrompt2 = collectedEvents.length > 0
+            ? "  Look right? Save config and run first scan [Y/n]: "
+            : "  Look right? [Y/n]: ";
+        const confirm = (await p.ask(scanPrompt2)) || "y";
         if (confirm.trim().toLowerCase() === "n") {
             const newPatterns = await askTrackPatterns(p);
-            patterns = newPatterns.length > 0 ? newPatterns : detectedPatterns;
-        }
-        else {
-            patterns = detectedPatterns;
+            patterns = newPatterns.length > 0 ? newPatterns : patterns;
         }
         llm = await askLlmProvider(p);
     }
@@ -448,94 +546,41 @@ async function runInit(dir) {
         patterns = result.patterns;
         llm = result.llm;
     }
-    // ── Ask for repo paths ──────────────────────────────────────────────────
-    logger.blank();
-    logger.line("  Which directories contain your tracking code?");
-    logger.line(chalk.gray("  (comma-separated, default: ./)"));
-    const pathAnswer = await p.ask("  > ");
-    const repoPaths = pathAnswer.trim()
-        ? pathAnswer.split(",").map((s) => s.trim()).filter(Boolean)
-        : ["./"];
-    // ── Detect SDK type from packages ──────────────────────────────────────
-    const detectedSdk = detectSdkType(scanPaths);
     // Close readline before switching to raw mode
     p.close();
-    const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths);
-    fs.writeFileSync(configPath, configYml);
-    logger.blank();
-    logger.succeed("emit.config.yml created");
-    // ── Step 2: Add events ────────────────────────────────────────────────────
-    showStep(2, 3);
-    logger.line("  How would you like to add your events?");
-    logger.blank();
-    const eventChoice = await arrowSelect([
-        { label: "Type them in now", value: "inline" },
-        { label: "Load from a file  (CSV, plain text, or JSON)", value: "file" },
-        { label: "Skip — I'll do it later", value: "skip" },
-    ]);
-    if (eventChoice === "inline") {
-        const events = await collectEventsInline();
-        if (events.length > 0) {
-            appendManualEvents(configPath, events);
+    const repoPaths = ["./"];
+    // ── Write config (merge if re-running) ──────────────────────────────────
+    if (existingConfig) {
+        // Merge new patterns into existing config
+        const existingRepo = existingConfig["repo"] ?? {};
+        const existingTrackPattern = existingRepo["track_pattern"];
+        const existingPatterns = Array.isArray(existingTrackPattern)
+            ? existingTrackPattern
+            : existingTrackPattern ? [String(existingTrackPattern)] : [];
+        const mergedPatterns = [...new Set([...existingPatterns, ...patterns])];
+        const configYml = buildConfig(mergedPatterns, llm, detectedBackend, detectedSdk, repoPaths);
+        fs.writeFileSync(configPath, configYml);
+        if (mergedPatterns.length > existingPatterns.length) {
+            const newCount = mergedPatterns.length - existingPatterns.length;
             logger.blank();
-            logger.succeed(`${events.length} event${events.length === 1 ? "" : "s"} added`);
+            logger.succeed(`emit.config.yml updated (${newCount} new pattern${newCount === 1 ? "" : "s"} merged)`);
         }
         else {
             logger.blank();
-            logger.line(chalk.gray("  No events added — you can add them later in emit.config.yml"));
+            logger.succeed("emit.config.yml updated");
         }
     }
-    else if (eventChoice === "file") {
-        const p2 = createPrompter();
+    else {
+        const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths);
+        fs.writeFileSync(configPath, configYml);
         logger.blank();
-        logger.line(chalk.gray("  Provide a CSV, plain text, or JSON file with one event name per row."));
-        const filePath = await p2.ask("  File path: ");
-        if (filePath.trim()) {
-            let selectedColumn;
-            const headers = getCsvHeaders(filePath.trim());
-            if (headers) {
-                logger.blank();
-                logger.line("  Multiple columns found. Which column has the event names?");
-                headers.forEach((h, i) => {
-                    logger.line(`    ${i + 1}) ${h}`);
-                });
-                logger.blank();
-                let colIdx = 0;
-                while (true) {
-                    const choice = (await p2.ask("  Column [1]: ")).trim() || "1";
-                    const parsed = parseInt(choice, 10);
-                    if (!isNaN(parsed) && parsed >= 1 && parsed <= headers.length) {
-                        colIdx = parsed - 1;
-                        break;
-                    }
-                    logger.line(chalk.yellow(`  Please enter a number between 1 and ${headers.length}.`));
-                }
-                selectedColumn = headers[colIdx];
-            }
-            p2.close();
-            try {
-                const { events, skipped } = parseEventsFile(filePath.trim(), selectedColumn ? { column: selectedColumn } : undefined);
-                appendManualEvents(configPath, events);
-                logger.blank();
-                const parts = [`${events.length} event${events.length === 1 ? "" : "s"} loaded`];
-                if (skipped > 0)
-                    parts.push(`${skipped} duplicates skipped`);
-                logger.succeed(parts.join(" · "));
-            }
-            catch (err) {
-                logger.blank();
-                logger.warn(`Could not load file: ${err.message}`);
-                logger.line(chalk.gray("  You can add events later with: emit import <file>"));
-            }
-        }
-        else {
-            p2.close();
-            logger.blank();
-            logger.line(chalk.gray("  Skipped — you can add events later with: emit import <file>"));
-        }
+        logger.succeed("emit.config.yml created");
+    }
+    // Append events to config if collected
+    if (collectedEvents.length > 0) {
+        appendManualEvents(configPath, collectedEvents);
     }
     // ── Validate config has a data source ────────────────────────────────────
-    // Re-read to check if manual_events were added in Step 2
     const written = yaml.load(fs.readFileSync(configPath, "utf8"));
     const hasDataSource = !!written["warehouse"] ||
         !!written["source"] ||
@@ -554,16 +599,12 @@ async function runInit(dir) {
     }
     // ── Step 3: Scan ──────────────────────────────────────────────────────────
     showStep(3, 3);
-    logger.line("  Run a test scan to see what events emit finds in your repo?");
-    logger.blank();
-    const scanChoice = await arrowSelect([
-        { label: "Yes, run now", value: "yes" },
-        { label: "I'll do it later", value: "no" },
-    ]);
-    logger.blank();
-    if (scanChoice === "yes") {
+    const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli.js");
+    if (hasDataSource) {
+        // Events are ready — run scan automatically, no prompt needed
+        logger.line("  You're all set. Running your first scan now...");
+        logger.blank();
         try {
-            const cliPath = path.resolve(__dirname, "../cli.js");
             await execa("node", [cliPath, "scan", "--confirm"], { stdio: "inherit", cwd: repoDir });
         }
         catch {
@@ -571,44 +612,35 @@ async function runInit(dir) {
         }
     }
     else {
-        logger.line(chalk.gray("  Run ") + chalk.cyan("emit scan") + chalk.gray(" when ready."));
+        // No events yet — let the user choose
+        logger.line("  Run a scan once you've added events?");
         logger.blank();
+        const scanChoice = await arrowSelect([
+            { label: "Yes, run now", value: "yes" },
+            { label: "I'll add events first", value: "no" },
+        ]);
+        logger.blank();
+        if (scanChoice === "yes") {
+            try {
+                await execa("node", [cliPath, "scan", "--confirm"], { stdio: "inherit", cwd: repoDir });
+            }
+            catch {
+                // scan handles its own error output
+            }
+        }
+        else {
+            logger.line(chalk.gray("  Add events with ") + chalk.cyan("emit import <file>") + chalk.gray(", then run ") + chalk.cyan("emit scan") + chalk.gray("."));
+            logger.blank();
+        }
     }
-    // ── What's next ──────────────────────────────────────────────────────────
     logger.blank();
     logger.line(chalk.bold("  What's next"));
     logger.line(chalk.gray("  " + "─".repeat(40)));
     logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan anytime")}`);
-    logger.line(`  ${chalk.cyan("emit view")}       ${chalk.gray("Browse your catalog")}`);
+    logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events")}`);
     logger.blank();
     return 0;
 }
-// ── Keywords that signal an analytics/tracking function call ──────────────────
-// Used by dynamic detection to find tracking calls without enumerating every
-// possible wrapper name. A function containing any of these stems (e.g.
-// "trackAnalytics", "reportInteraction", "sendEvent") is a candidate.
-const TRACKING_STEMS = [
-    "track",
-    "capture",
-    "report",
-    "log",
-    "send",
-    "emit",
-    "record",
-    "identify",
-];
-// Noise patterns to exclude from dynamic detection — these match the keyword
-// stems but are never analytics tracking calls.
-const DETECTION_NOISE = [
-    /\b(console|debug|error|warn|info)\.(log|trace)\b/, // logging, not tracking
-    /\b(track|capture)(Error|Exception|Stack|Warning)\b/i, // error tracking, not events
-    /\baddEventListener\b/, // DOM events
-    /\b(keydown|keyup|onclick|onchange|scroll)\b/i, // UI events
-    /\breport(Error|Warning|Diagnostic|Coverage)\b/, // reporting infrastructure
-    /\bsend(Request|Response|Message|Mail|Email|Notification)\b/, // network/comms
-    /\b(emit|record)(Warning|Error|Diagnostic)\b/, // compiler/linter
-    /\blog(Debug|Info|Warn|Error|Fatal|Level)\b/, // structured logging
-];
 // ── Common backend/server-side tracking patterns ──────────────────────────────
 // These use a static list because backend patterns are harder to detect
 // dynamically (fewer call sites, different naming conventions).
@@ -655,70 +687,99 @@ const DETECT_EXCLUDE = [
     "--exclude-dir", "test",
 ];
 /**
- * Dynamically discover tracking function patterns by grepping for function calls
- * whose names contain analytics-related stems (track, capture, report, etc.).
- * Returns candidates ranked by call-site frequency — the most-used pattern
- * is almost always the real tracking function.
+ * Grep for a single quoted event name across all paths.
+ * Returns extracted function call patterns (e.g. "posthog.capture(").
  */
-async function detectTrackingPattern(paths) {
-    // Build a regex that matches function calls containing any tracking stem.
-    // Matches: trackAnalytics(, reportInteraction(, posthog.capture(, publicLog2(, etc.
-    // Note: grep -E doesn't support (?:), so we use a plain group.
-    const stemAlternation = TRACKING_STEMS.join("|");
-    const pattern = `[a-zA-Z_.]*(${stemAlternation})[a-zA-Z0-9_]*\\s*\\(`;
-    const callCounts = new Map();
+async function grepForEvent(eventName, paths) {
+    const escaped = eventName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const grepPattern = `['"\`]${escaped}['"\`]`;
+    const hits = [];
     for (const searchPath of paths) {
         try {
-            const { stdout } = await execa("grep", [
-                "-rnoEi",
-                pattern,
-                searchPath,
-                ...DETECT_INCLUDE,
-                ...DETECT_EXCLUDE,
-            ], { reject: false });
+            const { stdout } = await execa("grep", ["-rn", grepPattern, searchPath, ...DETECT_INCLUDE, ...DETECT_EXCLUDE], { reject: false });
             if (!stdout.trim())
                 continue;
             for (const line of stdout.split("\n")) {
                 if (!line.trim())
                     continue;
-                // Extract the matched function call pattern (file:line:match)
                 const colonIdx = line.indexOf(":");
                 const colonIdx2 = line.indexOf(":", colonIdx + 1);
                 if (colonIdx2 === -1)
                     continue;
                 const filePath = line.slice(0, colonIdx);
-                const matched = line.slice(colonIdx2 + 1).trim();
-                // Skip noise patterns
-                if (DETECTION_NOISE.some((rx) => rx.test(matched)))
-                    continue;
-                // Skip test/spec files
+                const code = line.slice(colonIdx2 + 1);
                 if (/\.(test|spec|mock|stub)\.[a-z]+$/.test(filePath))
                     continue;
-                // Normalize: collapse whitespace before ( and ensure trailing (
-                const normalized = matched.replace(/\s+\($/, "(").replace(/\s*$/, "");
-                const fnCall = normalized.endsWith("(") ? normalized : normalized + "(";
-                const existing = callCounts.get(fnCall);
-                if (existing) {
-                    existing.count++;
-                }
-                else {
-                    callCounts.set(fnCall, { count: 1, example: filePath });
-                }
+                const callRegex = new RegExp(`([a-zA-Z_$][\\w$.]*\\s*\\()\\s*['"\`]${escaped}['"\`]`);
+                const match = code.match(callRegex);
+                if (!match)
+                    continue;
+                const pattern = match[1].replace(/\s+/g, "").replace(/\($/, "(");
+                const fnCall = pattern.endsWith("(") ? pattern : pattern + "(";
+                if (/^(require|import|const|let|var|type|interface|class)\($/i.test(fnCall))
+                    continue;
+                hits.push({ fnCall, filePath });
             }
         }
         catch {
             // grep exit 1 = no matches
         }
     }
-    // Filter to patterns with enough call sites to be real tracking functions
-    const MIN_CALL_SITES = 2;
-    const results = [];
-    for (const [fnCall, data] of callCounts) {
-        if (data.count >= MIN_CALL_SITES) {
-            results.push({ pattern: fnCall, count: data.count, example: data.example });
+    return hits;
+}
+/**
+ * Detect tracking patterns by grepping for real event names in the codebase
+ * and extracting the wrapping function call (e.g. analytics.track(, posthog.capture().
+ *
+ * Uses convergence sampling: processes events in batches of 10, requires a minimum
+ * of 30 events sampled, and stops after 2 consecutive batches with no new patterns.
+ * Hard cap at 80 events. This ensures minority patterns (e.g. 10% of events) are
+ * reliably discovered.
+ */
+async function detectPatternsFromEvents(events, paths) {
+    // Shuffle to avoid bias from alphabetical/volume ordering
+    const shuffled = [...events].sort(() => Math.random() - 0.5);
+    const BATCH_SIZE = 10;
+    const MIN_SAMPLED = 30;
+    const MAX_SAMPLED = 80;
+    const DRY_BATCHES_TO_STOP = 2;
+    const patternCounts = new Map();
+    let sampled = 0;
+    let dryBatches = 0;
+    for (let batchStart = 0; batchStart < shuffled.length && sampled < MAX_SAMPLED; batchStart += BATCH_SIZE) {
+        const batch = shuffled.slice(batchStart, batchStart + BATCH_SIZE);
+        const patternsBefore = patternCounts.size;
+        // Run all greps in this batch in parallel
+        const batchResults = await Promise.all(batch.map((eventName) => grepForEvent(eventName, paths)));
+        for (const hits of batchResults) {
+            sampled++;
+            for (const { fnCall, filePath } of hits) {
+                const existing = patternCounts.get(fnCall);
+                if (existing) {
+                    existing.count++;
+                }
+                else {
+                    patternCounts.set(fnCall, { count: 1, example: filePath });
+                }
+            }
+        }
+        // Check convergence after minimum samples
+        if (sampled >= MIN_SAMPLED) {
+            if (patternCounts.size === patternsBefore) {
+                dryBatches++;
+                if (dryBatches >= DRY_BATCHES_TO_STOP)
+                    break;
+            }
+            else {
+                dryBatches = 0; // Reset — found something new
+            }
         }
     }
-    // Sort by frequency — the most-used tracking pattern wins
+    // Sort by frequency — most-used pattern first
+    const results = [];
+    for (const [fnCall, data] of patternCounts) {
+        results.push({ pattern: fnCall, count: data.count, example: data.example });
+    }
     results.sort((a, b) => b.count - a.count);
     return results;
 }

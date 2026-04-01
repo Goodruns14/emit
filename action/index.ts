@@ -5,7 +5,7 @@ import * as yaml from "js-yaml";
 import { diffCatalogs } from "../dist/core/diff/index.js";
 import { formatComment } from "../dist/core/diff/format.js";
 import { getCatalogAtRef, getChangedFiles } from "../dist/utils/git.js";
-import { readCatalog, writeCatalog, catalogExists } from "../dist/core/catalog/index.js";
+import { readCatalog, writeCatalog, catalogExists, isCatalogDirectory } from "../dist/core/catalog/index.js";
 import { SDK_PATTERNS, FILE_EXTENSIONS } from "../dist/core/scanner/search.js";
 import { postOrUpdateComment } from "./github.js";
 import type { EmitCatalog, SdkType } from "../dist/types/index.js";
@@ -59,14 +59,15 @@ async function main(): Promise<void> {
         console.log(`Catalog written to ${catalogPath}`);
 
         // Commit if changed
+        const gitTarget = isCatalogDirectory(catalogPath) ? `${catalogPath}/` : catalogPath;
         try {
-          execSync(`git diff --quiet ${catalogPath}`, { stdio: "pipe" });
+          execSync(`git diff --quiet -- ${gitTarget}`, { stdio: "pipe" });
           console.log("Catalog unchanged — skipping commit.");
         } catch {
           try {
             execSync('git config user.name "emit-action"', { stdio: "pipe" });
             execSync('git config user.email "emit-action@users.noreply.github.com"', { stdio: "pipe" });
-            execSync(`git add ${catalogPath}`, { stdio: "pipe" });
+            execSync(`git add ${gitTarget}`, { stdio: "pipe" });
             execSync('git commit -m "chore: update emit catalog [skip ci]"', { stdio: "pipe" });
             execSync(`git push origin HEAD:${baseBranch}`, { stdio: "pipe" });
             console.log("Catalog committed and pushed.");
@@ -163,8 +164,9 @@ async function main(): Promise<void> {
 
   // ── Auto-commit catalog if enabled ──────────────────────────────
   if (process.env.EMIT_AUTO_COMMIT === "true") {
+    const gitTarget = isCatalogDirectory(catalogPath) ? `${catalogPath}/` : catalogPath;
     try {
-      const diffStatus = execSync(`git diff --quiet ${catalogPath}`, {
+      const diffStatus = execSync(`git diff --quiet -- ${gitTarget}`, {
         encoding: "utf8",
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -173,7 +175,7 @@ async function main(): Promise<void> {
       try {
         execSync('git config user.name "emit-action"', { stdio: "pipe" });
         execSync('git config user.email "emit-action@users.noreply.github.com"', { stdio: "pipe" });
-        execSync(`git add ${catalogPath}`, { stdio: "pipe" });
+        execSync(`git add ${gitTarget}`, { stdio: "pipe" });
         execSync('git commit -m "chore: update emit catalog [skip ci]"', { stdio: "pipe" });
         const headRef = process.env.GITHUB_HEAD_REF;
         if (headRef) {

@@ -12,6 +12,9 @@ import { listEventsTool } from "../src/mcp/tools/list-events.js";
 import { getCatalogHealthTool } from "../src/mcp/tools/get-catalog-health.js";
 import { searchEventsTool } from "../src/mcp/tools/search-events.js";
 import { listNotFoundTool } from "../src/mcp/tools/list-not-found.js";
+import { getPropertyAcrossEventsTool } from "../src/mcp/tools/get-property-across-events.js";
+import { listPropertiesTool } from "../src/mcp/tools/list-properties.js";
+import { getEventsBySourceFileTool } from "../src/mcp/tools/get-events-by-source-file.js";
 import type { EmitCatalog } from "../src/types/index.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -437,5 +440,197 @@ describe("search_events", () => {
     const data = parse(result);
     expect(data.count).toBe(0);
     expect(data.query).toBe("xyzzy_no_match_12345");
+  });
+
+  it("finds events by property description", () => {
+    const result = searchEventsTool(catalogPath, { query: "bill amount after discounts" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+    expect(data.events[0].matched_on).toContain("properties");
+    expect(data.events[0].matched_properties).toContain("bill_amount");
+  });
+
+  it("finds events by property edge case text", () => {
+    const result = searchEventsTool(catalogPath, { query: "refund" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+    expect(data.events[0].matched_properties).toContain("bill_amount");
+  });
+
+  it("finds events by property sample values", () => {
+    const result = searchEventsTool(catalogPath, { query: "29.99" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+  });
+
+  it("finds events by property name", () => {
+    const result = searchEventsTool(catalogPath, { query: "bill_amount" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+  });
+
+  it("includes matched_on metadata showing why events matched", () => {
+    const result = searchEventsTool(catalogPath, { query: "purchase" });
+    const data = parse(result);
+    expect(data.events[0].matched_on).toContain("event_name");
+  });
+});
+
+// ── get_property_across_events ──────────────────────────────────────────────
+
+describe("get_property_across_events", () => {
+  it("returns property across all events that use it", () => {
+    const result = getPropertyAcrossEventsTool(catalogPath, { property_name: "user_id" });
+    expect(result.isError).toBeUndefined();
+    const data = parse(result);
+    expect(data.property_name).toBe("user_id");
+    expect(data.event_count).toBe(2);
+    expect(data.occurrences.map((o: { event_name: string }) => o.event_name).sort()).toEqual([
+      "purchase_completed",
+      "signup_completed",
+    ]);
+  });
+
+  it("includes canonical definition when one exists", () => {
+    const result = getPropertyAcrossEventsTool(catalogPath, { property_name: "user_id" });
+    const data = parse(result);
+    expect(data.canonical_definition).toBeDefined();
+    expect(data.canonical_definition.description).toBe("Canonical user identifier across all events");
+  });
+
+  it("omits canonical definition when none exists", () => {
+    const result = getPropertyAcrossEventsTool(catalogPath, { property_name: "bill_amount" });
+    const data = parse(result);
+    expect(data.event_count).toBe(1);
+    expect(data.canonical_definition).toBeUndefined();
+  });
+
+  it("includes per-event property details", () => {
+    const result = getPropertyAcrossEventsTool(catalogPath, { property_name: "bill_amount" });
+    const data = parse(result);
+    const occ = data.occurrences[0];
+    expect(occ.event_name).toBe("purchase_completed");
+    expect(occ.description).toBe("Total bill amount after discounts");
+    expect(occ.edge_cases).toContain("Negative value indicates refund");
+    expect(occ.sample_values).toContain("29.99");
+  });
+
+  it("returns error with available properties for unknown property", () => {
+    const result = getPropertyAcrossEventsTool(catalogPath, { property_name: "nonexistent" });
+    expect(result.isError).toBe(true);
+    const data = parse(result);
+    expect(data.error).toContain("Property not found");
+    expect(data.available_properties).toContain("user_id");
+    expect(data.available_properties).toContain("bill_amount");
+  });
+});
+
+// ── list_properties ─────────────────────────────────────────────────────────
+
+describe("list_properties", () => {
+  it("lists all properties sorted by event count", () => {
+    const result = listPropertiesTool(catalogPath, {});
+    expect(result.isError).toBeUndefined();
+    const data = parse(result);
+    expect(data.count).toBe(2); // user_id and bill_amount
+    // user_id appears in 2 events, bill_amount in 1
+    expect(data.properties[0].name).toBe("user_id");
+    expect(data.properties[0].event_count).toBe(2);
+    expect(data.properties[1].name).toBe("bill_amount");
+    expect(data.properties[1].event_count).toBe(1);
+  });
+
+  it("filters by min_events", () => {
+    const result = listPropertiesTool(catalogPath, { min_events: 2 });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.properties[0].name).toBe("user_id");
+  });
+
+  it("includes has_canonical_definition flag", () => {
+    const result = listPropertiesTool(catalogPath, {});
+    const data = parse(result);
+    const userId = data.properties.find((p: { name: string }) => p.name === "user_id");
+    const billAmount = data.properties.find((p: { name: string }) => p.name === "bill_amount");
+    expect(userId.has_canonical_definition).toBe(true);
+    expect(billAmount.has_canonical_definition).toBe(false);
+  });
+
+  it("includes event names for each property", () => {
+    const result = listPropertiesTool(catalogPath, {});
+    const data = parse(result);
+    const userId = data.properties.find((p: { name: string }) => p.name === "user_id");
+    expect(userId.events).toContain("purchase_completed");
+    expect(userId.events).toContain("signup_completed");
+  });
+});
+
+// ── get_events_by_source_file ───────────────────────────────────────────────
+
+describe("get_events_by_source_file", () => {
+  it("finds events by exact source file path", () => {
+    const result = getEventsBySourceFileTool(catalogPath, { file_path: "./src/checkout.ts" });
+    expect(result.isError).toBeUndefined();
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+  });
+
+  it("finds events by partial file path", () => {
+    const result = getEventsBySourceFileTool(catalogPath, { file_path: "checkout" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+  });
+
+  it("is case-insensitive", () => {
+    const result = getEventsBySourceFileTool(catalogPath, { file_path: "CHECKOUT.TS" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+  });
+
+  it("returns empty results when no events match", () => {
+    const result = getEventsBySourceFileTool(catalogPath, { file_path: "nonexistent-file.ts" });
+    const data = parse(result);
+    expect(data.count).toBe(0);
+    expect(data.events).toHaveLength(0);
+  });
+
+  it("returns event details including line numbers", () => {
+    const result = getEventsBySourceFileTool(catalogPath, { file_path: "auth.ts" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("signup_completed");
+    expect(data.events[0].source_line).toBe(18);
+  });
+
+  it("matches against all_call_sites not just primary source_file", () => {
+    // Create a catalog where an event has a call site in a different file
+    const multiSiteCatalog: EmitCatalog = {
+      ...fixture,
+      events: {
+        ...fixture.events,
+        purchase_completed: {
+          ...fixture.events.purchase_completed,
+          all_call_sites: [
+            { file: "./src/checkout.ts", line: 42 },
+            { file: "./src/legacy/old-checkout.ts", line: 128 },
+          ],
+        },
+      },
+    };
+    const p = path.join(tmpDir, "catalog-multi-site.yml");
+    fs.writeFileSync(p, yaml.dump(multiSiteCatalog), "utf8");
+
+    const result = getEventsBySourceFileTool(p, { file_path: "legacy" });
+    const data = parse(result);
+    expect(data.count).toBe(1);
+    expect(data.events[0].name).toBe("purchase_completed");
+    expect(data.events[0].matching_call_sites).toHaveLength(1);
+    expect(data.events[0].matching_call_sites[0].file).toBe("./src/legacy/old-checkout.ts");
   });
 });

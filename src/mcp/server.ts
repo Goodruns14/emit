@@ -11,6 +11,9 @@ import { listEventsTool } from "./tools/list-events.js";
 import { getCatalogHealthTool } from "./tools/get-catalog-health.js";
 import { searchEventsTool } from "./tools/search-events.js";
 import { listNotFoundTool } from "./tools/list-not-found.js";
+import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
+import { listPropertiesTool } from "./tools/list-properties.js";
+import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -77,6 +80,32 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     "Get a health summary of the event catalog — total events, confidence breakdown, events needing review, and stale/flagged events.",
     {},
     async () => getCatalogHealthTool(catalogPath)
+  );
+
+  server.tool(
+    "get_property_across_events",
+    "Look up a property across every event that uses it. Returns the canonical definition, plus per-event description, edge cases, sample values, and confidence. Use this to understand how a property behaves in different contexts.",
+    { property_name: z.string().describe("The name of the property (e.g. 'user_id', 'bill_amount')") },
+    async ({ property_name }) => getPropertyAcrossEventsTool(catalogPath, { property_name })
+  );
+
+  server.tool(
+    "list_properties",
+    "List all properties in the catalog with how many events use each one. Useful for discovering what data is tracked and which properties are shared across events.",
+    {
+      min_events: z
+        .number()
+        .optional()
+        .describe("Only return properties appearing in at least this many events (default: 1)"),
+    },
+    async ({ min_events }) => listPropertiesTool(catalogPath, { min_events })
+  );
+
+  server.tool(
+    "get_events_by_source_file",
+    "Find all events that fire from a given source file. Supports partial file path matching (e.g. 'checkout.ts' matches './src/checkout.ts').",
+    { file_path: z.string().describe("Full or partial file path to match against event source files") },
+    async ({ file_path }) => getEventsBySourceFileTool(catalogPath, { file_path })
   );
 
   // ── Write tools ─────────────────────────────────────────────────────────────

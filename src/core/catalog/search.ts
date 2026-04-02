@@ -33,6 +33,22 @@ export function searchEvents(
     if (name.toLowerCase().includes(q)) return true;
     if (event.description?.toLowerCase().includes(q)) return true;
     if (event.fires_when?.toLowerCase().includes(q)) return true;
+
+    // Search property metadata: names, descriptions, edge cases, sample values
+    for (const [propName, prop] of Object.entries(event.properties ?? {})) {
+      if (propName.toLowerCase().includes(q)) return true;
+      if (prop.description?.toLowerCase().includes(q)) return true;
+      for (const edge of prop.edge_cases ?? []) {
+        if (edge.toLowerCase().includes(q)) return true;
+      }
+      for (const sv of prop.sample_values ?? []) {
+        if (String(sv).toLowerCase().includes(q)) return true;
+      }
+      for (const csv of prop.code_sample_values ?? []) {
+        if (String(csv).toLowerCase().includes(q)) return true;
+      }
+    }
+
     return false;
   });
 

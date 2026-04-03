@@ -17,7 +17,7 @@ Emit scans your codebase for analytics tracking calls (Segment, PostHog, Amplitu
 ## Install
 
 ```bash
-npm install -g emit-catalog
+npm install -g emit-cli
 ```
 
 Then verify:
@@ -45,11 +45,13 @@ emit --help
 emit init
 ```
 
-Interactive wizard that:
-- Auto-detects your tracking SDK (Segment, PostHog, Amplitude, etc.)
-- Detects available LLM providers
-- Optionally imports an initial event list
-- Creates `emit.config.yml`
+Interactive wizard that walks you through 4 steps:
+1. **Collect events** — enter event names inline, load from a CSV/JSON file, or skip
+2. **Detect & configure** — auto-detects your tracking SDK and LLM provider (uses your event names to find patterns if you provided them)
+3. **Discriminator properties** — optionally expand "god events" into sub-events by property value
+4. **First scan** — runs `emit scan` automatically if you have a data source ready
+
+Creates `emit.config.yml`.
 
 ### 2. Scan
 
@@ -118,7 +120,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: emit-io/emit-catalog/action@v1
+      - uses: emit-io/emit-cli/action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -150,7 +152,7 @@ on:
     branches: [main]
 
 # ... same job setup as above, plus:
-      - uses: emit-io/emit-catalog/action@v1
+      - uses: emit-io/emit-cli/action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           auto_push: true
@@ -186,10 +188,13 @@ The server communicates over stdio. Add it to your Claude Desktop config:
 | Tool | Description |
 |------|-------------|
 | `get_event_description` | Full metadata for an event — description, when it fires, confidence, properties, source file |
-| `get_property_description` | Metadata for a specific property including edge cases, null rate, sample values |
-| `list_events` | List all located events, optionally filtered by confidence or review status |
+| `get_property_description` | Metadata for a specific property on an event — edge cases, null rate, cardinality, sample values |
+| `get_property_across_events` | Look up a property across every event that uses it — canonical definition plus per-event context |
+| `list_events` | List all events, optionally filtered by confidence level or review status |
+| `list_properties` | List all properties with how many events use each one |
 | `list_not_found` | Events that couldn't be located in source code — for catalog maintenance |
 | `search_events` | Full-text search across event names, descriptions, and fires_when text |
+| `get_events_by_source_file` | Find all events that fire from a given source file (supports partial path matching) |
 | `get_catalog_health` | Summary: total events, confidence breakdown, events needing review |
 | `update_event_description` | Update an event's description and fires_when — writes to `emit.catalog.yml` |
 | `update_property_description` | Update a property's description — writes to `emit.catalog.yml` |

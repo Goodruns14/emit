@@ -28,14 +28,14 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
 
   server.tool(
     "get_event_description",
-    "Get full metadata for a tracked analytics event — description, when it fires, confidence score, properties, source file, and flags.",
+    "Get the full definition of an analytics event — what it means, when it fires, its properties, confidence level, and source file. Use this to understand an event before building queries, charts, or dashboards in an analytics platform.",
     { event_name: z.string().describe("The name of the event (e.g. 'purchase_completed')") },
     async ({ event_name }) => getEventTool(catalogPath, { event_name })
   );
 
   server.tool(
     "get_property_description",
-    "Get metadata for a specific property on a tracked event — description, edge cases, confidence, null rate, cardinality, and sample values.",
+    "Get the definition, edge cases, and sample values for a property on an event. Use this to choose the right breakdowns and filters when building reports — tells you cardinality, null rate, and what values to expect.",
     {
       event_name: z.string().describe("The name of the event"),
       property_name: z.string().describe("The name of the property (e.g. 'bill_amount')"),
@@ -46,7 +46,7 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
 
   server.tool(
     "list_events",
-    "List all events in the catalog, optionally filtered by confidence level or review status. Returns a summary (name, description, confidence) — use get_event_description for full details.",
+    "List all tracked events, optionally filtered by confidence or review status. Start here to see what events are available before building reports or dashboards. Returns a summary — use get_event_description for full details.",
     {
       confidence: z
         .enum(["high", "medium", "low"])
@@ -63,7 +63,7 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
 
   server.tool(
     "search_events",
-    "Full-text search across event names, descriptions, and fires_when text. Returns matching events with their descriptions.",
+    "Find events by name or meaning. Use this before querying an analytics platform to confirm the correct event name, understand what it tracks, and discover available properties for breakdowns and filters.",
     { query: z.string().describe("Search query to match against event names, descriptions, and fires_when text") },
     async ({ query }) => searchEventsTool(catalogPath, { query })
   );
@@ -77,21 +77,21 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
 
   server.tool(
     "get_catalog_health",
-    "Get a health summary of the event catalog — total events, confidence breakdown, events needing review, and stale/flagged events.",
+    "Get a health summary of the event catalog — total events, confidence breakdown, events needing review, and stale/flagged events. Use this to assess data quality before relying on events for reporting.",
     {},
     async () => getCatalogHealthTool(catalogPath)
   );
 
   server.tool(
     "get_property_across_events",
-    "Look up a property across every event that uses it. Returns the canonical definition, plus per-event description, edge cases, sample values, and confidence. Use this to understand how a property behaves in different contexts.",
+    "Look up a property across every event that uses it. Use this to check if a property like 'user_id' behaves consistently or has different meanings in different contexts — important before using it as a shared filter or breakdown.",
     { property_name: z.string().describe("The name of the property (e.g. 'user_id', 'bill_amount')") },
     async ({ property_name }) => getPropertyAcrossEventsTool(catalogPath, { property_name })
   );
 
   server.tool(
     "list_properties",
-    "List all properties in the catalog with how many events use each one. Useful for discovering what data is tracked and which properties are shared across events.",
+    "List all properties in the catalog with how many events use each one. Use this to discover what data is available for breakdowns, filters, and cohort definitions across your tracked events.",
     {
       min_events: z
         .number()
@@ -103,7 +103,7 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
 
   server.tool(
     "get_events_by_source_file",
-    "Find all events that fire from a given source file. Supports partial file path matching (e.g. 'checkout.ts' matches './src/checkout.ts').",
+    "Find all events that fire from a given source file. Use this to understand what analytics a specific feature or page tracks. Supports partial file path matching (e.g. 'checkout.ts' matches './src/checkout.ts').",
     { file_path: z.string().describe("Full or partial file path to match against event source files") },
     async ({ file_path }) => getEventsBySourceFileTool(catalogPath, { file_path })
   );

@@ -235,6 +235,7 @@ function buildConfig(
   backendPatterns?: string[],
   sdk?: string,
   repoPaths?: string[],
+  discriminators?: { eventName: string; property: string; values?: string[] }[],
 ): string {
   const paths = repoPaths && repoPaths.length > 0 ? repoPaths : ["./"];
   let yml = "repo:\n  paths:\n";
@@ -258,6 +259,23 @@ function buildConfig(
   }
   yml += `\noutput:\n  file: .emit/catalog.yml\n  confidence_threshold: low\n`;
   yml += `\nllm:\n  provider: ${llmProvider}\n  model: claude-sonnet-4-6\n  max_tokens: 1000\n`;
+
+  if (discriminators && discriminators.length > 0) {
+    yml += `\ndiscriminator_properties:\n`;
+    for (const d of discriminators) {
+      if (d.values && d.values.length > 0) {
+        yml += `  ${d.eventName}:\n`;
+        yml += `    property: ${d.property}\n`;
+        yml += `    values:\n`;
+        for (const v of d.values) {
+          yml += `      - ${v}\n`;
+        }
+      } else {
+        yml += `  ${d.eventName}: ${d.property}\n`;
+      }
+    }
+  }
+
   return yml;
 }
 
@@ -401,7 +419,7 @@ async function runInit(dir?: string): Promise<number> {
   }
 
   // ── Step 1: Collect events ──────────────────────────────────────────────
-  showStep(1, 3);
+  showStep(1, 4);
   logger.line("  How would you like to add your events?");
   logger.blank();
 
@@ -476,7 +494,7 @@ async function runInit(dir?: string): Promise<number> {
   }
 
   // ── Step 2: Detect & configure ──────────────────────────────────────────
-  showStep(2, 3);
+  showStep(2, 4);
 
   logger.spin("Detecting your setup...");
   const packagePatterns = await detectPatternsFromPackageJson(scanPaths);
@@ -598,6 +616,75 @@ async function runInit(dir?: string): Promise<number> {
   // Close readline before switching to raw mode
   p.close();
 
+  // ── Step 3: Discriminator properties (optional) ─────────────────────────
+  showStep(3, 4);
+
+  let discriminatorEntries: { eventName: string; property: string; values?: string[] }[] = [];
+
+  logger.line("  " + chalk.bold("Discriminator properties") + chalk.gray(" (optional)"));
+  logger.blank();
+  logger.line(chalk.gray("  Some events act as containers for many distinct actions."));
+  logger.line(chalk.gray("  For example, a ") + chalk.cyan("button_click") + chalk.gray(" event where the property ") + chalk.cyan("button_id"));
+  logger.line(chalk.gray("  tells you ") + chalk.italic("which") + chalk.gray(" button was clicked (signup_cta, add_to_cart, etc.)."));
+  logger.line(chalk.gray("  Emit can expand each value into its own catalog entry."));
+  logger.blank();
+  logger.line(chalk.gray("  You can always add these later in emit.config.yml under ") + chalk.cyan("discriminator_properties") + chalk.gray("."));
+  logger.blank();
+
+  const discChoice = await arrowSelect([
+    { label: "Skip — none of my events work this way", value: "skip" as const },
+    { label: "Yes, add discriminator properties", value: "add" as const },
+  ]);
+
+  if (discChoice === "add") {
+    const dp = createPrompter();
+    let addMore = true;
+
+    while (addMore) {
+      logger.blank();
+      const eventName = (await dp.ask("  Event name: ")).trim();
+      if (!eventName) break;
+
+      const property = (await dp.ask("  Property that identifies the action: ")).trim();
+      if (!property) break;
+
+      logger.blank();
+      logger.line("  How should emit discover the values?");
+      logger.blank();
+
+      dp.close();
+      const valueChoice = await arrowSelect([
+        { label: "Discover from warehouse automatically", value: "discover" as const },
+        { label: "List specific values now", value: "list" as const },
+      ]);
+
+      const dp2 = createPrompter();
+      let values: string[] | undefined;
+      if (valueChoice === "list") {
+        logger.blank();
+        const valInput = (await dp2.ask("  Values (comma-separated): ")).trim();
+        if (valInput) {
+          values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
+        }
+      }
+
+      discriminatorEntries.push({ eventName, property, values });
+      logger.blank();
+      logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : " (discover from warehouse)"}`);
+
+      logger.blank();
+      const moreAnswer = (await dp2.ask("  Add another? [y/N]: ")).trim().toLowerCase();
+      addMore = moreAnswer === "y";
+      dp2.close();
+    }
+
+    if (discChoice === "add" && discriminatorEntries.length === 0) {
+      // User chose "add" but didn't enter anything
+      logger.blank();
+      logger.line(chalk.gray("  No discriminator properties added."));
+    }
+  }
+
   const repoPaths = ["./"];
 
   // ── Write config (merge if re-running) ──────────────────────────────────
@@ -610,7 +697,7 @@ async function runInit(dir?: string): Promise<number> {
       : existingTrackPattern ? [String(existingTrackPattern)] : [];
     const mergedPatterns = [...new Set([...existingPatterns, ...patterns])];
 
-    const configYml = buildConfig(mergedPatterns, llm, detectedBackend, detectedSdk, repoPaths);
+    const configYml = buildConfig(mergedPatterns, llm, detectedBackend, detectedSdk, repoPaths, discriminatorEntries.length > 0 ? discriminatorEntries : undefined);
     fs.writeFileSync(configPath, configYml);
 
     if (mergedPatterns.length > existingPatterns.length) {
@@ -622,7 +709,7 @@ async function runInit(dir?: string): Promise<number> {
       logger.succeed("emit.config.yml updated");
     }
   } else {
-    const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths);
+    const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths, discriminatorEntries.length > 0 ? discriminatorEntries : undefined);
     fs.writeFileSync(configPath, configYml);
     logger.blank();
     logger.succeed("emit.config.yml created");
@@ -664,7 +751,7 @@ async function runInit(dir?: string): Promise<number> {
   }
 
   // ── Step 3: Scan ──────────────────────────────────────────────────────────
-  showStep(3, 3);
+  showStep(4, 4);
 
   const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli.js");
 

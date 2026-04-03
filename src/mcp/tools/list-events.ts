@@ -20,6 +20,11 @@ export function listEventsTool(catalogPath: string, input: ListEventsInput) {
       confidence: event.confidence,
       review_required: event.review_required,
       source_file: event.source_file,
+      ...(event.parent_event ? {
+        parent_event: event.parent_event,
+        discriminator_property: event.discriminator_property,
+        discriminator_value: event.discriminator_value,
+      } : {}),
     }));
 
     return {

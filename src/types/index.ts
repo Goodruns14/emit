@@ -30,7 +30,7 @@ export interface CodeContext {
   file_path: string;
   line_number: number;
   context: string;
-  match_type: "direct" | "constant" | "broad" | "not_found";
+  match_type: "direct" | "constant" | "broad" | "discriminator" | "not_found";
   segment_event_name?: string;
   all_call_sites: CallSite[];
 }
@@ -76,6 +76,9 @@ export interface CatalogEvent {
   confidence_reason: string;
   review_required: boolean;
   segment_event_name?: string;
+  parent_event?: string;
+  discriminator_property?: string;
+  discriminator_value?: string;
   source_file: string;
   source_line: number;
   all_call_sites: { file: string; line: number }[];
@@ -181,6 +184,7 @@ export interface WarehouseAdapter {
   disconnect(): Promise<void>;
   getTopEvents(limit: number): Promise<WarehouseEvent[]>;
   getPropertyStats(eventName: string): Promise<PropertyStat[]>;
+  getDistinctPropertyValues?(eventName: string, propertyPath: string, limit?: number): Promise<string[]>;
 }
 
 export interface SourceAdapter {
@@ -309,10 +313,16 @@ export type DestinationConfig =
   | MixpanelDestinationConfig
   | SnowflakeDestinationConfig;
 
+export type DiscriminatorPropertyConfig = string | {
+  property: string;
+  values?: string[];
+};
+
 export interface EmitConfig {
   warehouse?: SnowflakeWarehouseConfig;
   source?: SegmentSourceConfig;
   manual_events?: string[];
+  discriminator_properties?: Record<string, DiscriminatorPropertyConfig>;
   repo: {
     paths: string[];
     sdk: SdkType;

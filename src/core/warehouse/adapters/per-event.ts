@@ -91,6 +91,32 @@ export class PerEventAdapter implements WarehouseAdapter {
     }));
   }
 
+  async getDistinctPropertyValues(
+    eventName: string,
+    propertyPath: string,
+    limit = 500
+  ): Promise<string[]> {
+    const schema = this.config.schema;
+    const tableName = eventName.toUpperCase().replace(/[-.\s]/g, "_");
+    // For per-event tables, use the column name directly (last segment of dot path)
+    const columnName = propertyPath.split(".").pop()!.toUpperCase();
+
+    try {
+      const rows = await this.client.query(`
+        SELECT DISTINCT CAST(${columnName} AS VARCHAR) AS val
+        FROM ${schema}.${tableName}
+        WHERE ${columnName} IS NOT NULL
+        LIMIT ${limit}
+      `);
+
+      return rows
+        .map((r: any) => r.VAL as string)
+        .filter((v) => v != null && v !== "");
+    } catch {
+      return [];
+    }
+  }
+
   async getPropertyStats(eventName: string): Promise<PropertyStat[]> {
     const preset = this.getPreset();
     const excludeCols = new Set(preset.per_event.exclude_columns.map((c) => c.toUpperCase()));

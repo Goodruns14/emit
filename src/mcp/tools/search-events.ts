@@ -38,6 +38,11 @@ export function searchEventsTool(catalogPath: string, input: SearchEventsInput) 
         source_file: event.source_file,
         matched_on: matchedOn,
         ...(matchedProperties.length > 0 ? { matched_properties: matchedProperties } : {}),
+        ...(event.parent_event ? {
+          parent_event: event.parent_event,
+          discriminator_property: event.discriminator_property,
+          discriminator_value: event.discriminator_value,
+        } : {}),
       };
     });
 

@@ -3,6 +3,7 @@ import * as path from "path";
 import type {
   EmitConfig,
   SnowflakeWarehouseConfig,
+  DiscriminatorPropertyConfig,
   SdkType,
   LlmProvider,
 } from "../types/index.js";
@@ -44,9 +45,32 @@ function resolveEnvVars(value: unknown): unknown {
   return value;
 }
 
+function normalizeDiscriminatorProperties(
+  raw?: Record<string, unknown>
+): Record<string, DiscriminatorPropertyConfig> | undefined {
+  if (!raw) return undefined;
+  const result: Record<string, DiscriminatorPropertyConfig> = {};
+  for (const [eventName, value] of Object.entries(raw)) {
+    if (typeof value === "string") {
+      result[eventName] = { property: value };
+    } else if (value && typeof value === "object" && "property" in value) {
+      result[eventName] = value as { property: string; values?: string[] };
+    } else {
+      throw new Error(
+        `Invalid discriminator_properties.${eventName}: must be a string (property name) or { property, values? }`
+      );
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
+  const discriminator = normalizeDiscriminatorProperties(
+    raw.discriminator_properties as Record<string, unknown> | undefined
+  );
   return {
     ...raw,
+    ...(discriminator ? { discriminator_properties: discriminator } : {}),
     repo: {
       paths: ["./"],
       sdk: "segment" as SdkType,
@@ -136,6 +160,17 @@ function validate(config: EmitConfig): void {
       "llm.base_url is required when provider is openai-compatible\n" +
         "  Example: base_url: http://localhost:11434/v1"
     );
+  }
+
+  if (config.discriminator_properties) {
+    for (const [eventName, cfg] of Object.entries(config.discriminator_properties)) {
+      const prop = typeof cfg === "string" ? cfg : cfg.property;
+      if (!prop || typeof prop !== "string") {
+        throw new Error(
+          `discriminator_properties.${eventName}: property name is required`
+        );
+      }
+    }
   }
 }
 

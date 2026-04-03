@@ -58,6 +58,33 @@ export class MonolithAdapter implements WarehouseAdapter {
     }));
   }
 
+  async getDistinctPropertyValues(
+    eventName: string,
+    propertyPath: string,
+    limit = 500
+  ): Promise<string[]> {
+    const { table, eventCol, propsCol } = this.getDefaults();
+
+    // Convert dot notation to Snowflake JSON traversal: "api.apiName" → :api:apiName
+    const jsonPath = propertyPath.split(".").map((p) => `:${p}`).join("");
+
+    try {
+      const rows = await this.client.query(`
+        SELECT DISTINCT TRY_PARSE_JSON(${propsCol})${jsonPath}::STRING AS val
+        FROM ${table}
+        WHERE ${eventCol} = '${eventName}'
+          AND TRY_PARSE_JSON(${propsCol})${jsonPath} IS NOT NULL
+        LIMIT ${limit}
+      `);
+
+      return rows
+        .map((r: any) => r.VAL as string)
+        .filter((v) => v != null && v !== "");
+    } catch {
+      return [];
+    }
+  }
+
   async getPropertyStats(eventName: string): Promise<PropertyStat[]> {
     const { table, eventCol, propsCol } = this.getDefaults();
 

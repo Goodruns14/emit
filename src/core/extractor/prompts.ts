@@ -126,6 +126,57 @@ Rules:
 `.trim();
 }
 
+export function buildDiscriminatorExtractionPrompt(
+  parentEventName: string,
+  discriminatorProperty: string,
+  discriminatorValue: string,
+  codeContext: CodeContext,
+  parentDescription?: string,
+): string {
+  const additionalSites = codeContext.all_call_sites.slice(1);
+  const additionalContext =
+    additionalSites.length > 0
+      ? additionalSites
+          .map(
+            (cs, i) =>
+              `Reference ${i + 2} (${cs.file_path}:${cs.line_number}):\n\`\`\`\n${cs.context}\n\`\`\``
+          )
+          .join("\n\n")
+      : "";
+
+  return `
+You are analyzing a specific discriminator value of an analytics event to extract semantic metadata.
+
+The parent event "${parentEventName}" fires for multiple distinct actions, distinguished by the property "${discriminatorProperty}".
+${parentDescription ? `Parent event description: "${parentDescription}"` : ""}
+
+You are analyzing the specific case where ${discriminatorProperty} = "${discriminatorValue}".
+
+Primary code reference (${codeContext.file_path}:${codeContext.line_number}):
+\`\`\`
+${codeContext.context}
+\`\`\`
+${additionalContext ? `\nAdditional references:\n${additionalContext}` : ""}
+
+Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
+{
+  "event_description": "One sentence. What this specific action (${discriminatorValue}) means in business terms.",
+  "fires_when": "One sentence. Exactly when ${parentEventName} fires with ${discriminatorProperty} = '${discriminatorValue}'.",
+  "confidence": "high | medium | low",
+  "confidence_reason": "Why you rated confidence this way.",
+  "properties": {},
+  "flags": ["Anything unusual or worth human review"]
+}
+
+Rules:
+- Focus on what "${discriminatorValue}" specifically represents, not the parent event in general
+- If the code context shows the handler/logic for this value, describe what it does
+- If you cannot determine what "${discriminatorValue}" does from the code context, set confidence to "low"
+- Properties should be empty — the parent event owns the property definitions
+- Never guess. Low confidence is better than wrong confidence.
+`.trim();
+}
+
 export function buildPropertyDefinitionsPrompt(
   sharedProperties: Record<
     string,

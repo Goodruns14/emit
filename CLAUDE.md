@@ -29,6 +29,7 @@ src/
     catalog/         # Catalog read/write, health scoring, search
     destinations/    # Push adapters (Segment, Amplitude, Mixpanel, Snowflake)
     diff/            # Catalog diffing for PR comments
+    discriminator/   # Discriminator property expansion (god events → sub-events)
     extractor/       # Multi-provider LLM client, prompt templates
     import/          # CSV/JSON event list parsing
     reconciler/      # Cross-reference LLM output vs warehouse signals
@@ -150,6 +151,68 @@ npm run build && npx vitest run tests/
 ```
 
 See `md files/emit-user-tests.md` for 24 detailed real-user simulation tests covering init, scan, import, push, status, revert, MCP, error handling, caching, and cross-repo behavior.
+
+## Discriminator Properties
+
+"God events" where one property carries all the semantic meaning (e.g. `button_click` with `button_id` = `signup_cta`, `add_to_cart`, etc.). Emit expands each discriminator value into its own cataloged sub-event.
+
+### Config
+
+```yaml
+# Shorthand — emit discovers values from warehouse
+discriminator_properties:
+  button_click: button_id
+
+# Longform — explicit values
+discriminator_properties:
+  graphql_api:
+    property: api.apiName
+    values: [AddDashboard, UpdateExplore, DeleteWidget]
+```
+
+### How it works
+
+1. Config normalization (`src/utils/config.ts`) converts shorthand → `{ property }` object form
+2. `expandDiscriminators()` (`src/core/discriminator/index.ts`) resolves values: config → warehouse → warning
+3. Scanner's `findDiscriminatorValue()` greps for the value without tracking pattern filtering
+4. Extractor's `extractDiscriminatorMetadata()` sends a discriminator-specific prompt to the LLM
+5. Scan command wires it all together: parent events scanned first, then sub-events
+6. Catalog writer sorts sub-events after their parent with group comment headers
+
+### Catalog output
+
+```yaml
+button_click:
+  description: "User clicked a button"
+  ...
+
+# ── Sub-events of button_click (discriminator: button_id) ──
+button_click.signup_cta:
+  parent_event: button_click
+  discriminator_property: button_id
+  discriminator_value: signup_cta
+  description: "User clicked the signup CTA button"
+  ...
+```
+
+### Partial scan behavior
+
+- `--event button_click` → scans parent + all sub-events
+- `--event button_click.signup_cta` → scans just that one sub-event
+- `--events button_click,page_view` → scans both parents + their sub-events
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/core/discriminator/index.ts` | Value discovery: config → warehouse → warning |
+| `src/core/scanner/search.ts` | `searchDiscriminatorValue()` — grep without tracking pattern filter |
+| `src/core/scanner/index.ts` | `findDiscriminatorValue()` method on RepoScanner |
+| `src/core/extractor/prompts.ts` | `buildDiscriminatorExtractionPrompt()` |
+| `src/core/extractor/index.ts` | `extractDiscriminatorMetadata()` with caching |
+| `src/commands/scan.ts` | Expansion → scanning → extraction → catalog assembly |
+| `src/core/catalog/index.ts` | Sub-event sorting + group comments in YAML |
+| `tests/discriminator.test.ts` | 16 unit tests |
 
 ## Important Design Decisions
 

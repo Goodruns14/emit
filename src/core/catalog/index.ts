@@ -74,9 +74,30 @@ function writeCatalogFile(filePath: string, catalog: EmitCatalog): void {
   parts.push("#   source_file / source_line — where the tracking call lives in code");
   parts.push("#   properties                — each property sent with the event");
   parts.push("#   flags                     — anything worth a human review");
-  const eventsRaw = yaml.dump({ events: catalog.events }, { lineWidth: 120 }).trimEnd();
+
+  // Sort events: parents first, then sub-events grouped after their parent
+  const eventNames = Object.keys(catalog.events);
+  const sortedNames = sortEventsWithSubEvents(eventNames, catalog.events);
+  const sortedEvents: Record<string, CatalogEvent> = {};
+  for (const name of sortedNames) {
+    sortedEvents[name] = catalog.events[name];
+  }
+
+  const eventsRaw = yaml.dump({ events: sortedEvents }, { lineWidth: 120 }).trimEnd();
   // Insert a blank line before each event key (lines indented exactly 2 spaces)
-  parts.push(eventsRaw.replace(/\n(  [^ ])/g, "\n\n$1"));
+  let eventsFormatted = eventsRaw.replace(/\n(  [^ ])/g, "\n\n$1");
+
+  // Insert sub-event group comments
+  const subEventGroups = getSubEventGroups(catalog.events);
+  for (const [parentName, property] of subEventGroups) {
+    const escapedParent = parentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const commentLine = `\n  # ── Sub-events of ${parentName} (discriminator: ${property}) ──`;
+    // Find the first sub-event key after the parent and insert comment before it
+    const firstSubPattern = new RegExp(`(\n\n)(  ${escapedParent}\\.)`);
+    eventsFormatted = eventsFormatted.replace(firstSubPattern, `\n${commentLine}\n\n$2`);
+  }
+
+  parts.push(eventsFormatted);
 
   // Resolved (renamed/refactored events found by deep search)
   if (catalog.resolved && catalog.resolved.length > 0) {
@@ -365,4 +386,56 @@ export function writeSingleEvent(
       fs.writeFileSync(indexPath, indexParts.join("\n"));
     }
   }
+}
+
+// ── Sub-event sorting helpers ─────────────────────────────────────────────
+
+function sortEventsWithSubEvents(
+  names: string[],
+  events: Record<string, CatalogEvent>
+): string[] {
+  const parents: string[] = [];
+  const subsByParent = new Map<string, string[]>();
+
+  for (const name of names) {
+    const ev = events[name];
+    if (ev.parent_event) {
+      const subs = subsByParent.get(ev.parent_event) ?? [];
+      subs.push(name);
+      subsByParent.set(ev.parent_event, subs);
+    } else {
+      parents.push(name);
+    }
+  }
+
+  const sorted: string[] = [];
+  for (const parent of parents) {
+    sorted.push(parent);
+    const subs = subsByParent.get(parent);
+    if (subs) {
+      subs.sort();
+      sorted.push(...subs);
+    }
+  }
+
+  // Add any orphaned sub-events (parent not in catalog)
+  for (const [, subs] of subsByParent) {
+    for (const sub of subs) {
+      if (!sorted.includes(sub)) sorted.push(sub);
+    }
+  }
+
+  return sorted;
+}
+
+function getSubEventGroups(
+  events: Record<string, CatalogEvent>
+): [string, string][] {
+  const groups = new Map<string, string>();
+  for (const ev of Object.values(events)) {
+    if (ev.parent_event && ev.discriminator_property && !groups.has(ev.parent_event)) {
+      groups.set(ev.parent_event, ev.discriminator_property);
+    }
+  }
+  return [...groups.entries()];
 }

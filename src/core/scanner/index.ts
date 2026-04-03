@@ -1,5 +1,5 @@
 import type { CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant, searchBroad, generateCasingVariants, filterExactEventMatches } from "./search.js";
+import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches } from "./search.js";
 import { extractContext, resolveEnumStringValue } from "./context.js";
 
 export class RepoScanner {
@@ -110,6 +110,35 @@ export class RepoScanner {
     }
 
     // ── Not found ──────────────────────────────────────────────────────
+    return {
+      file_path: "",
+      line_number: 0,
+      context: "",
+      match_type: "not_found",
+      all_call_sites: [],
+    };
+  }
+
+  async findDiscriminatorValue(value: string): Promise<CodeContext> {
+    const matches = await searchDiscriminatorValue(value, this.paths);
+
+    if (matches.length > 0) {
+      const primary = matches[0];
+      const allCallSites: CallSite[] = matches.slice(0, 10).map((m) => ({
+        file_path: m.file,
+        line_number: m.line,
+        context: extractContext(m.file, m.line, 15),
+      }));
+
+      return {
+        file_path: primary.file,
+        line_number: primary.line,
+        context: extractContext(primary.file, primary.line, 50),
+        match_type: "discriminator",
+        all_call_sites: allCallSites,
+      };
+    }
+
     return {
       file_path: "",
       line_number: 0,

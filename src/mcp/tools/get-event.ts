@@ -48,6 +48,11 @@ export function getEventTool(catalogPath: string, input: GetEventInput) {
             fires_when: event.fires_when,
             confidence: event.confidence,
             confidence_reason: event.confidence_reason,
+            ...(event.parent_event ? {
+              parent_event: event.parent_event,
+              discriminator_property: event.discriminator_property,
+              discriminator_value: event.discriminator_value,
+            } : {}),
             source_file: event.source_file,
             source_line: event.source_line,
             all_call_sites: event.all_call_sites,

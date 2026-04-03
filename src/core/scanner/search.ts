@@ -294,6 +294,65 @@ export function generateCasingVariants(eventName: string): string[] {
   return [...variants];
 }
 
+/**
+ * Search for a discriminator value string across the codebase.
+ * Unlike searchDirect, this does NOT filter by tracking patterns —
+ * the value may appear in handlers, enums, GraphQL definitions, etc.
+ * Filters out comments and imports only.
+ */
+export async function searchDiscriminatorValue(
+  value: string,
+  paths: string[]
+): Promise<SearchMatch[]> {
+  const allMatches: SearchMatch[] = [];
+
+  for (const searchPath of paths) {
+    try {
+      const { stdout } = await execa(
+        "grep",
+        [
+          "-rn",
+          value,
+          searchPath,
+          ...FILE_EXTENSIONS.flatMap((e) => ["--include", e]),
+          ...buildExcludeArgs(),
+        ],
+        { reject: false }
+      );
+
+      if (!stdout.trim()) continue;
+
+      // Filter out comments and imports, but keep everything else
+      const filtered = stdout
+        .split("\n")
+        .filter((line) => {
+          if (!line.trim()) return false;
+          const colonIdx = line.indexOf(":");
+          const colonIdx2 = line.indexOf(":", colonIdx + 1);
+          const code = colonIdx2 !== -1 ? line.slice(colonIdx2 + 1) : line;
+          const trimmed = code.trimStart();
+          if (trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) return false;
+          if (/^\s*(import\s|from\s|require\()/.test(trimmed)) return false;
+          return true;
+        })
+        .join("\n");
+
+      if (filtered.trim()) {
+        const parsed = parseCallSites(filtered);
+        for (const match of parsed) {
+          if (!allMatches.some((m) => m.file === match.file && m.line === match.line)) {
+            allMatches.push(match);
+          }
+        }
+      }
+    } catch {
+      // no matches
+    }
+  }
+
+  return allMatches.slice(0, 20);
+}
+
 export async function searchConstant(
   constantName: string,
   paths: string[],

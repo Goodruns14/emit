@@ -14,6 +14,7 @@ import { MetadataExtractor } from "../core/extractor/index.js";
 import { reconcile } from "../core/reconciler/index.js";
 import { writeOutput } from "../core/writer/index.js";
 import { runStatus } from "./status.js";
+import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
   WarehouseEvent,
   PropertyStat,
@@ -177,6 +178,93 @@ async function runScan(opts: ScanOptions): Promise<number> {
     }
   }
 
+  // ── Expand discriminator properties ─────────────────────────────────
+  const subEventMap = new Map<string, { parentEvent: string; property: string; value: string }>();
+  const parentEventSet = new Set<string>();
+
+  if (config.discriminator_properties) {
+    // Build the set of requested event names for --event/--events scoping
+    const requestedNames = new Set<string>();
+    if (opts.event) requestedNames.add(opts.event);
+    if (opts.events) {
+      for (const n of opts.events.split(",").map((s) => s.trim()).filter(Boolean)) {
+        requestedNames.add(n);
+      }
+    }
+    const isScoped = requestedNames.size > 0;
+
+    // Check if a specific sub-event was requested (contains a dot)
+    const requestedSubEvents = new Set(
+      [...requestedNames].filter((n) => n.includes("."))
+    );
+
+    const expansions = await expandDiscriminators(config, warehouseAdapter);
+
+    for (const exp of expansions) {
+      parentEventSet.add(exp.parentEvent);
+
+      // If scoped to specific events, only expand discriminators for requested parents
+      // or specific sub-events that belong to this parent
+      if (isScoped) {
+        const parentRequested = requestedNames.has(exp.parentEvent);
+        const anySubRequested = [...requestedSubEvents].some((n) =>
+          n.startsWith(exp.parentEvent + ".")
+        );
+        if (!parentRequested && !anySubRequested) continue;
+      }
+
+      for (const value of exp.values) {
+        const subEventName = `${exp.parentEvent}.${value}`;
+
+        // If specific sub-events were requested, only include those
+        if (requestedSubEvents.size > 0 && !requestedSubEvents.has(subEventName) &&
+            !requestedNames.has(exp.parentEvent)) {
+          continue;
+        }
+
+        subEventMap.set(subEventName, {
+          parentEvent: exp.parentEvent,
+          property: exp.property,
+          value,
+        });
+
+        // Add sub-event to the events list if not already present
+        if (!events.some((e) => e.name === subEventName)) {
+          events.push({
+            name: subEventName,
+            daily_volume: 0,
+            first_seen: "unknown",
+            last_seen: "unknown",
+          });
+        }
+      }
+
+      // Ensure the parent is in the events list if it was requested or has sub-events
+      if (requestedNames.has(exp.parentEvent) && !events.some((e) => e.name === exp.parentEvent)) {
+        events.push({
+          name: exp.parentEvent,
+          daily_volume: 0,
+          first_seen: "unknown",
+          last_seen: "unknown",
+        });
+      }
+    }
+
+    if (!json && subEventMap.size > 0) {
+      const parentCount = expansions.length;
+      logger.info(
+        `Expanded ${parentCount} discriminator${parentCount === 1 ? "" : "s"} → ${subEventMap.size} sub-events`
+      );
+    }
+
+    // Sort events so parents come before their sub-events (parent description is needed)
+    events.sort((a, b) => {
+      const aIsSub = subEventMap.has(a.name) ? 1 : 0;
+      const bIsSub = subEventMap.has(b.name) ? 1 : 0;
+      return aIsSub - bIsSub;
+    });
+  }
+
   // ── Scan repo ─────────────────────────────────────────────────────
   const scanner = new RepoScanner({
     paths: config.repo.paths,
@@ -196,7 +284,10 @@ async function runScan(opts: ScanOptions): Promise<number> {
   const codeContextMap = new Map<string, Awaited<ReturnType<RepoScanner["findEvent"]>>>();
 
   for (const event of events) {
-    const ctx = await scanner.findEvent(event.name);
+    const subInfo = subEventMap.get(event.name);
+    const ctx = subInfo
+      ? await scanner.findDiscriminatorValue(subInfo.value)
+      : await scanner.findEvent(event.name);
     codeContextMap.set(event.name, ctx);
 
     if (ctx.match_type === "not_found") {
@@ -302,18 +393,40 @@ async function runScan(opts: ScanOptions): Promise<number> {
       ? await warehouseAdapter.getPropertyStats(event.name).catch(() => [])
       : [];
 
-    const meta = await extractor.extractMetadata(
-      event.name,
-      ctx,
-      event,
-      propertyStats,
-      literalValues
-    );
+    const subInfo = subEventMap.get(event.name);
+    let meta;
+    if (subInfo) {
+      // Sub-event: use discriminator-specific extraction
+      const parentDescription = catalog[subInfo.parentEvent]?.description;
+      meta = await extractor.extractDiscriminatorMetadata(
+        subInfo.parentEvent,
+        subInfo.property,
+        subInfo.value,
+        ctx,
+        parentDescription,
+      );
+    } else {
+      meta = await extractor.extractMetadata(
+        event.name,
+        ctx,
+        event,
+        propertyStats,
+        literalValues
+      );
+    }
 
     const reconciled = reconcile(meta, ctx, event, propertyStats, literalValues);
     reconciled.context_hash = contextHash;
     const modifier = getLastModifier(ctx.file_path, ctx.line_number);
     if (modifier) reconciled.last_modified_by = modifier;
+
+    // Set sub-event fields
+    if (subInfo) {
+      reconciled.parent_event = subInfo.parentEvent;
+      reconciled.discriminator_property = subInfo.property;
+      reconciled.discriminator_value = subInfo.value;
+    }
+
     catalog[event.name] = reconciled;
     stats[reconciled.confidence]++;
     extracted++;

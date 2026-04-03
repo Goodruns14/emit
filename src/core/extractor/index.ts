@@ -9,7 +9,7 @@ import type {
   LlmCallConfig,
   ResolvedEvent,
 } from "../../types/index.js";
-import { buildExtractionPrompt, buildPropertyDefinitionsPrompt, buildResolveMissingPrompt } from "./prompts.js";
+import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildPropertyDefinitionsPrompt, buildResolveMissingPrompt } from "./prompts.js";
 import { callLLM, parseJsonResponse } from "./claude.js";
 import { getCached, setCached } from "./cache.js";
 import { searchBroad } from "../scanner/search.js";
@@ -54,6 +54,33 @@ export class MetadataExtractor {
     const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
 
     setCached(eventName, cacheKey, result);
+    return result;
+  }
+
+  async extractDiscriminatorMetadata(
+    parentEventName: string,
+    property: string,
+    value: string,
+    ctx: CodeContext,
+    parentDescription?: string,
+  ): Promise<ExtractedMetadata> {
+    const cacheKey = ctx.context + `::disc::${parentEventName}::${property}::${value}`;
+    const eventKey = `${parentEventName}.${value}`;
+    const cached = getCached<ExtractedMetadata>(eventKey, cacheKey);
+    if (cached) return cached;
+
+    const prompt = buildDiscriminatorExtractionPrompt(
+      parentEventName,
+      property,
+      value,
+      ctx,
+      parentDescription,
+    );
+
+    const text = await callLLM(prompt, this.cfg);
+    const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
+
+    setCached(eventKey, cacheKey, result);
     return result;
   }
 

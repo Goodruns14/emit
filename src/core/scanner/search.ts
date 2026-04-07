@@ -41,10 +41,29 @@ export const FILE_EXTENSIONS = [
   "*.go",
 ];
 
-const EXCLUDE_DIRS = ["node_modules", "bazel-", "target/", ".git", "dist/", "build/"];
+const EXCLUDE_DIRS = [
+  "node_modules", "bazel-", "target/", ".git", "dist/", "build/",
+  // Test fixtures & E2E
+  "cypress", "__tests__", "__mocks__", "__fixtures__", "__snapshots__",
+  "e2e", "test-fixtures", "fixtures",
+  // Build artifacts & generated code
+  ".next", ".nuxt", ".turbo", ".vercel", "out/", "coverage",
+  ".storybook", "storybook-static",
+  // Vendored / third-party
+  "vendor",
+  // Common generated dirs
+  "generated", ".cache", ".parcel-cache",
+];
 
-function buildExcludeArgs(): string[] {
-  return EXCLUDE_DIRS.flatMap((d) => ["--exclude-dir", d]);
+/** Extra directories to exclude, set via config `repo.exclude_paths` */
+let extraExcludeDirs: string[] = [];
+
+export function setExcludePaths(paths: string[]): void {
+  extraExcludeDirs = paths;
+}
+
+export function buildExcludeArgs(): string[] {
+  return [...EXCLUDE_DIRS, ...extraExcludeDirs].flatMap((d) => ["--exclude-dir", d]);
 }
 
 /**
@@ -83,7 +102,7 @@ function isTrackingCallLine(line: string, patterns: string[]): boolean {
   }
 
   // Fallback: require actual call syntax, not just keyword mentions
-  return /\b(track|identify|capture|record|audit)\s*\(/.test(code);
+  return /\b(track|identify|capture|record|audit|report|send|log)\w*\s*\(/.test(code);
 }
 
 /**

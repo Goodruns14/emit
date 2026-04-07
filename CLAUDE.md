@@ -224,6 +224,7 @@ button_click.signup_cta:
 - **Provider validation at config load** — Invalid LLM providers fail fast with clear error messages, not at extraction time
 - **MCP write path goes to file** — `update_event_description` and `update_property_description` write directly to `emit.catalog.yml`. No warehouse write path exists in the local MCP (remote MCP with Snowflake write-through is Phase 4 paid tier, not yet built)
 - **MCP uses `loadConfigLight()`** — The MCP server skips warehouse and LLM credential validation at startup. It only needs to resolve the catalog file path. Pass `--catalog <path>` to bypass config lookup entirely.
+- **`track_pattern` is optional when events are provided** — When `emit init` collects events (inline or from file), it skips pattern detection entirely. The scanner's broad search path finds event call sites without needing `track_pattern`. Pattern detection only runs in the no-events init path.
 
 ## Common Pitfalls
 

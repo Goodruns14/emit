@@ -9,7 +9,7 @@ import type {
   LlmCallConfig,
   ResolvedEvent,
 } from "../../types/index.js";
-import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildPropertyDefinitionsPrompt, buildResolveMissingPrompt } from "./prompts.js";
+import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt } from "./prompts.js";
 import { callLLM, parseJsonResponse } from "./claude.js";
 import { getCached, setCached } from "./cache.js";
 import { searchBroad } from "../scanner/search.js";
@@ -120,9 +120,15 @@ export class MetadataExtractor {
     };
   }
 
-  async generatePropertyDefinitions(
+  /**
+   * Build property definitions deterministically — no LLM call.
+   * For each property shared across 2+ events, the first event
+   * (alphabetically) provides the canonical description. Any event
+   * whose description differs gets recorded in the deviations map.
+   */
+  generatePropertyDefinitions(
     catalog: Record<string, CatalogEvent>
-  ): Promise<Record<string, PropertyDefinition>> {
+  ): Record<string, PropertyDefinition> {
     const grouped: Record<
       string,
       Record<string, { description: string; edge_cases: string[] }>
@@ -138,24 +144,30 @@ export class MetadataExtractor {
       }
     }
 
-    const sharedProperties = Object.fromEntries(
-      Object.entries(grouped).filter(([, events]) => Object.keys(events).length >= 2)
-    );
-
-    if (Object.keys(sharedProperties).length === 0) return {};
-
-    const prompt = buildPropertyDefinitionsPrompt(sharedProperties);
-    const text = await callLLM(prompt, { ...this.cfg, max_tokens: 2000 });
-    const raw = parseJsonResponse<Record<string, any>>(text, {});
-
     const result: Record<string, PropertyDefinition> = {};
-    for (const [propName, def] of Object.entries(raw)) {
+
+    for (const [propName, eventMap] of Object.entries(grouped)) {
+      const eventNames = Object.keys(eventMap).sort();
+      if (eventNames.length < 2) continue;
+
+      // First event alphabetically provides the canonical description
+      const canonical = eventMap[eventNames[0]].description;
+      const deviations: Record<string, string> = {};
+
+      for (const evName of eventNames.slice(1)) {
+        const desc = eventMap[evName].description;
+        if (desc !== canonical) {
+          deviations[evName] = desc;
+        }
+      }
+
       result[propName] = {
-        description: def.description ?? "",
-        events: Object.keys(sharedProperties[propName] ?? {}),
-        deviations: def.deviations ?? {},
+        description: canonical,
+        events: eventNames,
+        deviations,
       };
     }
+
     return result;
   }
 }

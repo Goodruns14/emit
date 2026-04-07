@@ -18,6 +18,7 @@ export function registerInit(program) {
     });
 }
 // Maps npm package names to their tracking function patterns
+// Used when no events are provided — detect patterns from package.json
 const PACKAGE_TO_PATTERN = {
     // Product analytics SDKs
     "posthog-js": "posthog.capture(",
@@ -204,7 +205,7 @@ async function detectLlmProvider() {
     return null;
 }
 // ── Config builders ────────────────────────────────────────────────────────────
-function buildConfig(patterns, llmProvider, backendPatterns, sdk, repoPaths) {
+function buildConfig(patterns, llmProvider, backendPatterns, sdk, repoPaths, discriminators) {
     const paths = repoPaths && repoPaths.length > 0 ? repoPaths : ["./"];
     let yml = "repo:\n  paths:\n";
     for (const rp of paths) {
@@ -228,6 +229,22 @@ function buildConfig(patterns, llmProvider, backendPatterns, sdk, repoPaths) {
     }
     yml += `\noutput:\n  file: .emit/catalog.yml\n  confidence_threshold: low\n`;
     yml += `\nllm:\n  provider: ${llmProvider}\n  model: claude-sonnet-4-6\n  max_tokens: 1000\n`;
+    if (discriminators && discriminators.length > 0) {
+        yml += `\ndiscriminator_properties:\n`;
+        for (const d of discriminators) {
+            if (d.values && d.values.length > 0) {
+                yml += `  ${d.eventName}:\n`;
+                yml += `    property: ${d.property}\n`;
+                yml += `    values:\n`;
+                for (const v of d.values) {
+                    yml += `      - ${v}\n`;
+                }
+            }
+            else {
+                yml += `  ${d.eventName}: ${d.property}\n`;
+            }
+        }
+    }
     return yml;
 }
 function writeBlankConfig(configPath) {
@@ -355,7 +372,7 @@ async function runInit(dir) {
         catch { /* ignore parse errors */ }
     }
     // ── Step 1: Collect events ──────────────────────────────────────────────
-    showStep(1, 3);
+    showStep(1, 4);
     logger.line("  How would you like to add your events?");
     logger.blank();
     const eventChoice = await arrowSelect([
@@ -429,38 +446,49 @@ async function runInit(dir) {
         }
     }
     // ── Step 2: Detect & configure ──────────────────────────────────────────
-    showStep(2, 3);
+    showStep(2, 4);
     logger.spin("Detecting your setup...");
-    const packagePatterns = await detectPatternsFromPackageJson(scanPaths);
-    const detectedBackend = await detectBackendPatterns(scanPaths);
     const detectedLlm = await detectLlmProvider();
     const detectedSdk = detectSdkType(scanPaths);
     let patterns;
+    let detectedBackend;
+    let llm;
     if (collectedEvents.length > 0) {
-        // Use real event names to discover tracking patterns
-        const eventPatterns = await detectPatternsFromEvents(collectedEvents, scanPaths);
-        // Merge: event-based patterns + package.json patterns, deduplicated
-        const allPatterns = [...eventPatterns.map((p) => p.pattern)];
-        for (const pp of packagePatterns) {
-            if (!allPatterns.includes(pp))
-                allPatterns.push(pp);
+        // Events provided — skip pattern detection entirely.
+        // The scanner's broad search path works without track_pattern.
+        patterns = [];
+        detectedBackend = [];
+        logger.succeed("Detection complete");
+        logger.blank();
+        if (detectedLlm) {
+            logger.line(`  ${chalk.green("✓")} ${LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm} available`);
         }
-        patterns = allPatterns;
-        if (patterns.length > 0) {
-            logger.succeed("Detection complete");
+        else {
+            logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
+        }
+        // Create prompter AFTER spinner finishes to avoid stdin conflicts
+        const p = createPrompter();
+        if (detectedLlm) {
             logger.blank();
-            for (const ep of eventPatterns) {
-                logger.line(`  ${chalk.green("✓")} Detected ${chalk.cyan(ep.pattern)} (${ep.count} event${ep.count === 1 ? "" : "s"} matched)`);
+            logger.line(`    llm:  ${chalk.cyan(LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm)}`);
+            logger.blank();
+            const confirm = (await p.ask("  Look right? Save config and run first scan [Y/n]: ")) || "y";
+            if (confirm.trim().toLowerCase() === "n") {
+                llm = await askLlmProvider(p);
+            }
+            else {
+                llm = detectedLlm;
             }
         }
         else {
-            logger.succeed("Detection complete");
-            logger.blank();
-            logger.line(`  ${chalk.yellow("⚠")} No tracking patterns found from event names`);
+            llm = await askLlmProvider(p);
         }
+        p.close();
     }
     else {
-        // No events — use package.json patterns or ask manually
+        // No events — use package.json patterns + backend detection, ask if needed
+        const packagePatterns = await detectPatternsFromPackageJson(scanPaths);
+        detectedBackend = await detectBackendPatterns(scanPaths);
         patterns = packagePatterns;
         logger.succeed("Detection complete");
         logger.blank();
@@ -471,83 +499,133 @@ async function runInit(dir) {
         else {
             logger.line(`  ${chalk.yellow("⚠")} No tracking patterns detected`);
         }
-    }
-    if (detectedBackend.length > 0) {
-        const backendDisplay = chalk.cyan(detectedBackend.join(", "));
-        logger.line(`  ${chalk.green("✓")} Detected backend patterns: ${backendDisplay}`);
-    }
-    if (detectedLlm) {
-        logger.line(`  ${chalk.green("✓")} ${LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm} available`);
-    }
-    else {
-        logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
-    }
-    // Create prompter AFTER spinner finishes to avoid stdin conflicts
-    const p = createPrompter();
-    let llm;
-    if (patterns.length > 0 && detectedLlm) {
-        showSummary(patterns, detectedLlm, detectedBackend);
-        const scanPrompt = collectedEvents.length > 0
-            ? "  Look right? Save config and run first scan [Y/n]: "
-            : "  Look right? [Y/n]: ";
-        const confirm = (await p.ask(scanPrompt)) || "y";
-        if (confirm.trim().toLowerCase() === "n") {
-            logger.blank();
-            logger.line("  What needs fixing?");
-            logger.line("    1) Track pattern(s)");
-            logger.line("    2) LLM provider");
-            logger.line("    3) Both");
-            logger.blank();
-            const fixChoice = (await p.ask("  Choice: ")) || "1";
-            const what = fixChoice === "2" ? "llm" : fixChoice === "3" ? "both" : "patterns";
-            const corrected = await askCorrection(what, p, patterns, detectedLlm);
-            patterns = corrected.patterns;
-            llm = corrected.llm;
+        if (detectedBackend.length > 0) {
+            const backendDisplay = chalk.cyan(detectedBackend.join(", "));
+            logger.line(`  ${chalk.green("✓")} Detected backend patterns: ${backendDisplay}`);
+        }
+        if (detectedLlm) {
+            logger.line(`  ${chalk.green("✓")} ${LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm} available`);
         }
         else {
+            logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
+        }
+        // Create prompter AFTER spinner finishes to avoid stdin conflicts
+        const p = createPrompter();
+        if (patterns.length > 0 && detectedLlm) {
+            showSummary(patterns, detectedLlm, detectedBackend);
+            const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
+            if (confirm.trim().toLowerCase() === "n") {
+                logger.blank();
+                logger.line("  What needs fixing?");
+                logger.line("    1) Track pattern(s)");
+                logger.line("    2) LLM provider");
+                logger.line("    3) Both");
+                logger.blank();
+                const fixChoice = (await p.ask("  Choice: ")) || "1";
+                const what = fixChoice === "2" ? "llm" : fixChoice === "3" ? "both" : "patterns";
+                const corrected = await askCorrection(what, p, patterns, detectedLlm);
+                patterns = corrected.patterns;
+                llm = corrected.llm;
+            }
+            else {
+                llm = detectedLlm;
+            }
+        }
+        else if (patterns.length > 0) {
+            showSummary(patterns, "", detectedBackend);
+            const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
+            if (confirm.trim().toLowerCase() === "n") {
+                const newPatterns = await askTrackPatterns(p);
+                patterns = newPatterns.length > 0 ? newPatterns : patterns;
+            }
+            llm = await askLlmProvider(p);
+        }
+        else if (detectedLlm) {
+            const askedPatterns = await askTrackPatterns(p);
+            if (askedPatterns.length === 0) {
+                p.close();
+                writeBlankConfig(configPath);
+                logger.blank();
+                logger.succeed("emit.config.yml created (blank template)");
+                logger.blank();
+                return 0;
+            }
+            patterns = askedPatterns;
             llm = detectedLlm;
         }
-    }
-    else if (patterns.length > 0) {
-        showSummary(patterns, "", detectedBackend);
-        const scanPrompt2 = collectedEvents.length > 0
-            ? "  Look right? Save config and run first scan [Y/n]: "
-            : "  Look right? [Y/n]: ";
-        const confirm = (await p.ask(scanPrompt2)) || "y";
-        if (confirm.trim().toLowerCase() === "n") {
-            const newPatterns = await askTrackPatterns(p);
-            patterns = newPatterns.length > 0 ? newPatterns : patterns;
+        else {
+            const result = await askFromScratch(p);
+            if (!result) {
+                p.close();
+                writeBlankConfig(configPath);
+                logger.blank();
+                logger.succeed("emit.config.yml created (blank template)");
+                logger.blank();
+                return 0;
+            }
+            patterns = result.patterns;
+            llm = result.llm;
         }
-        llm = await askLlmProvider(p);
+        p.close();
     }
-    else if (detectedLlm) {
-        const askedPatterns = await askTrackPatterns(p);
-        if (askedPatterns.length === 0) {
-            p.close();
-            writeBlankConfig(configPath);
+    // ── Step 3: Discriminator properties (optional) ─────────────────────────
+    showStep(3, 4);
+    let discriminatorEntries = [];
+    logger.line("  " + chalk.bold("Discriminator properties") + chalk.gray(" (optional)"));
+    logger.blank();
+    logger.line(chalk.gray("  Some events act as containers for many distinct actions."));
+    logger.line(chalk.gray("  For example, a ") + chalk.cyan("button_click") + chalk.gray(" event where the property ") + chalk.cyan("button_id"));
+    logger.line(chalk.gray("  tells you ") + chalk.italic("which") + chalk.gray(" button was clicked (signup_cta, add_to_cart, etc.)."));
+    logger.line(chalk.gray("  Emit can expand each value into its own catalog entry."));
+    logger.blank();
+    logger.line(chalk.gray("  You can always add these later in emit.config.yml under ") + chalk.cyan("discriminator_properties") + chalk.gray("."));
+    logger.blank();
+    const discChoice = await arrowSelect([
+        { label: "Skip — none of my events work this way", value: "skip" },
+        { label: "Yes, add discriminator properties", value: "add" },
+    ]);
+    if (discChoice === "add") {
+        const dp = createPrompter();
+        let addMore = true;
+        while (addMore) {
             logger.blank();
-            logger.succeed("emit.config.yml created (blank template)");
+            const eventName = (await dp.ask("  Event name: ")).trim();
+            if (!eventName)
+                break;
+            const property = (await dp.ask("  Property that identifies the action: ")).trim();
+            if (!property)
+                break;
             logger.blank();
-            return 0;
+            logger.line("  How should emit discover the values?");
+            logger.blank();
+            dp.close();
+            const valueChoice = await arrowSelect([
+                { label: "Discover from warehouse automatically", value: "discover" },
+                { label: "List specific values now", value: "list" },
+            ]);
+            const dp2 = createPrompter();
+            let values;
+            if (valueChoice === "list") {
+                logger.blank();
+                const valInput = (await dp2.ask("  Values (comma-separated): ")).trim();
+                if (valInput) {
+                    values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
+                }
+            }
+            discriminatorEntries.push({ eventName, property, values });
+            logger.blank();
+            logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : " (discover from warehouse)"}`);
+            logger.blank();
+            const moreAnswer = (await dp2.ask("  Add another? [y/N]: ")).trim().toLowerCase();
+            addMore = moreAnswer === "y";
+            dp2.close();
         }
-        patterns = askedPatterns;
-        llm = detectedLlm;
-    }
-    else {
-        const result = await askFromScratch(p);
-        if (!result) {
-            p.close();
-            writeBlankConfig(configPath);
+        if (discChoice === "add" && discriminatorEntries.length === 0) {
+            // User chose "add" but didn't enter anything
             logger.blank();
-            logger.succeed("emit.config.yml created (blank template)");
-            logger.blank();
-            return 0;
+            logger.line(chalk.gray("  No discriminator properties added."));
         }
-        patterns = result.patterns;
-        llm = result.llm;
     }
-    // Close readline before switching to raw mode
-    p.close();
     const repoPaths = ["./"];
     // ── Write config (merge if re-running) ──────────────────────────────────
     if (existingConfig) {
@@ -558,7 +636,7 @@ async function runInit(dir) {
             ? existingTrackPattern
             : existingTrackPattern ? [String(existingTrackPattern)] : [];
         const mergedPatterns = [...new Set([...existingPatterns, ...patterns])];
-        const configYml = buildConfig(mergedPatterns, llm, detectedBackend, detectedSdk, repoPaths);
+        const configYml = buildConfig(mergedPatterns, llm, detectedBackend, detectedSdk, repoPaths, discriminatorEntries.length > 0 ? discriminatorEntries : undefined);
         fs.writeFileSync(configPath, configYml);
         if (mergedPatterns.length > existingPatterns.length) {
             const newCount = mergedPatterns.length - existingPatterns.length;
@@ -571,7 +649,7 @@ async function runInit(dir) {
         }
     }
     else {
-        const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths);
+        const configYml = buildConfig(patterns, llm, detectedBackend, detectedSdk, repoPaths, discriminatorEntries.length > 0 ? discriminatorEntries : undefined);
         fs.writeFileSync(configPath, configYml);
         logger.blank();
         logger.succeed("emit.config.yml created");
@@ -598,7 +676,7 @@ async function runInit(dir) {
             chalk.gray(" section to emit.config.yml"));
     }
     // ── Step 3: Scan ──────────────────────────────────────────────────────────
-    showStep(3, 3);
+    showStep(4, 4);
     const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli.js");
     if (hasDataSource) {
         // Events are ready — run scan automatically, no prompt needed
@@ -687,103 +765,6 @@ const DETECT_EXCLUDE = [
     "--exclude-dir", "__tests__",
     "--exclude-dir", "test",
 ];
-/**
- * Grep for a single quoted event name across all paths.
- * Returns extracted function call patterns (e.g. "posthog.capture(").
- */
-async function grepForEvent(eventName, paths) {
-    const escaped = eventName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const grepPattern = `['"\`]${escaped}['"\`]`;
-    const hits = [];
-    for (const searchPath of paths) {
-        try {
-            const { stdout } = await execa("grep", ["-rn", grepPattern, searchPath, ...DETECT_INCLUDE, ...DETECT_EXCLUDE], { reject: false });
-            if (!stdout.trim())
-                continue;
-            for (const line of stdout.split("\n")) {
-                if (!line.trim())
-                    continue;
-                const colonIdx = line.indexOf(":");
-                const colonIdx2 = line.indexOf(":", colonIdx + 1);
-                if (colonIdx2 === -1)
-                    continue;
-                const filePath = line.slice(0, colonIdx);
-                const code = line.slice(colonIdx2 + 1);
-                if (/\.(test|spec|mock|stub)\.[a-z]+$/.test(filePath))
-                    continue;
-                const callRegex = new RegExp(`([a-zA-Z_$][\\w$.]*\\s*\\()\\s*['"\`]${escaped}['"\`]`);
-                const match = code.match(callRegex);
-                if (!match)
-                    continue;
-                const pattern = match[1].replace(/\s+/g, "").replace(/\($/, "(");
-                const fnCall = pattern.endsWith("(") ? pattern : pattern + "(";
-                if (/^(require|import|const|let|var|type|interface|class)\($/i.test(fnCall))
-                    continue;
-                hits.push({ fnCall, filePath });
-            }
-        }
-        catch {
-            // grep exit 1 = no matches
-        }
-    }
-    return hits;
-}
-/**
- * Detect tracking patterns by grepping for real event names in the codebase
- * and extracting the wrapping function call (e.g. analytics.track(, posthog.capture().
- *
- * Uses convergence sampling: processes events in batches of 10, requires a minimum
- * of 30 events sampled, and stops after 2 consecutive batches with no new patterns.
- * Hard cap at 80 events. This ensures minority patterns (e.g. 10% of events) are
- * reliably discovered.
- */
-async function detectPatternsFromEvents(events, paths) {
-    // Shuffle to avoid bias from alphabetical/volume ordering
-    const shuffled = [...events].sort(() => Math.random() - 0.5);
-    const BATCH_SIZE = 10;
-    const MIN_SAMPLED = 30;
-    const MAX_SAMPLED = 80;
-    const DRY_BATCHES_TO_STOP = 2;
-    const patternCounts = new Map();
-    let sampled = 0;
-    let dryBatches = 0;
-    for (let batchStart = 0; batchStart < shuffled.length && sampled < MAX_SAMPLED; batchStart += BATCH_SIZE) {
-        const batch = shuffled.slice(batchStart, batchStart + BATCH_SIZE);
-        const patternsBefore = patternCounts.size;
-        // Run all greps in this batch in parallel
-        const batchResults = await Promise.all(batch.map((eventName) => grepForEvent(eventName, paths)));
-        for (const hits of batchResults) {
-            sampled++;
-            for (const { fnCall, filePath } of hits) {
-                const existing = patternCounts.get(fnCall);
-                if (existing) {
-                    existing.count++;
-                }
-                else {
-                    patternCounts.set(fnCall, { count: 1, example: filePath });
-                }
-            }
-        }
-        // Check convergence after minimum samples
-        if (sampled >= MIN_SAMPLED) {
-            if (patternCounts.size === patternsBefore) {
-                dryBatches++;
-                if (dryBatches >= DRY_BATCHES_TO_STOP)
-                    break;
-            }
-            else {
-                dryBatches = 0; // Reset — found something new
-            }
-        }
-    }
-    // Sort by frequency — most-used pattern first
-    const results = [];
-    for (const [fnCall, data] of patternCounts) {
-        results.push({ pattern: fnCall, count: data.count, example: data.example });
-    }
-    results.sort((a, b) => b.count - a.count);
-    return results;
-}
 async function isClaudeCodeInstalled() {
     for (const bin of ["claude", "claude-code"]) {
         try {

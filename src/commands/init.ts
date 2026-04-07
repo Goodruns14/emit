@@ -21,6 +21,7 @@ export function registerInit(program: Command): void {
 }
 
 // Maps npm package names to their tracking function patterns
+// Used when no events are provided — detect patterns from package.json
 const PACKAGE_TO_PATTERN: Record<string, string> = {
   // Product analytics SDKs
   "posthog-js": "posthog.capture(",
@@ -497,37 +498,53 @@ async function runInit(dir?: string): Promise<number> {
   showStep(2, 4);
 
   logger.spin("Detecting your setup...");
-  const packagePatterns = await detectPatternsFromPackageJson(scanPaths);
-  const detectedBackend = await detectBackendPatterns(scanPaths);
+
   const detectedLlm = await detectLlmProvider();
   const detectedSdk = detectSdkType(scanPaths);
 
   let patterns: string[];
+  let detectedBackend: string[];
+  let llm: string;
 
   if (collectedEvents.length > 0) {
-    // Use real event names to discover tracking patterns
-    const eventPatterns = await detectPatternsFromEvents(collectedEvents, scanPaths);
-    // Merge: event-based patterns + package.json patterns, deduplicated
-    const allPatterns = [...eventPatterns.map((p) => p.pattern)];
-    for (const pp of packagePatterns) {
-      if (!allPatterns.includes(pp)) allPatterns.push(pp);
-    }
-    patterns = allPatterns;
+    // Events provided — skip pattern detection entirely.
+    // The scanner's broad search path works without track_pattern.
+    patterns = [];
+    detectedBackend = [];
 
-    if (patterns.length > 0) {
-      logger.succeed("Detection complete");
+    logger.succeed("Detection complete");
+    logger.blank();
+
+    if (detectedLlm) {
+      logger.line(`  ${chalk.green("✓")} ${LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm} available`);
+    } else {
+      logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
+    }
+
+    // Create prompter AFTER spinner finishes to avoid stdin conflicts
+    const p = createPrompter();
+
+    if (detectedLlm) {
       logger.blank();
-      for (const ep of eventPatterns) {
-        logger.line(`  ${chalk.green("✓")} Detected ${chalk.cyan(ep.pattern)} (${ep.count} event${ep.count === 1 ? "" : "s"} matched)`);
+      logger.line(`    llm:  ${chalk.cyan(LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm)}`);
+      logger.blank();
+      const confirm = (await p.ask("  Look right? Save config and run first scan [Y/n]: ")) || "y";
+      if (confirm.trim().toLowerCase() === "n") {
+        llm = await askLlmProvider(p);
+      } else {
+        llm = detectedLlm;
       }
     } else {
-      logger.succeed("Detection complete");
-      logger.blank();
-      logger.line(`  ${chalk.yellow("⚠")} No tracking patterns found from event names`);
+      llm = await askLlmProvider(p);
     }
+
+    p.close();
   } else {
-    // No events — use package.json patterns or ask manually
+    // No events — use package.json patterns + backend detection, ask if needed
+    const packagePatterns = await detectPatternsFromPackageJson(scanPaths);
+    detectedBackend = await detectBackendPatterns(scanPaths);
     patterns = packagePatterns;
+
     logger.succeed("Detection complete");
     logger.blank();
 
@@ -537,84 +554,75 @@ async function runInit(dir?: string): Promise<number> {
     } else {
       logger.line(`  ${chalk.yellow("⚠")} No tracking patterns detected`);
     }
-  }
 
-  if (detectedBackend.length > 0) {
-    const backendDisplay = chalk.cyan(detectedBackend.join(", "));
-    logger.line(`  ${chalk.green("✓")} Detected backend patterns: ${backendDisplay}`);
-  }
+    if (detectedBackend.length > 0) {
+      const backendDisplay = chalk.cyan(detectedBackend.join(", "));
+      logger.line(`  ${chalk.green("✓")} Detected backend patterns: ${backendDisplay}`);
+    }
 
-  if (detectedLlm) {
-    logger.line(`  ${chalk.green("✓")} ${LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm} available`);
-  } else {
-    logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
-  }
-
-  // Create prompter AFTER spinner finishes to avoid stdin conflicts
-  const p = createPrompter();
-
-  let llm: string;
-
-  if (patterns.length > 0 && detectedLlm) {
-    showSummary(patterns, detectedLlm, detectedBackend);
-    const scanPrompt = collectedEvents.length > 0
-      ? "  Look right? Save config and run first scan [Y/n]: "
-      : "  Look right? [Y/n]: ";
-    const confirm = (await p.ask(scanPrompt)) || "y";
-    if (confirm.trim().toLowerCase() === "n") {
-      logger.blank();
-      logger.line("  What needs fixing?");
-      logger.line("    1) Track pattern(s)");
-      logger.line("    2) LLM provider");
-      logger.line("    3) Both");
-      logger.blank();
-      const fixChoice = (await p.ask("  Choice: ")) || "1";
-      const what = fixChoice === "2" ? "llm" : fixChoice === "3" ? "both" : "patterns";
-      const corrected = await askCorrection(what, p, patterns, detectedLlm);
-      patterns = corrected.patterns;
-      llm = corrected.llm;
+    if (detectedLlm) {
+      logger.line(`  ${chalk.green("✓")} ${LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm} available`);
     } else {
-      llm = detectedLlm;
+      logger.line(`  ${chalk.yellow("⚠")} No LLM provider detected`);
     }
-  } else if (patterns.length > 0) {
-    showSummary(patterns, "", detectedBackend);
-    const scanPrompt2 = collectedEvents.length > 0
-      ? "  Look right? Save config and run first scan [Y/n]: "
-      : "  Look right? [Y/n]: ";
-    const confirm = (await p.ask(scanPrompt2)) || "y";
-    if (confirm.trim().toLowerCase() === "n") {
-      const newPatterns = await askTrackPatterns(p);
-      patterns = newPatterns.length > 0 ? newPatterns : patterns;
-    }
-    llm = await askLlmProvider(p);
-  } else if (detectedLlm) {
-    const askedPatterns = await askTrackPatterns(p);
-    if (askedPatterns.length === 0) {
-      p.close();
-      writeBlankConfig(configPath);
-      logger.blank();
-      logger.succeed("emit.config.yml created (blank template)");
-      logger.blank();
-      return 0;
-    }
-    patterns = askedPatterns;
-    llm = detectedLlm;
-  } else {
-    const result = await askFromScratch(p);
-    if (!result) {
-      p.close();
-      writeBlankConfig(configPath);
-      logger.blank();
-      logger.succeed("emit.config.yml created (blank template)");
-      logger.blank();
-      return 0;
-    }
-    patterns = result.patterns;
-    llm = result.llm;
-  }
 
-  // Close readline before switching to raw mode
-  p.close();
+    // Create prompter AFTER spinner finishes to avoid stdin conflicts
+    const p = createPrompter();
+
+    if (patterns.length > 0 && detectedLlm) {
+      showSummary(patterns, detectedLlm, detectedBackend);
+      const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
+      if (confirm.trim().toLowerCase() === "n") {
+        logger.blank();
+        logger.line("  What needs fixing?");
+        logger.line("    1) Track pattern(s)");
+        logger.line("    2) LLM provider");
+        logger.line("    3) Both");
+        logger.blank();
+        const fixChoice = (await p.ask("  Choice: ")) || "1";
+        const what = fixChoice === "2" ? "llm" : fixChoice === "3" ? "both" : "patterns";
+        const corrected = await askCorrection(what, p, patterns, detectedLlm);
+        patterns = corrected.patterns;
+        llm = corrected.llm;
+      } else {
+        llm = detectedLlm;
+      }
+    } else if (patterns.length > 0) {
+      showSummary(patterns, "", detectedBackend);
+      const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
+      if (confirm.trim().toLowerCase() === "n") {
+        const newPatterns = await askTrackPatterns(p);
+        patterns = newPatterns.length > 0 ? newPatterns : patterns;
+      }
+      llm = await askLlmProvider(p);
+    } else if (detectedLlm) {
+      const askedPatterns = await askTrackPatterns(p);
+      if (askedPatterns.length === 0) {
+        p.close();
+        writeBlankConfig(configPath);
+        logger.blank();
+        logger.succeed("emit.config.yml created (blank template)");
+        logger.blank();
+        return 0;
+      }
+      patterns = askedPatterns;
+      llm = detectedLlm;
+    } else {
+      const result = await askFromScratch(p);
+      if (!result) {
+        p.close();
+        writeBlankConfig(configPath);
+        logger.blank();
+        logger.succeed("emit.config.yml created (blank template)");
+        logger.blank();
+        return 0;
+      }
+      patterns = result.patterns;
+      llm = result.llm;
+    }
+
+    p.close();
+  }
 
   // ── Step 3: Discriminator properties (optional) ─────────────────────────
   showStep(3, 4);
@@ -833,12 +841,6 @@ const BACKEND_PATTERNS = [
   "TrackEvent(",
 ];
 
-interface DetectedPattern {
-  pattern: string;
-  count: number;
-  example: string;
-}
-
 // File extensions and exclude dirs used by all detection greps
 const DETECT_INCLUDE = [
   "--include", "*.ts", "--include", "*.tsx",
@@ -858,127 +860,6 @@ const DETECT_EXCLUDE = [
   "--exclude-dir", "__tests__",
   "--exclude-dir", "test",
 ];
-
-/**
- * Grep for a single quoted event name across all paths.
- * Returns extracted function call patterns (e.g. "posthog.capture(").
- */
-async function grepForEvent(
-  eventName: string,
-  paths: string[]
-): Promise<{ fnCall: string; filePath: string }[]> {
-  const escaped = eventName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const grepPattern = `['"\`]${escaped}['"\`]`;
-  const hits: { fnCall: string; filePath: string }[] = [];
-
-  for (const searchPath of paths) {
-    try {
-      const { stdout } = await execa(
-        "grep",
-        ["-rn", grepPattern, searchPath, ...DETECT_INCLUDE, ...DETECT_EXCLUDE],
-        { reject: false }
-      );
-      if (!stdout.trim()) continue;
-
-      for (const line of stdout.split("\n")) {
-        if (!line.trim()) continue;
-
-        const colonIdx = line.indexOf(":");
-        const colonIdx2 = line.indexOf(":", colonIdx + 1);
-        if (colonIdx2 === -1) continue;
-
-        const filePath = line.slice(0, colonIdx);
-        const code = line.slice(colonIdx2 + 1);
-
-        if (/\.(test|spec|mock|stub)\.[a-z]+$/.test(filePath)) continue;
-
-        const callRegex = new RegExp(
-          `([a-zA-Z_$][\\w$.]*\\s*\\()\\s*['"\`]${escaped}['"\`]`
-        );
-        const match = code.match(callRegex);
-        if (!match) continue;
-
-        const pattern = match[1].replace(/\s+/g, "").replace(/\($/, "(");
-        const fnCall = pattern.endsWith("(") ? pattern : pattern + "(";
-
-        if (/^(require|import|const|let|var|type|interface|class)\($/i.test(fnCall)) continue;
-
-        hits.push({ fnCall, filePath });
-      }
-    } catch {
-      // grep exit 1 = no matches
-    }
-  }
-
-  return hits;
-}
-
-/**
- * Detect tracking patterns by grepping for real event names in the codebase
- * and extracting the wrapping function call (e.g. analytics.track(, posthog.capture().
- *
- * Uses convergence sampling: processes events in batches of 10, requires a minimum
- * of 30 events sampled, and stops after 2 consecutive batches with no new patterns.
- * Hard cap at 80 events. This ensures minority patterns (e.g. 10% of events) are
- * reliably discovered.
- */
-async function detectPatternsFromEvents(
-  events: string[],
-  paths: string[]
-): Promise<DetectedPattern[]> {
-  // Shuffle to avoid bias from alphabetical/volume ordering
-  const shuffled = [...events].sort(() => Math.random() - 0.5);
-
-  const BATCH_SIZE = 10;
-  const MIN_SAMPLED = 30;
-  const MAX_SAMPLED = 80;
-  const DRY_BATCHES_TO_STOP = 2;
-
-  const patternCounts = new Map<string, { count: number; example: string }>();
-  let sampled = 0;
-  let dryBatches = 0;
-
-  for (let batchStart = 0; batchStart < shuffled.length && sampled < MAX_SAMPLED; batchStart += BATCH_SIZE) {
-    const batch = shuffled.slice(batchStart, batchStart + BATCH_SIZE);
-    const patternsBefore = patternCounts.size;
-
-    // Run all greps in this batch in parallel
-    const batchResults = await Promise.all(
-      batch.map((eventName) => grepForEvent(eventName, paths))
-    );
-
-    for (const hits of batchResults) {
-      sampled++;
-      for (const { fnCall, filePath } of hits) {
-        const existing = patternCounts.get(fnCall);
-        if (existing) {
-          existing.count++;
-        } else {
-          patternCounts.set(fnCall, { count: 1, example: filePath });
-        }
-      }
-    }
-
-    // Check convergence after minimum samples
-    if (sampled >= MIN_SAMPLED) {
-      if (patternCounts.size === patternsBefore) {
-        dryBatches++;
-        if (dryBatches >= DRY_BATCHES_TO_STOP) break;
-      } else {
-        dryBatches = 0; // Reset — found something new
-      }
-    }
-  }
-
-  // Sort by frequency — most-used pattern first
-  const results: DetectedPattern[] = [];
-  for (const [fnCall, data] of patternCounts) {
-    results.push({ pattern: fnCall, count: data.count, example: data.example });
-  }
-  results.sort((a, b) => b.count - a.count);
-
-  return results;
-}
 
 async function isClaudeCodeInstalled(): Promise<boolean> {
   for (const bin of ["claude", "claude-code"]) {

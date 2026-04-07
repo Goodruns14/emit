@@ -83,7 +83,7 @@ function isTrackingCallLine(line: string, patterns: string[]): boolean {
   }
 
   // Fallback: require actual call syntax, not just keyword mentions
-  return /\b(track|identify|capture|record|audit)\s*\(/.test(code);
+  return /\b(track|identify|capture|record|audit|report|send|log)\w*\s*\(/.test(code);
 }
 
 /**

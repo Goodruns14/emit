@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { buildExcludeArgs } from "./search.js";
 
 // Targeted regex patterns for backend event-tracking method shapes.
 // Each pattern is intentionally specific to reduce false positives from
@@ -37,9 +38,7 @@ const FILE_TYPES = [
   "*.ts", "*.tsx", "*.js", "*.jsx",
 ];
 
-const EXCLUDE_DIRS = [
-  "node_modules", ".git", "target", "build", "dist",
-];
+// EXCLUDE_DIRS now centralized in search.ts via buildExcludeArgs()
 
 // Patterns in more than this many files are too generic (e.g. EventEmitter.emit)
 const MAX_FILE_THRESHOLD = 30;
@@ -68,7 +67,7 @@ export async function discoverBackendPatterns(paths: string[]): Promise<string[]
             "-roHE", regex,
             searchPath,
             ...FILE_TYPES.flatMap((t) => ["--include", t]),
-            ...EXCLUDE_DIRS.flatMap((d) => ["--exclude-dir", d]),
+            ...buildExcludeArgs(),
           ],
           { reject: false }
         ).then(({ stdout }) => {

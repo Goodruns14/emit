@@ -45,11 +45,10 @@ emit --help
 emit init
 ```
 
-Interactive wizard that walks you through 4 steps:
+Interactive wizard that walks you through setup:
 1. **Collect events** — enter event names inline, load from a CSV/JSON file, or skip
-2. **Detect & configure** — auto-detects your tracking SDK and LLM provider (uses your event names to find patterns if you provided them)
-3. **Discriminator properties** — optionally expand "god events" into sub-events by property value
-4. **First scan** — runs `emit scan` automatically if you have a data source ready
+2. **Configure LLM** — auto-detects your LLM provider. If you provided events, that's it — no tracking pattern questions needed. If you skipped events, emit auto-detects your tracking SDK patterns.
+3. **First scan** — runs `emit scan` automatically if you have a data source ready
 
 Creates `emit.config.yml`.
 
@@ -222,7 +221,6 @@ repo:
   paths:
     - ./
   sdk: custom
-  track_pattern: "analytics.track("
 
 output:
   file: emit.catalog.yml
@@ -232,6 +230,26 @@ llm:
   provider: claude-code    # or: anthropic, openai, openai-compatible
   model: claude-sonnet-4-6
   max_tokens: 1000
+
+manual_events:
+  - purchase_completed
+  - signup_started
+```
+
+> **Note:** `track_pattern` is optional. When you provide `manual_events`, the scanner's broad search finds call sites without needing an explicit pattern. Add `track_pattern` only if you want to constrain matches to a specific SDK call (e.g. `"analytics.track("`).
+
+#### Excluding directories
+
+By default, emit excludes `node_modules`, `dist`, `build`, `cypress`, `__tests__`, `coverage`, and other common noise directories. To exclude additional project-specific paths:
+
+```yaml
+repo:
+  paths:
+    - ./
+  sdk: custom
+  exclude_paths:
+    - "e2e/"
+    - "scripts/seed-data/"
 ```
 
 ### With Snowflake warehouse
@@ -249,7 +267,9 @@ warehouse:
   top_n: 50
 ```
 
-### With manual events
+### With manual events (no warehouse)
+
+If you don't have a warehouse connected, just list event names directly:
 
 ```yaml
 manual_events:

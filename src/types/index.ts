@@ -329,6 +329,8 @@ export interface EmitConfig {
     track_pattern?: string | string[];
     /** Additional patterns for backend tracking (e.g. Java audit helpers, server-side SDKs) */
     backend_patterns?: string[];
+    /** Directories to exclude from scanning (in addition to built-in excludes like node_modules, dist, etc.) */
+    exclude_paths?: string[];
   };
   output: {
     file: string;

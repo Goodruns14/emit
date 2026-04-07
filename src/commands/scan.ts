@@ -9,6 +9,7 @@ import { readCatalog, catalogExists } from "../core/catalog/index.js";
 import { createWarehouseAdapter } from "../core/warehouse/index.js";
 import { createSourceAdapter } from "../core/sources/index.js";
 import { RepoScanner } from "../core/scanner/index.js";
+import { setExcludePaths } from "../core/scanner/search.js";
 import { extractAllLiteralValues } from "../core/scanner/context.js";
 import { MetadataExtractor } from "../core/extractor/index.js";
 import { reconcile } from "../core/reconciler/index.js";
@@ -266,6 +267,10 @@ async function runScan(opts: ScanOptions): Promise<number> {
   }
 
   // ── Scan repo ─────────────────────────────────────────────────────
+  if (config.repo.exclude_paths?.length) {
+    setExcludePaths(config.repo.exclude_paths);
+  }
+
   const scanner = new RepoScanner({
     paths: config.repo.paths,
     sdk: config.repo.sdk,
@@ -443,7 +448,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
   let propertyDefinitions: Record<string, any>;
   if (reExtracted > 0) {
     if (!json) logger.spin("Building property definitions glossary...");
-    propertyDefinitions = await extractor.generatePropertyDefinitions(catalog);
+    propertyDefinitions = extractor.generatePropertyDefinitions(catalog);
     const sharedCount = Object.keys(propertyDefinitions).length;
     const deviationCount = Object.values(propertyDefinitions).filter((d) =>
       Object.values(d.deviations).some((v) => v !== "")

@@ -1,5 +1,64 @@
-import { describe, it, expect } from "vitest";
-import { findMatchingPattern, extractPatternFromLine } from "../src/core/scanner/search.js";
+import { describe, it, expect, beforeEach } from "vitest";
+import { findMatchingPattern, extractPatternFromLine, setExcludePaths, buildExcludeArgs } from "../src/core/scanner/search.js";
+
+describe("setExcludePaths + buildExcludeArgs", () => {
+  beforeEach(() => {
+    // Reset module state between tests
+    setExcludePaths([]);
+  });
+
+  it("plain directory names produce --exclude-dir flags", () => {
+    setExcludePaths(["cypress", "e2e"]);
+    const args = buildExcludeArgs();
+    expect(args).toContain("--exclude-dir");
+    expect(args).toContain("cypress");
+    expect(args).toContain("e2e");
+    expect(args).not.toContain("--exclude");
+    // Verify pairing: --exclude-dir immediately precedes the dir name
+    const cypressIdx = args.indexOf("cypress");
+    expect(args[cypressIdx - 1]).toBe("--exclude-dir");
+  });
+
+  it("glob patterns produce --exclude flags (not --exclude-dir)", () => {
+    setExcludePaths(["**/*.test.ts", "**/*.spec.js"]);
+    const args = buildExcludeArgs();
+    expect(args).toContain("--exclude");
+    expect(args).toContain("*.test.ts");
+    expect(args).toContain("*.spec.js");
+    // Verify no --exclude-dir is paired with glob patterns
+    for (let i = 0; i < args.length - 1; i++) {
+      if (args[i] === "--exclude-dir") {
+        expect(args[i + 1]).not.toContain("*");
+      }
+    }
+  });
+
+  it("strips leading **/ from glob patterns", () => {
+    setExcludePaths(["**/*.test.*"]);
+    const args = buildExcludeArgs();
+    expect(args).toContain("*.test.*");
+    expect(args).not.toContain("**/*.test.*");
+  });
+
+  it("bare glob patterns without **/ are preserved", () => {
+    setExcludePaths(["*.min.js"]);
+    const args = buildExcludeArgs();
+    expect(args).toContain("*.min.js");
+  });
+
+  it("mixes directories and glob patterns correctly", () => {
+    setExcludePaths(["cypress", "**/*.test.ts", "fixtures"]);
+    const args = buildExcludeArgs();
+    // directories → --exclude-dir
+    const cypressIdx = args.indexOf("cypress");
+    expect(args[cypressIdx - 1]).toBe("--exclude-dir");
+    const fixturesIdx = args.indexOf("fixtures");
+    expect(args[fixturesIdx - 1]).toBe("--exclude-dir");
+    // glob → --exclude
+    const testIdx = args.indexOf("*.test.ts");
+    expect(args[testIdx - 1]).toBe("--exclude");
+  });
+});
 
 describe("findMatchingPattern", () => {
   it("returns the first matching pattern found in the line", () => {

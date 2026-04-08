@@ -58,13 +58,27 @@ const EXCLUDE_DIRS = [
 
 /** Extra directories to exclude, set via config `repo.exclude_paths` */
 let extraExcludeDirs: string[] = [];
+/** Extra file glob patterns to exclude (entries with `*`), set via config `repo.exclude_paths` */
+let extraExcludeFiles: string[] = [];
 
 export function setExcludePaths(paths: string[]): void {
-  extraExcludeDirs = paths;
+  extraExcludeDirs = [];
+  extraExcludeFiles = [];
+  for (const entry of paths) {
+    if (entry.includes("*")) {
+      // File glob pattern — strip leading **/ since grep --exclude matches basename only
+      extraExcludeFiles.push(entry.replace(/^\*\*\//, ""));
+    } else {
+      extraExcludeDirs.push(entry);
+    }
+  }
 }
 
 export function buildExcludeArgs(): string[] {
-  return [...EXCLUDE_DIRS, ...extraExcludeDirs].flatMap((d) => ["--exclude-dir", d]);
+  return [
+    ...[...EXCLUDE_DIRS, ...extraExcludeDirs].flatMap((d) => ["--exclude-dir", d]),
+    ...extraExcludeFiles.flatMap((f) => ["--exclude", f]),
+  ];
 }
 
 /**

@@ -103,7 +103,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
   let sourceAdapter: SourceAdapter | null = null;
 
   if (usingManualEvents) {
-    if (!json) logger.info(`Using ${config.manual_events!.length} manually specified events (warehouse skipped)`);
+    if (!json) logger.info(`Using ${config.manual_events!.length} manually specified events`);
     events = config.manual_events!.map((nameOrObj: any) => {
       // Handle both string[] and {name: string}[] YAML formats
       const name = typeof nameOrObj === "string" ? nameOrObj : String(nameOrObj?.name ?? nameOrObj);
@@ -280,7 +280,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
 
   if (!json) {
     logger.blank();
-    logger.line("  Scanning repo...");
+    logger.line(`  Searching for ${events.length} event${events.length === 1 ? "" : "s"} in your codebase...`);
     logger.blank();
   }
 
@@ -288,29 +288,45 @@ async function runScan(opts: ScanOptions): Promise<number> {
   const notFound: string[] = [];
   const codeContextMap = new Map<string, Awaited<ReturnType<RepoScanner["findEvent"]>>>();
 
-  for (const event of events) {
-    const subInfo = subEventMap.get(event.name);
-    const ctx = subInfo
-      ? await scanner.findDiscriminatorValue(subInfo.value)
-      : await scanner.findEvent(event.name);
-    codeContextMap.set(event.name, ctx);
+  // Run grep searches concurrently, capped to avoid spawning too many
+  // child processes at once (each findEvent can spawn multiple greps).
+  const SCAN_CONCURRENCY = 20;
+  const scanResults: { event: WarehouseEvent; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
+  let scanIdx = 0;
+  let scanCompleted = 0;
+  async function scanWorker() {
+    while (scanIdx < events.length) {
+      const i = scanIdx++;
+      const event = events[i];
+      const subInfo = subEventMap.get(event.name);
+      const ctx = subInfo
+        ? await scanner.findDiscriminatorValue(subInfo.value)
+        : await scanner.findEvent(event.name);
+      scanResults[i] = { event, ctx };
+      scanCompleted++;
+      if (!json) logger.progress(scanCompleted, events.length);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, events.length) }, scanWorker));
 
+  for (const { event, ctx } of scanResults) {
+    codeContextMap.set(event.name, ctx);
     if (ctx.match_type === "not_found") {
-      if (!json) logger.scanRow(event.name, "not found in repo", "fail");
       notFound.push(event.name);
     } else {
-      const siteCount = ctx.all_call_sites.length;
-      const siteSuffix = siteCount > 1 ? ` (${siteCount} call sites)` : "";
-      const nameSuffix = ctx.segment_event_name ? ` → "${ctx.segment_event_name}"` : "";
-      const location = `${ctx.file_path}:${ctx.line_number}`;
-      if (!json) logger.scanRow(event.name, `${location}${siteSuffix}${nameSuffix}`, "ok");
       located.push(event);
     }
   }
 
   if (!json) {
-    logger.blank();
-    logger.info(`Located ${located.length}/${events.length} events`);
+    if (notFound.length > 0) {
+      logger.warn(`Located ${located.length}/${events.length} events — ${notFound.length} not found in repo:`);
+      for (const name of notFound) {
+        logger.line(chalk.gray(`    • ${name}`));
+      }
+    } else {
+      logger.info(`Located all ${events.length} events`);
+    }
     logger.blank();
   }
 

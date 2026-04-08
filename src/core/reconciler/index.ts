@@ -86,6 +86,9 @@ export function reconcile(
     ...(codeContext.segment_event_name && {
       segment_event_name: codeContext.segment_event_name,
     }),
+    ...(codeContext.track_pattern && {
+      track_pattern: codeContext.track_pattern,
+    }),
     source_file: codeContext.file_path,
     source_line: codeContext.line_number,
     all_call_sites: codeContext.all_call_sites.map((cs) => ({

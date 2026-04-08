@@ -6,6 +6,7 @@ export interface SearchMatch {
   file: string;
   line: number;
   rawLine: string;
+  matchedPattern?: string;
 }
 
 export const SDK_PATTERNS: Record<SdkType, string[]> = {
@@ -151,6 +152,32 @@ export function parseCallSites(output: string): SearchMatch[] {
 }
 
 /**
+ * For direct/constant matches: return the first known pattern that appears in the line.
+ */
+export function findMatchingPattern(line: string, patterns: string[]): string | undefined {
+  for (const p of patterns) {
+    if (line.includes(p)) return p;
+  }
+  return undefined;
+}
+
+/**
+ * For broad matches: extract the function call pattern from a raw grep output line.
+ * e.g. "  posthog.capture('signup', {" → "posthog.capture("
+ */
+export function extractPatternFromLine(rawLine: string): string | undefined {
+  // Strip file:line: prefix from grep output
+  const code = rawLine.replace(/^[^:]+:\d+:/, "").trim();
+  // Match identifier.method( or identifier( before a quote
+  const match = code.match(/(\b\w+(?:\.\w+)*)\s*\(/);
+  if (!match) return undefined;
+  const candidate = match[1] + "(";
+  // Filter control flow and import noise
+  const ignore = new Set(["if(", "for(", "while(", "switch(", "catch(", "require(", "import(", "return("]);
+  return ignore.has(candidate) ? undefined : candidate;
+}
+
+/**
  * Filter call sites to only include lines where the event name is an exact
  * quoted string match, not a substring of a longer event name.
  * e.g. grep for "Create Comment" also matches "Create Comment Failed" —
@@ -206,7 +233,11 @@ export async function searchDirect(
         .join("\n");
 
       if (filtered.trim()) {
-        return parseCallSites(filtered);
+        const results = parseCallSites(filtered);
+        for (const r of results) {
+          r.matchedPattern = findMatchingPattern(r.rawLine, allPatterns);
+        }
+        return results;
       }
 
       // Multi-line fallback: event name might be on a different line
@@ -260,6 +291,7 @@ export async function searchBroad(
 
         const parsed = parseCallSites(stdout);
         for (const match of parsed) {
+          match.matchedPattern = extractPatternFromLine(match.rawLine);
           // Deduplicate by file:line
           if (!allMatches.some((m) => m.file === match.file && m.line === match.line)) {
             allMatches.push(match);
@@ -407,7 +439,11 @@ export async function searchConstant(
         .join("\n");
 
       if (filtered.trim()) {
-        return parseCallSites(filtered);
+        const results = parseCallSites(filtered);
+        for (const r of results) {
+          r.matchedPattern = findMatchingPattern(r.rawLine, allPatterns);
+        }
+        return results;
       }
     } catch {
       // no match

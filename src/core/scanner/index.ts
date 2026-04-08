@@ -51,6 +51,7 @@ export class RepoScanner {
         line_number: primary.line,
         context: extractContext(primary.file, primary.line, 50),
         match_type: "direct",
+        track_pattern: exactMatches[0]?.matchedPattern,
         all_call_sites: allCallSites,
       };
     }
@@ -83,6 +84,7 @@ export class RepoScanner {
           context: extractContext(primary.file, primary.line, 50),
           match_type: "constant",
           segment_event_name: segmentEventName,
+          track_pattern: constantMatches[0]?.matchedPattern,
           all_call_sites: allCallSites,
         };
       }
@@ -105,6 +107,7 @@ export class RepoScanner {
         line_number: primary.line,
         context: extractContext(primary.file, primary.line, 50),
         match_type: "broad",
+        track_pattern: broadMatches[0]?.matchedPattern,
         all_call_sites: allCallSites,
       };
     }

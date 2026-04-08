@@ -127,7 +127,10 @@ async function main(): Promise<void> {
   console.log(`Instrumentation files changed: ${instrumentationFiles.length}`);
 
   // Extract event names from changed files
-  const eventNames = detectChangedEvents(instrumentationFiles, sdk);
+  const catalogPatterns = getCatalogTrackPatterns(catalogPath);
+  const configPatterns = resolveConfigTrackPatterns();
+  const extraPatterns = [...new Set([...configPatterns, ...catalogPatterns])];
+  const eventNames = detectChangedEvents(instrumentationFiles, sdk, extraPatterns);
   console.log(`Detected events: ${eventNames.join(", ") || "(none)"}`);
 
   // Also include events whose source_file matches a changed file
@@ -250,10 +253,50 @@ function getRelativePath(filePath: string): string {
 }
 
 /**
+ * Read unique track_pattern values from an existing catalog file.
+ */
+function getCatalogTrackPatterns(catalogPath: string): string[] {
+  if (!fs.existsSync(catalogPath)) return [];
+  try {
+    const raw = yaml.load(fs.readFileSync(catalogPath, "utf8")) as any;
+    if (!raw || typeof raw !== "object") return [];
+    const patterns = new Set<string>();
+    const events = raw.events ?? raw;
+    for (const event of Object.values(events)) {
+      if (event && typeof event === "object" && (event as any).track_pattern) {
+        patterns.add((event as any).track_pattern);
+      }
+    }
+    return [...patterns];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read track_pattern from emit config (user-specified, guides scanning).
+ */
+function resolveConfigTrackPatterns(): string[] {
+  const configFiles = ["emit.config.yml", "emit.config.yaml"];
+  for (const f of configFiles) {
+    if (fs.existsSync(f)) {
+      try {
+        const raw = yaml.load(fs.readFileSync(f, "utf8")) as any;
+        const tp = raw?.repo?.track_pattern;
+        if (typeof tp === "string") return [tp];
+        if (Array.isArray(tp)) return tp;
+      } catch {}
+    }
+  }
+  return [];
+}
+
+/**
  * Grep changed files for SDK track patterns and extract event names.
  */
-function detectChangedEvents(files: string[], sdk: SdkType): string[] {
-  const patterns = SDK_PATTERNS[sdk] ?? [];
+function detectChangedEvents(files: string[], sdk: SdkType, extraPatterns: string[] = []): string[] {
+  const sdkPatterns = SDK_PATTERNS[sdk] ?? [];
+  const patterns = [...new Set([...sdkPatterns, ...extraPatterns])];
   if (patterns.length === 0) return [];
 
   const events = new Set<string>();

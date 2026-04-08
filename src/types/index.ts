@@ -32,6 +32,7 @@ export interface CodeContext {
   context: string;
   match_type: "direct" | "constant" | "broad" | "discriminator" | "not_found";
   segment_event_name?: string;
+  track_pattern?: string;
   all_call_sites: CallSite[];
 }
 
@@ -76,6 +77,7 @@ export interface CatalogEvent {
   confidence_reason: string;
   review_required: boolean;
   segment_event_name?: string;
+  track_pattern?: string;
   parent_event?: string;
   discriminator_property?: string;
   discriminator_value?: string;

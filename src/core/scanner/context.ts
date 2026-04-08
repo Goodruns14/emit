@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { execSync } from "child_process";
 import type { LiteralValues } from "../../types/index.js";
+import { buildExcludeArgs } from "./search.js";
 
 export function extractContext(
   filePath: string,
@@ -95,10 +96,11 @@ export function resolveEnumStringValue(
   constantName: string,
   repoPaths: string[]
 ): string | null {
+  const excludeArgs = buildExcludeArgs().map((a) => `'${a}'`).join(" ");
   for (const repoPath of repoPaths) {
     try {
       const result = execSync(
-        `grep -rn "${constantName}\\s*=" "${repoPath}" --include="*.ts" --include="*.tsx" --include="*.java" 2>/dev/null | grep -v "node_modules" | head -5`,
+        `grep -rn "${constantName}\\s*=" "${repoPath}" --include="*.ts" --include="*.tsx" --include="*.java" ${excludeArgs} 2>/dev/null | head -5`,
         { encoding: "utf8" }
       ).trim();
       if (!result) continue;

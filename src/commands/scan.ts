@@ -14,7 +14,8 @@ import { extractAllLiteralValues } from "../core/scanner/context.js";
 import { MetadataExtractor } from "../core/extractor/index.js";
 import { reconcile } from "../core/reconciler/index.js";
 import { writeOutput } from "../core/writer/index.js";
-import { runStatus } from "./status.js";
+import { diffCatalogs } from "../core/diff/index.js";
+import { formatTerminalDiff } from "../core/diff/format.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
   WarehouseEvent,
@@ -71,9 +72,6 @@ export function registerScan(program: Command): void {
         process.stderr.write(`\n${err.message ?? err}\n`);
         process.exit(1);
         return;
-      }
-      if ((exitCode === 0 || exitCode === 2) && opts.format !== "json" && !opts.dryRun) {
-        await runStatus({ format: opts.format });
       }
       process.exit(exitCode);
     });
@@ -622,6 +620,10 @@ async function runScan(opts: ScanOptions): Promise<number> {
   if (json) {
     process.stdout.write(JSON.stringify(output, null, 2) + "\n");
   } else if (opts.confirm) {
+    const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
+    logger.blank();
+    logger.line(diffSummary);
+    logger.blank();
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise<string>((resolve) => {
       rl.question("  Save these results to emit.catalog.yml? [Y/n]: ", (ans) => {
@@ -639,15 +641,19 @@ async function runScan(opts: ScanOptions): Promise<number> {
       logger.line(chalk.gray("  Discarded. Run ") + chalk.cyan("emit scan") + chalk.gray(" to try again."));
     }
   } else if (opts.dryRun) {
+    const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
+    logger.blank();
+    logger.line(diffSummary);
     logger.blank();
     logger.warn("Dry run — catalog not written");
   } else {
     writeOutput(output, outputPath);
+    const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
+    logger.blank();
+    logger.line(diffSummary);
     logger.blank();
     logger.info(`Written to ${outputPath}`);
   }
-
-  // Summary is handled by runStatus() after scan completes (called from the action handler)
 
   // Disconnect
   if (warehouseAdapter) await warehouseAdapter.disconnect().catch(() => {});

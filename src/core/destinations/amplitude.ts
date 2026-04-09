@@ -25,7 +25,7 @@ export class AmplitudeDestinationAdapter implements DestinationAdapter {
   }
 
   async push(catalog: EmitCatalog, opts: PushOpts = {}): Promise<PushResult> {
-    const result: PushResult = { pushed: 0, skipped: 0, errors: [] };
+    const result: PushResult = { pushed: 0, skipped: 0, skipped_events: [], errors: [] };
     const events = catalog.events ?? {};
     const targetEvents = opts.events
       ? Object.fromEntries(

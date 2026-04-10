@@ -202,6 +202,7 @@ export interface PushOpts {
 export interface PushResult {
   pushed: number;
   skipped: number;
+  skipped_events: string[];
   errors: string[];
 }
 

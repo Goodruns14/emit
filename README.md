@@ -1,18 +1,16 @@
 # Emit
 
-Automatic event catalog generator — extract semantic metadata from your instrumentation code.
+Automatic event catalog generator. Extracts semantic metadata from your instrumentation code.
 
-Emit scans your codebase for analytics tracking calls (Segment, PostHog, Amplitude, Mixpanel, RudderStack, etc.), enriches them with warehouse data and LLM-powered analysis, and produces a structured event catalog (`emit.catalog.yml`).
+Emit scans your codebase for analytics tracking calls (Segment, PostHog, Amplitude, Mixpanel, RudderStack, etc.), uses LLM analysis to enrich them, and produces a structured event catalog (`emit.catalog.yml`).
 
 ## Prerequisites
 
 - **Node.js** >= 18.0.0
-- **One LLM provider** — any of:
+- **One LLM provider**, any of:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed (no API key needed)
   - `ANTHROPIC_API_KEY` environment variable
   - `OPENAI_API_KEY` environment variable
-- **Optional:** Snowflake credentials (for warehouse-powered event discovery)
-- **Optional:** Segment API token (for tracking plan import)
 
 ## Install
 
@@ -45,10 +43,7 @@ emit --help
 emit init
 ```
 
-Interactive wizard that walks you through setup:
-1. **Collect events** — enter event names inline, load from a CSV/JSON file, or skip
-2. **Configure LLM** — auto-detects your LLM provider. If you provided events, that's it — no tracking pattern questions needed. If you skipped events, emit auto-detects your tracking SDK patterns.
-3. **First scan** — runs `emit scan` automatically if you have a data source ready
+Interactive setup wizard. You'll enter your event names (inline or from a CSV/JSON file), emit auto-detects your LLM provider, and then kicks off your first scan. That's it.
 
 Creates `emit.config.yml`.
 
@@ -61,9 +56,9 @@ emit scan
 Scans your repo for event tracking calls, uses an LLM to extract metadata (descriptions, trigger conditions, properties), and writes `emit.catalog.yml`.
 
 Useful flags:
-- `--confirm` — preview results and prompt before saving
-- `--event <name>` — scan a single event
-- `--format json` — JSON output
+- `--confirm` preview results and prompt before saving
+- `--event <name>` scan a single event
+- `--format json` JSON output
 
 ### 3. Check health
 
@@ -71,13 +66,13 @@ Useful flags:
 emit status
 ```
 
-Shows a catalog health report: confidence breakdown, stale events, flagged items.
+Shows a catalog health report with confidence breakdown, stale events, and flagged items.
 
 ## Commands
 
 | Command | Purpose |
 |---------|---------|
-| `emit init` | Interactive setup wizard — creates `emit.config.yml` |
+| `emit init` | Interactive setup wizard, creates `emit.config.yml` |
 | `emit scan` | Scan repo and extract event metadata into `emit.catalog.yml` |
 | `emit import <file>` | Import event names from a CSV or JSON file |
 | `emit push` | Push catalog to destinations (Segment, Amplitude, Mixpanel, Snowflake) |
@@ -114,17 +109,17 @@ The server communicates over stdio. Add it to your Claude Desktop config:
 
 | Tool | Description |
 |------|-------------|
-| `get_event_description` | Full metadata for an event — description, when it fires, confidence, properties, source file |
-| `get_property_description` | Metadata for a specific property on an event — edge cases, null rate, cardinality, sample values |
-| `get_property_across_events` | Look up a property across every event that uses it — canonical definition plus per-event context |
+| `get_event_description` | Full metadata for an event including description, when it fires, confidence, properties, and source file |
+| `get_property_description` | Metadata for a specific property on an event including edge cases, null rate, cardinality, and sample values |
+| `get_property_across_events` | Look up a property across every event that uses it with canonical definition plus per-event context |
 | `list_events` | List all events, optionally filtered by confidence level or review status |
 | `list_properties` | List all properties with how many events use each one |
-| `list_not_found` | Events that couldn't be located in source code — for catalog maintenance |
+| `list_not_found` | Events that couldn't be located in source code, useful for catalog maintenance |
 | `search_events` | Full-text search across event names, descriptions, and fires_when text |
 | `get_events_by_source_file` | Find all events that fire from a given source file (supports partial path matching) |
-| `get_catalog_health` | Summary: total events, confidence breakdown, events needing review |
-| `update_event_description` | Update an event's description and fires_when — writes to `emit.catalog.yml` |
-| `update_property_description` | Update a property's description — writes to `emit.catalog.yml` |
+| `get_catalog_health` | Summary of total events, confidence breakdown, and events needing review |
+| `update_event_description` | Update an event's description and fires_when, writes to `emit.catalog.yml` |
+| `update_property_description` | Update a property's description, writes to `emit.catalog.yml` |
 
 **Example agent interaction:**
 ```
@@ -180,32 +175,6 @@ repo:
     - "scripts/seed-data/"
 ```
 
-### With Snowflake warehouse
-
-```yaml
-warehouse:
-  type: snowflake
-  account: ${SNOWFLAKE_ACCOUNT}
-  username: ${SNOWFLAKE_USERNAME}
-  password: ${SNOWFLAKE_PASSWORD}
-  database: ${SNOWFLAKE_DATABASE}
-  schema: ${SNOWFLAKE_SCHEMA}
-  schema_type: monolith          # monolith | per_event | custom
-  cdp_preset: segment            # segment | rudderstack | snowplow | none
-  top_n: 50
-```
-
-### With manual events (no warehouse)
-
-If you don't have a warehouse connected, just list event names directly:
-
-```yaml
-manual_events:
-  - purchase_completed
-  - signup_started
-  - page_viewed
-```
-
 ### Push destinations
 
 ```yaml
@@ -226,12 +195,7 @@ Copy `.env.example` to `.env` and fill in the values you need:
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API provider |
 | `OPENAI_API_KEY` | OpenAI provider |
-| `SNOWFLAKE_ACCOUNT` | Snowflake warehouse |
-| `SNOWFLAKE_USERNAME` | Snowflake warehouse |
-| `SNOWFLAKE_PASSWORD` | Snowflake warehouse |
-| `SNOWFLAKE_DATABASE` | Snowflake warehouse |
-| `SNOWFLAKE_SCHEMA` | Snowflake warehouse |
-| `SEGMENT_API_TOKEN` | Segment source / push destination |
+| `SEGMENT_API_TOKEN` | Segment push destination |
 
 Environment variables can be referenced in `emit.config.yml` with `${VAR_NAME}` syntax.
 

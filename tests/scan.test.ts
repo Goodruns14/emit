@@ -28,7 +28,8 @@ import { MetadataExtractor } from "../src/core/extractor/index.js";
 import { writeOutput } from "../src/core/writer/index.js";
 import type { EmitCatalog, CatalogEvent, ExtractedMetadata } from "../src/types/index.js";
 
-const CALCOM_DIR = path.resolve(__dirname, "../../test-repos/calcom");
+const CALCOM_DIR = path.resolve(__dirname, "../test-repos/calcom");
+const CALCOM_AVAILABLE = fs.existsSync(CALCOM_DIR);
 
 function fakeLLMResponse(eventName: string): string {
   const response: ExtractedMetadata = {
@@ -60,16 +61,20 @@ describe("emit scan — integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("scans calcom repo with manual events and produces valid catalog", async () => {
+  it.skipIf(!CALCOM_AVAILABLE)("scans calcom repo with manual events and produces valid catalog", async () => {
     // Use calcom's real config but override output to tmp
     process.cwd = () => CALCOM_DIR;
 
     const config = await loadConfig(CALCOM_DIR);
     const outputPath = path.join(tmpDir, "emit.catalog.yml");
 
-    // Scanner runs for real against the calcom repo
+    // Scanner runs for real against the calcom repo — use absolute paths so
+    // grep doesn't search the entire Emit project root
+    const absPaths = config.repo.paths.map((p) =>
+      path.isAbsolute(p) ? p : path.resolve(CALCOM_DIR, p)
+    );
     const scanner = new RepoScanner({
-      paths: config.repo.paths,
+      paths: absPaths,
       sdk: config.repo.sdk,
       trackPattern: config.repo.track_pattern,
     });
@@ -87,12 +92,7 @@ describe("emit scan — integration", () => {
       return fakeLLMResponse(name);
     });
 
-    const events = config.manual_events!.map((name) => ({
-      name,
-      daily_volume: 0,
-      first_seen: "unknown",
-      last_seen: "unknown",
-    }));
+    const events = config.manual_events!.map((name) => ({ name }));
 
     // ── Scan phase ────────────────────────────────────────────────
     const located: typeof events = [];
@@ -124,7 +124,7 @@ describe("emit scan — integration", () => {
         config.repo.paths
       );
       const meta = await extractor.extractMetadata(
-        event.name, ctx, event, [], literalValues
+        event.name, ctx, [], literalValues
       );
       const reconciled: CatalogEvent = {
         description: meta.event_description,
@@ -135,7 +135,6 @@ describe("emit scan — integration", () => {
         source_file: ctx.file_path,
         source_line: ctx.line_number,
         all_call_sites: ctx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
-        warehouse_stats: { daily_volume: event.daily_volume, first_seen: event.first_seen, last_seen: event.last_seen },
         properties: Object.fromEntries(
           Object.entries(meta.properties).map(([name, p]) => [name, {
             ...p, null_rate: 0, cardinality: 0, sample_values: [], code_sample_values: literalValues[name] ?? [],
@@ -186,16 +185,14 @@ describe("emit scan — integration", () => {
       expect(event.confidence).toBe("high");
       expect(event.all_call_sites.length).toBeGreaterThanOrEqual(1);
     }
-  });
+  }, 60000);
 
-  it("scanner finds events via custom track pattern", async () => {
+  it.skipIf(!CALCOM_AVAILABLE)("scanner finds events via custom track pattern", async () => {
     const scanner = new RepoScanner({
-      paths: ["./"],
+      paths: [CALCOM_DIR],
       sdk: "custom",
       trackPattern: "posthog.capture(",
     });
-
-    process.cwd = () => CALCOM_DIR;
 
     // posthog.capture("app_card_details_clicked") should be findable
     const ctx = await scanner.findEvent("app_card_details_clicked");
@@ -203,22 +200,20 @@ describe("emit scan — integration", () => {
     expect(ctx.file_path).toBeTruthy();
     expect(ctx.line_number).toBeGreaterThan(0);
     expect(ctx.all_call_sites.length).toBeGreaterThanOrEqual(1);
-  });
+  }, 30000);
 
-  it("scanner returns not_found for non-existent events", async () => {
+  it.skipIf(!CALCOM_AVAILABLE)("scanner returns not_found for non-existent events", async () => {
     const scanner = new RepoScanner({
-      paths: ["./"],
+      paths: [CALCOM_DIR],
       sdk: "custom",
       trackPattern: "posthog.capture(",
     });
-
-    process.cwd = () => CALCOM_DIR;
 
     const ctx = await scanner.findEvent("this_event_does_not_exist_anywhere_xyz");
     expect(ctx.match_type).toBe("not_found");
     expect(ctx.file_path).toBe("");
     expect(ctx.all_call_sites).toEqual([]);
-  });
+  }, 30000);
 
   it("writes valid YAML that round-trips cleanly", async () => {
     const catalog: EmitCatalog = {
@@ -240,7 +235,6 @@ describe("emit scan — integration", () => {
           source_file: "src/test.ts",
           source_line: 42,
           all_call_sites: [{ file: "src/test.ts", line: 42 }],
-          warehouse_stats: { daily_volume: 100, first_seen: "2023-01-01", last_seen: "2024-01-01" },
           properties: {
             amount: {
               description: "Transaction amount",

@@ -1,5 +1,4 @@
 import snowflake from "snowflake-sdk";
-import type { SnowflakeWarehouseConfig } from "../../types/index.js";
 
 // Suppress the SDK's own "Configuring logger" stdout message
 const _origWrite = process.stdout.write.bind(process.stdout);
@@ -7,11 +6,19 @@ const _origWrite = process.stdout.write.bind(process.stdout);
 snowflake.configure({ logLevel: "OFF" } as any);
 (process.stdout.write as any) = _origWrite;
 
+export interface SnowflakeConnectionConfig {
+  account: string;
+  username: string;
+  password: string;
+  database: string;
+  schema: string;
+}
+
 export class SnowflakeClient {
   private connection: snowflake.Connection | null = null;
-  private config: SnowflakeWarehouseConfig;
+  private config: SnowflakeConnectionConfig;
 
-  constructor(config: SnowflakeWarehouseConfig) {
+  constructor(config: SnowflakeConnectionConfig) {
     this.config = config;
   }
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getCached, setCached, clearCache } from "../src/core/extractor/cache.js";
 import { parseJsonResponse } from "../src/core/extractor/claude.js";
 import { buildExtractionPrompt } from "../src/core/extractor/prompts.js";
-import type { CodeContext, WarehouseEvent, PropertyStat } from "../src/types/index.js";
+import type { CodeContext, PropertyStat } from "../src/types/index.js";
 
 describe("cache", () => {
   beforeEach(() => clearCache());
@@ -57,25 +57,13 @@ describe("buildExtractionPrompt", () => {
     all_call_sites: [{ file_path: "src/checkout.ts", line_number: 47, context: "" }],
   };
 
-  const warehouseEvent: WarehouseEvent = {
-    name: "purchase_completed",
-    daily_volume: 2847,
-    first_seen: "2022-03-01",
-    last_seen: "2024-03-15",
-  };
-
   it("includes event name", () => {
-    const prompt = buildExtractionPrompt("purchase_completed", ctx, warehouseEvent, [], {});
+    const prompt = buildExtractionPrompt("purchase_completed", ctx, [], {});
     expect(prompt).toContain("purchase_completed");
   });
 
-  it("includes warehouse signals", () => {
-    const prompt = buildExtractionPrompt("purchase_completed", ctx, warehouseEvent, [], {});
-    expect(prompt).toContain("2,847");
-  });
-
   it("includes literal values section when provided", () => {
-    const prompt = buildExtractionPrompt("purchase_completed", ctx, warehouseEvent, [], {
+    const prompt = buildExtractionPrompt("purchase_completed", ctx, [], {
       payment_method: ["credit_card", "paypal"],
     });
     expect(prompt).toContain("credit_card");

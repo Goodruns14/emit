@@ -4,10 +4,9 @@ import type {
   PushOpts,
   PushResult,
   SnowflakeDestinationConfig,
-  SnowflakeWarehouseConfig,
 } from "../../types/index.js";
-import { SnowflakeClient } from "../warehouse/snowflake.js";
-import { CDP_PRESETS } from "../warehouse/adapters/presets.js";
+import { SnowflakeClient } from "./snowflake-client.js";
+import { CDP_PRESETS } from "./presets.js";
 
 /**
  * Escape single quotes for safe inclusion in Snowflake SQL string literals.
@@ -41,23 +40,15 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
   private resolvedDatabase: string;
   private resolvedSchema: string;
 
-  constructor(
-    config: SnowflakeDestinationConfig,
-    warehouseConfig?: SnowflakeWarehouseConfig,
-  ) {
+  constructor(config: SnowflakeDestinationConfig) {
     this.config = config;
 
-    // Resolve credentials: destination config > warehouse config > env vars
-    this.resolvedAccount =
-      config.account ?? warehouseConfig?.account ?? process.env.SNOWFLAKE_ACCOUNT ?? "";
-    this.resolvedUsername =
-      config.username ?? warehouseConfig?.username ?? process.env.SNOWFLAKE_USERNAME ?? "";
-    this.resolvedPassword =
-      config.password ?? warehouseConfig?.password ?? process.env.SNOWFLAKE_PASSWORD ?? "";
-    this.resolvedDatabase =
-      config.database ?? warehouseConfig?.database ?? process.env.SNOWFLAKE_DATABASE ?? "";
-    this.resolvedSchema =
-      config.schema ?? warehouseConfig?.schema ?? process.env.SNOWFLAKE_SCHEMA ?? "";
+    // Resolve credentials: destination config > env vars
+    this.resolvedAccount = config.account ?? process.env.SNOWFLAKE_ACCOUNT ?? "";
+    this.resolvedUsername = config.username ?? process.env.SNOWFLAKE_USERNAME ?? "";
+    this.resolvedPassword = config.password ?? process.env.SNOWFLAKE_PASSWORD ?? "";
+    this.resolvedDatabase = config.database ?? process.env.SNOWFLAKE_DATABASE ?? "";
+    this.resolvedSchema = config.schema ?? process.env.SNOWFLAKE_SCHEMA ?? "";
 
     const missing: string[] = [];
     if (!this.resolvedAccount) missing.push("account");
@@ -69,7 +60,7 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
     if (missing.length > 0) {
       throw new Error(
         `Missing Snowflake credentials: ${missing.join(", ")}.\n` +
-          "  Set them in the destination config, warehouse config, or via SNOWFLAKE_* environment variables.\n" +
+          "  Set them in the destination config or via SNOWFLAKE_* environment variables.\n" +
           "  The Snowflake user needs MODIFY privilege on the target schema/tables to set COMMENTs.",
       );
     }
@@ -91,14 +82,11 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
    */
   createClient(): SnowflakeClient {
     return new SnowflakeClient({
-      type: "snowflake",
       account: this.resolvedAccount,
       username: this.resolvedUsername,
       password: this.resolvedPassword,
       database: this.resolvedDatabase,
       schema: this.resolvedSchema,
-      schema_type: this.config.schema_type,
-      cdp_preset: this.config.cdp_preset,
     });
   }
 

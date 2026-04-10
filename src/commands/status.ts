@@ -4,6 +4,7 @@ import { loadConfig, resolveOutputPath } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 import { readCatalog } from "../core/catalog/index.js";
 import { getCatalogHealth } from "../core/catalog/health.js";
+import { renderHealthSection } from "../utils/health-render.js";
 
 export function registerStatus(program: Command): void {
   program
@@ -53,35 +54,15 @@ export async function runStatus(opts: { format?: string }): Promise<number> {
   );
   logger.blank();
 
-  logger.summary([
-    { label: "Events:", value: `${health.total_events} total` },
-    { label: "  ✓ High confidence:", value: health.high_confidence },
-    { label: "  ~ Medium confidence:", value: health.medium_confidence },
-    {
-      label: "  ⚠ Low confidence:",
-      value: health.low_confidence > 0
-        ? `${health.low_confidence}   (review recommended)`
-        : health.low_confidence,
-      warn: health.low_confidence > 0,
-    },
-    {
-      label: "  ✗ Not found:",
-      value: health.not_found,
-      warn: health.not_found > 0,
-    },
-  ]);
-
-  logger.blank();
+  renderHealthSection(health);
 
   if (health.stale_events.length > 0) {
+    logger.blank();
     logger.line(chalk.yellow(`Stale (>30 days):`) + "  " + health.stale_events.join(", "));
   }
 
-  if (health.flagged_events.length > 0) {
-    logger.line(chalk.yellow(`Flagged for review:`) + "  " + health.flagged_events.join(", "));
-  }
-
   if (catalog.not_found?.length > 0) {
+    logger.blank();
     logger.line(chalk.red(`Not found in repo:`) + "  " + catalog.not_found.join(", "));
   }
 

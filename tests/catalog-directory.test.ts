@@ -28,7 +28,6 @@ const makeEvent = (overrides: Partial<CatalogEvent> = {}): CatalogEvent => ({
   source_file: "./src/test.ts",
   source_line: 10,
   all_call_sites: [{ file: "./src/test.ts", line: 10 }],
-  warehouse_stats: { daily_volume: 100, first_seen: "2026-01-01", last_seen: "2026-03-01" },
   properties: {
     user_id: {
       description: "User identifier",

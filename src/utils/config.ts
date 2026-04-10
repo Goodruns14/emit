@@ -2,7 +2,6 @@ import { cosmiconfig } from "cosmiconfig";
 import * as path from "path";
 import type {
   EmitConfig,
-  SnowflakeWarehouseConfig,
   DiscriminatorPropertyConfig,
   SdkType,
   LlmProvider,
@@ -99,10 +98,10 @@ const VALID_PROVIDERS = new Set<string>([
 ]);
 
 function validate(config: EmitConfig): void {
-  if (!config.warehouse && !config.source && !config.manual_events?.length) {
+  if (!config.manual_events?.length) {
     throw new Error(
-      "Config must include at least one of: warehouse, source, or manual_events\n" +
-        "  Run `emit init` to set up your configuration."
+      "Config must include manual_events\n" +
+        "  Run `emit init` or add manual_events to your config."
     );
   }
 
@@ -112,33 +111,6 @@ function validate(config: EmitConfig): void {
       `Unknown LLM provider: "${provider}"\n` +
         `  Valid options: claude-code, anthropic, openai, openai-compatible`
     );
-  }
-
-  if (config.warehouse?.type === "snowflake") {
-    const sf = config.warehouse as SnowflakeWarehouseConfig;
-    const required = ["account", "username", "password", "database", "schema"] as const;
-    for (const field of required) {
-      if (!sf[field]) {
-        throw new Error(
-          `Missing required warehouse field: warehouse.${field}\n` +
-            `  Set SNOWFLAKE_${field.toUpperCase()} in your environment.`
-        );
-      }
-    }
-  }
-
-  if (config.source?.type === "segment") {
-    if (!config.source.workspace || !config.source.tracking_plan_id) {
-      throw new Error(
-        "Segment source requires: source.workspace and source.tracking_plan_id"
-      );
-    }
-    if (!process.env.SEGMENT_API_TOKEN) {
-      throw new Error(
-        "Missing required environment variable: SEGMENT_API_TOKEN\n" +
-          "  Get your token at https://app.segment.com/goto-my-workspace/settings/access-management"
-      );
-    }
   }
 
   if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
@@ -176,7 +148,7 @@ function validate(config: EmitConfig): void {
 
 /**
  * Lightweight config loader for the MCP server — resolves the catalog output
- * path without validating warehouse credentials, LLM API keys, etc.
+ * path without validating LLM API keys, etc.
  */
 export async function loadConfigLight(searchFrom?: string): Promise<EmitConfig> {
   const result = await explorer.search(searchFrom ?? process.cwd());

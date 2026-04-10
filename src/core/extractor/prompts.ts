@@ -1,11 +1,10 @@
-import type { CodeContext, WarehouseEvent, PropertyStat, LiteralValues } from "../../types/index.js";
+import type { CodeContext, PropertyStat, LiteralValues } from "../../types/index.js";
 
 export function buildExtractionPrompt(
   eventName: string,
   codeContext: CodeContext,
-  warehouseEvent: WarehouseEvent,
   propertyStats: PropertyStat[],
-  literalValues: LiteralValues
+  literalValues: LiteralValues,
 ): string {
   const additionalSites = codeContext.all_call_sites.slice(1);
   const additionalContext =
@@ -27,23 +26,21 @@ export function buildExtractionPrompt(
           .join("\n")}\n`
       : "";
 
+  const warehouseSection = propertyStats.length > 0
+    ? `\nProperty stats: ${JSON.stringify(propertyStats, null, 2)}\n`
+    : "";
+
   return `
 You are analyzing analytics instrumentation code to extract semantic metadata.
 Your job is to understand what this event means in business terms.
 
 Event name: ${eventName}${
     codeContext.segment_event_name
-      ? `\nSegment/warehouse event name: "${codeContext.segment_event_name}" (this is the actual string name as it appears in the event tracking system)`
+      ? `\nEvent name in tracking system: "${codeContext.segment_event_name}"`
       : ""
   }
 Call sites found: ${codeContext.all_call_sites.length}
-
-Warehouse signals:
-- Daily volume: ${warehouseEvent.daily_volume.toLocaleString()}
-- First seen: ${warehouseEvent.first_seen}
-- Last seen: ${warehouseEvent.last_seen}
-- Property stats: ${JSON.stringify(propertyStats, null, 2)}
-${literalSection}
+${warehouseSection}${literalSection}
 Primary call site (${codeContext.file_path}:${codeContext.line_number}):
 \`\`\`
 ${codeContext.context}
@@ -72,7 +69,7 @@ Rules:
 - If you cannot determine something confidently, say so explicitly
 - Never guess. Low confidence is better than wrong confidence.
 - Edge cases must be visible in the code — do not invent them
-- Only include properties you can actually see in the code or warehouse stats
+- Only include properties you can actually see in the code
 - For properties where literal values were provided above, reflect those in your description (e.g. "one of: X, Y, Z")
 `.trim();
 }

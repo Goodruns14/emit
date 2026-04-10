@@ -103,7 +103,7 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
   }
 
   async push(catalog: EmitCatalog, opts: PushOpts = {}): Promise<PushResult> {
-    const result: PushResult = { pushed: 0, skipped: 0, errors: [] };
+    const result: PushResult = { pushed: 0, skipped: 0, skipped_events: [], errors: [] };
     const events = catalog.events ?? {};
     const targetEvents = opts.events
       ? Object.fromEntries(
@@ -135,6 +135,7 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
 
         if (!existingTables.has(tableName)) {
           result.skipped++;
+          result.skipped_events.push({ event: eventName, looked_for: tableName, possible_matches: [] });
           continue;
         }
 

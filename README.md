@@ -1,8 +1,8 @@
 # Emit
 
-Automatic event catalog generator — extract semantic metadata from your instrumentation code.
+Automatic event catalog generator —> extract semantic metadata from your instrumentation code.
 
-Emit scans your codebase for analytics tracking calls (Segment, PostHog, Amplitude, Mixpanel, RudderStack, etc.), enriches them with warehouse data and LLM-powered analysis, and produces a structured event catalog (`emit.catalog.yml`).
+Emit scans your codebase for analytics tracking calls (Segment, Mixpanel, homegrown pipelines etc.,) and produces a structured event and property catalog (`emit.catalog.yml`).
 
 ## Prerequisites
 

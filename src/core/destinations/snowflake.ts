@@ -135,7 +135,7 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
 
         if (!existingTables.has(tableName)) {
           result.skipped++;
-          result.skipped_events.push(eventName);
+          result.skipped_events.push({ event: eventName, looked_for: tableName, possible_matches: [] });
           continue;
         }
 

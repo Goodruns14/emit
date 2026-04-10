@@ -12,10 +12,11 @@ import { RepoScanner } from "../core/scanner/index.js";
 import { setExcludePaths } from "../core/scanner/search.js";
 import { extractAllLiteralValues } from "../core/scanner/context.js";
 import { MetadataExtractor } from "../core/extractor/index.js";
-import { reconcile } from "../core/reconciler/index.js";
 import { writeOutput } from "../core/writer/index.js";
 import { diffCatalogs } from "../core/diff/index.js";
 import { formatTerminalDiff } from "../core/diff/format.js";
+import { getCatalogHealth } from "../core/catalog/health.js";
+import { renderHealthSection } from "../utils/health-render.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
   WarehouseEvent,
@@ -430,11 +431,60 @@ async function runScan(opts: ScanOptions): Promise<number> {
         ctx,
         event,
         propertyStats,
-        literalValues
+        literalValues,
+        !!warehouseAdapter
       );
     }
 
-    const reconciled = reconcile(meta, ctx, event, propertyStats, literalValues);
+    // ── Build catalog event ──────────────────────────────────────
+    const mergedProperties: CatalogEvent["properties"] = {};
+    for (const [propName, propMeta] of Object.entries(meta.properties)) {
+      const stat = propertyStats.find((s) => s.property_name === propName);
+      mergedProperties[propName] = {
+        ...propMeta,
+        null_rate: stat?.null_rate ?? 0,
+        cardinality: stat?.cardinality ?? 0,
+        sample_values: stat?.sample_values ?? [],
+        code_sample_values: literalValues[propName] ?? [],
+      };
+    }
+    const eventFlags = [...meta.flags];
+    for (const [propName, values] of Object.entries(literalValues)) {
+      if (!mergedProperties[propName]) {
+        eventFlags.push(
+          `Property '${propName}' has code literal values but was not described by LLM — review`
+        );
+        mergedProperties[propName] = {
+          description: "See code_sample_values for known literal values; LLM did not extract a description.",
+          edge_cases: [],
+          null_rate: 0,
+          cardinality: 0,
+          sample_values: [],
+          code_sample_values: values,
+          confidence: "low",
+        };
+      }
+    }
+
+    const reconciled: CatalogEvent = {
+      description: meta.event_description,
+      fires_when: meta.fires_when,
+      confidence: meta.confidence,
+      confidence_reason: meta.confidence_reason,
+      review_required: meta.confidence === "low",
+      ...(ctx.segment_event_name && { segment_event_name: ctx.segment_event_name }),
+      ...(ctx.track_pattern && { track_pattern: ctx.track_pattern }),
+      source_file: ctx.file_path,
+      source_line: ctx.line_number,
+      all_call_sites: ctx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
+      warehouse_stats: {
+        daily_volume: event.daily_volume,
+        first_seen: event.first_seen,
+        last_seen: event.last_seen,
+      },
+      properties: mergedProperties,
+      flags: eventFlags,
+    };
     reconciled.context_hash = contextHash;
     const modifier = getLastModifier(ctx.file_path, ctx.line_number);
     if (modifier) reconciled.last_modified_by = modifier;
@@ -636,6 +686,8 @@ async function runScan(opts: ScanOptions): Promise<number> {
       logger.blank();
       logger.succeed(`Catalog saved → ${outputPath}`);
       logger.line(chalk.gray("  Safe to commit to git — it's just event metadata, no credentials or secrets."));
+      logger.blank();
+      renderHealthSection(getCatalogHealth(output));
     } else {
       logger.blank();
       logger.line(chalk.gray("  Discarded. Run ") + chalk.cyan("emit scan") + chalk.gray(" to try again."));
@@ -645,12 +697,16 @@ async function runScan(opts: ScanOptions): Promise<number> {
     logger.blank();
     logger.line(diffSummary);
     logger.blank();
+    renderHealthSection(getCatalogHealth(output));
+    logger.blank();
     logger.warn("Dry run — catalog not written");
   } else {
     writeOutput(output, outputPath);
     const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
     logger.blank();
     logger.line(diffSummary);
+    logger.blank();
+    renderHealthSection(getCatalogHealth(output));
     logger.blank();
     logger.info(`Written to ${outputPath}`);
   }

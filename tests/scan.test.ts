@@ -6,7 +6,7 @@ import * as yaml from "js-yaml";
 
 // ── Mock the LLM layer ─────────────────────────────────────────────
 // We mock callLLM so tests never hit a real API. Everything else
-// (config loading, scanner, reconciler, writer) runs for real.
+// (config loading, scanner, writer) runs for real.
 vi.mock("../src/core/extractor/claude.js", () => ({
   callLLM: vi.fn(),
   parseJsonResponse: vi.fn((text: string, fallback: any) => {
@@ -25,7 +25,6 @@ import { loadConfig, resolveOutputPath } from "../src/utils/config.js";
 import { RepoScanner } from "../src/core/scanner/index.js";
 import { extractAllLiteralValues } from "../src/core/scanner/context.js";
 import { MetadataExtractor } from "../src/core/extractor/index.js";
-import { reconcile } from "../src/core/reconciler/index.js";
 import { writeOutput } from "../src/core/writer/index.js";
 import type { EmitCatalog, CatalogEvent, ExtractedMetadata } from "../src/types/index.js";
 
@@ -127,7 +126,23 @@ describe("emit scan — integration", () => {
       const meta = await extractor.extractMetadata(
         event.name, ctx, event, [], literalValues
       );
-      const reconciled = reconcile(meta, ctx, event, [], literalValues);
+      const reconciled: CatalogEvent = {
+        description: meta.event_description,
+        fires_when: meta.fires_when,
+        confidence: meta.confidence,
+        confidence_reason: meta.confidence_reason,
+        review_required: meta.confidence === "low",
+        source_file: ctx.file_path,
+        source_line: ctx.line_number,
+        all_call_sites: ctx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
+        warehouse_stats: { daily_volume: event.daily_volume, first_seen: event.first_seen, last_seen: event.last_seen },
+        properties: Object.fromEntries(
+          Object.entries(meta.properties).map(([name, p]) => [name, {
+            ...p, null_rate: 0, cardinality: 0, sample_values: [], code_sample_values: literalValues[name] ?? [],
+          }])
+        ),
+        flags: [...meta.flags],
+      };
       catalog[event.name] = reconciled;
     }
 
@@ -203,40 +218,6 @@ describe("emit scan — integration", () => {
     expect(ctx.match_type).toBe("not_found");
     expect(ctx.file_path).toBe("");
     expect(ctx.all_call_sites).toEqual([]);
-  });
-
-  it("reconciler downgrades confidence when warehouse has unknown properties", async () => {
-    const scanner = new RepoScanner({
-      paths: ["./"],
-      sdk: "custom",
-      trackPattern: "posthog.capture(",
-    });
-
-    process.cwd = () => CALCOM_DIR;
-
-    const ctx = await scanner.findEvent("app_card_details_clicked");
-    if (ctx.match_type === "not_found") return; // skip if not found
-
-    const extracted: ExtractedMetadata = {
-      event_description: "User clicked app card details",
-      fires_when: "Click on app card",
-      confidence: "high",
-      confidence_reason: "Clear pattern",
-      properties: {},
-      flags: [],
-    };
-
-    const fakeWarehouseProps = [
-      { property_name: "mystery_prop", null_rate: 5, cardinality: 10, sample_values: ["a", "b"] },
-    ];
-
-    const event = { name: "app_card_details_clicked", daily_volume: 100, first_seen: "2023-01-01", last_seen: "2024-01-01" };
-    const reconciled = reconcile(extracted, ctx, event, fakeWarehouseProps, {});
-
-    // Should be downgraded from high because warehouse has a property the LLM didn't find
-    expect(reconciled.confidence).not.toBe("high");
-    expect(reconciled.flags.length).toBeGreaterThan(0);
-    expect(reconciled.flags[0]).toContain("mystery_prop");
   });
 
   it("writes valid YAML that round-trips cleanly", async () => {

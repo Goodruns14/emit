@@ -10,7 +10,7 @@ Emit is an open-source CLI tool that automatically generates event metadata cata
 
 - **Phase 0 (PoC):** Complete
 - **Phase 1 (CLI):** Complete — all commands built and working
-- **Phase 2 (GitHub Action):** Complete — pending real-world testing
+- **Phase 2 (GitHub Action):** Removed for MVP simplification
 - **Phase 3 (Hosted Platform + UI):** Not started
 - **Phase 4 (MCP Server):** Complete — local MCP server with 8 tools, `emit mcp` command
 - **Phase 5 (Implementation Agent):** Not started
@@ -32,7 +32,6 @@ src/
     discriminator/   # Discriminator property expansion (god events → sub-events)
     extractor/       # Multi-provider LLM client, prompt templates
     import/          # CSV/JSON event list parsing
-    reconciler/      # Cross-reference LLM output vs warehouse signals
     scanner/         # Grep-based code search, context extraction
     sources/         # Segment tracking plan import
     warehouse/       # Snowflake adapter (read-only), event ranking
@@ -46,7 +45,7 @@ tests/               # Vitest unit tests (run with: npx vitest run tests/)
 
 ```bash
 npm run build              # TypeScript build → dist/
-npx vitest run tests/      # Run unit tests (212 tests across 11 files)
+npx vitest run tests/      # Run unit tests (~198 tests across 9 files)
 node dist/cli.js --help    # Run CLI locally
 node dist/cli.js init      # Interactive setup wizard
 node dist/cli.js scan      # Generate catalog from code
@@ -71,7 +70,6 @@ node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
 | `src/core/scanner/index.ts` | Code search — finds tracking calls via grep |
 | `src/core/scanner/search.ts` | Grep patterns for SDK-specific tracking calls |
 | `src/core/scanner/context.ts` | Extracts code context windows around matches |
-| `src/core/reconciler/index.ts` | Confidence scoring — cross-references LLM vs warehouse |
 | `src/utils/config.ts` | Config loading via cosmiconfig, validation, env var resolution. Also exports `loadConfigLight()` for MCP (skips warehouse/LLM validation) |
 | `src/types/index.ts` | All TypeScript types — EmitConfig, CatalogEvent, LlmProvider, etc. |
 

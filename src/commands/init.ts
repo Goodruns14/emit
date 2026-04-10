@@ -697,7 +697,6 @@ async function runInit(dir?: string): Promise<number> {
 
       dp.close();
       const valueChoice = await arrowSelect([
-        { label: "Discover from warehouse automatically", value: "discover" as const },
         { label: "List specific values now", value: "list" as const },
       ]);
 
@@ -713,7 +712,7 @@ async function runInit(dir?: string): Promise<number> {
 
       discriminatorEntries.push({ eventName, property, values });
       logger.blank();
-      logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : " (discover from warehouse)"}`);
+      logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : ""}`);
 
       logger.blank();
       const moreAnswer = (await dp2.ask("  Add another? [y/N]: ")).trim().toLowerCase();
@@ -766,17 +765,15 @@ async function runInit(dir?: string): Promise<number> {
   // ── Validate config has a data source ────────────────────────────────────
   const written = yaml.load(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
   const hasDataSource =
-    !!written["warehouse"] ||
-    !!written["source"] ||
-    (Array.isArray(written["manual_events"]) && (written["manual_events"] as unknown[]).length > 0);
+    Array.isArray(written["manual_events"]) && (written["manual_events"] as unknown[]).length > 0;
 
   if (!hasDataSource) {
     logger.blank();
     logger.warn(
-      "Your config has no event source yet (no warehouse, source, or manual_events)."
+      "Your config has no events yet (manual_events is empty)."
     );
     logger.line(
-      chalk.gray("  emit scan will fail until you add one. Options:")
+      chalk.gray("  emit scan will fail until you add events. Options:")
     );
     logger.line(
       chalk.gray("  • Add events:     ") + chalk.cyan("emit import <file>")
@@ -785,11 +782,6 @@ async function runInit(dir?: string): Promise<number> {
       chalk.gray("  • Add manually:   add ") +
         chalk.cyan("manual_events:") +
         chalk.gray(" to emit.config.yml")
-    );
-    logger.line(
-      chalk.gray("  • Add warehouse:  add ") +
-        chalk.cyan("warehouse:") +
-        chalk.gray(" section to emit.config.yml")
     );
   }
 

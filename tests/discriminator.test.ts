@@ -8,7 +8,6 @@ import * as path from "path";
 import * as os from "os";
 import type {
   EmitConfig,
-  WarehouseAdapter,
   CatalogEvent,
   EmitCatalog,
   CodeContext,
@@ -139,7 +138,7 @@ describe("expandDiscriminators", () => {
       },
     };
 
-    const result = await expandDiscriminators(config, null);
+    const result = await expandDiscriminators(config);
     expect(result).toHaveLength(1);
     expect(result[0].parentEvent).toBe("button_click");
     expect(result[0].property).toBe("button_id");
@@ -147,7 +146,7 @@ describe("expandDiscriminators", () => {
     expect(result[0].source).toBe("config");
   });
 
-  it("falls back to warehouse when no values provided", async () => {
+  it("returns empty gracefully when no explicit values provided", async () => {
     const config: EmitConfig = {
       ...baseConfig,
       discriminator_properties: {
@@ -155,35 +154,12 @@ describe("expandDiscriminators", () => {
       },
     };
 
-    const mockAdapter: WarehouseAdapter = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      getTopEvents: vi.fn(),
-      getPropertyStats: vi.fn(),
-      getDistinctPropertyValues: vi.fn().mockResolvedValue(["login", "logout", "signup"]),
-    };
-
-    const result = await expandDiscriminators(config, mockAdapter);
-    expect(result).toHaveLength(1);
-    expect(result[0].values).toEqual(["login", "logout", "signup"]);
-    expect(result[0].source).toBe("warehouse");
-    expect(mockAdapter.getDistinctPropertyValues).toHaveBeenCalledWith("button_click", "button_id", 500);
-  });
-
-  it("returns empty gracefully when no warehouse and no explicit values", async () => {
-    const config: EmitConfig = {
-      ...baseConfig,
-      discriminator_properties: {
-        button_click: { property: "button_id" },
-      },
-    };
-
-    const result = await expandDiscriminators(config, null);
+    const result = await expandDiscriminators(config);
     expect(result).toHaveLength(0);
   });
 
   it("returns empty when discriminator_properties is undefined", async () => {
-    const result = await expandDiscriminators(baseConfig, null);
+    const result = await expandDiscriminators(baseConfig);
     expect(result).toHaveLength(0);
   });
 });
@@ -259,7 +235,6 @@ describe("catalog writer with sub-events", () => {
     source_file: "test.ts",
     source_line: 1,
     all_call_sites: [],
-    warehouse_stats: { daily_volume: 0, first_seen: "unknown", last_seen: "unknown" },
     properties: {},
     flags: [],
     ...overrides,

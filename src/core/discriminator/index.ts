@@ -1,6 +1,5 @@
 import type {
   EmitConfig,
-  WarehouseAdapter,
   DiscriminatorPropertyConfig,
 } from "../../types/index.js";
 import { logger } from "../../utils/logger.js";
@@ -9,7 +8,7 @@ export interface DiscriminatorExpansion {
   parentEvent: string;
   property: string;
   values: string[];
-  source: "config" | "warehouse" | "code";
+  source: "config" | "code";
 }
 
 function getPropertyAndValues(
@@ -23,7 +22,6 @@ function getPropertyAndValues(
 
 export async function expandDiscriminators(
   config: EmitConfig,
-  warehouseAdapter: WarehouseAdapter | null,
 ): Promise<DiscriminatorExpansion[]> {
   if (!config.discriminator_properties) return [];
 
@@ -32,7 +30,7 @@ export async function expandDiscriminators(
   for (const [eventName, cfg] of Object.entries(config.discriminator_properties)) {
     const { property, values } = getPropertyAndValues(cfg);
 
-    // Priority 1: Config-provided values
+    // Config-provided values
     if (values && values.length > 0) {
       expansions.push({
         parentEvent: eventName,
@@ -43,38 +41,10 @@ export async function expandDiscriminators(
       continue;
     }
 
-    // Priority 2: Warehouse discovery
-    if (warehouseAdapter?.getDistinctPropertyValues) {
-      try {
-        const discovered = await warehouseAdapter.getDistinctPropertyValues(
-          eventName,
-          property,
-          500
-        );
-        if (discovered.length > 0) {
-          if (discovered.length >= 500) {
-            logger.warn(
-              `discriminator_properties.${eventName}: warehouse returned 500+ values for "${property}" (capped at 500). ` +
-              `Consider adding explicit values in config to limit scope.`
-            );
-          }
-          expansions.push({
-            parentEvent: eventName,
-            property,
-            values: discovered,
-            source: "warehouse",
-          });
-          continue;
-        }
-      } catch {
-        // Fall through to empty
-      }
-    }
-
     // No values discovered — skip with a warning
     logger.warn(
       `discriminator_properties.${eventName}: no values found for "${property}". ` +
-      `Add explicit values in config or connect a warehouse.`
+      `Add explicit values in config.`
     );
   }
 

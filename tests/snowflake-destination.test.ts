@@ -3,7 +3,6 @@ import { SnowflakeDestinationAdapter } from "../src/core/destinations/snowflake.
 import type {
   EmitCatalog,
   SnowflakeDestinationConfig,
-  SnowflakeWarehouseConfig,
 } from "../src/types/index.js";
 
 // ── Mock SnowflakeClient ──────────────────────────────────────────────
@@ -11,7 +10,7 @@ const mockQuery = vi.fn();
 const mockConnect = vi.fn().mockResolvedValue(undefined);
 const mockDisconnect = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("../src/core/warehouse/snowflake.js", () => ({
+vi.mock("../src/core/destinations/snowflake-client.js", () => ({
   SnowflakeClient: vi.fn().mockImplementation(() => ({
     connect: mockConnect,
     query: mockQuery,
@@ -44,7 +43,6 @@ const baseCatalog: EmitCatalog = {
       source_file: "src/checkout.ts",
       source_line: 47,
       all_call_sites: [],
-      warehouse_stats: { daily_volume: 100, first_seen: "2024-01-01", last_seen: "2024-03-01" },
       properties: {
         bill_amount: {
           description: "Total transaction value in cents.",
@@ -76,7 +74,6 @@ const baseCatalog: EmitCatalog = {
       source_file: "src/auth.ts",
       source_line: 12,
       all_call_sites: [],
-      warehouse_stats: { daily_volume: 50, first_seen: "2024-01-01", last_seen: "2024-03-01" },
       properties: {
         email: {
           description: "User's email address.",
@@ -243,29 +240,10 @@ describe("SnowflakeDestinationAdapter", () => {
     expect(result.skipped).toBe(1); // user-signed-up table missing
   });
 
-  it("resolves credentials from destination config first", () => {
+  it("resolves credentials from destination config", () => {
     const adapter = new SnowflakeDestinationAdapter(baseDestConfig);
     expect(adapter.name).toBe("Snowflake");
     // No error means credentials resolved from dest config
-  });
-
-  it("falls back to warehouse config for missing destination credentials", () => {
-    const destConfig: SnowflakeDestinationConfig = {
-      type: "snowflake",
-      schema_type: "per_event",
-    };
-    const whConfig: SnowflakeWarehouseConfig = {
-      type: "snowflake",
-      account: "wh-account",
-      username: "wh-user",
-      password: "wh-pass",
-      database: "WH_DB",
-      schema: "WH_SCHEMA",
-      schema_type: "per_event",
-    };
-
-    const adapter = new SnowflakeDestinationAdapter(destConfig, whConfig);
-    expect(adapter.name).toBe("Snowflake");
   });
 
   it("falls back to env vars for missing credentials", () => {

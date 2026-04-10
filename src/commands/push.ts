@@ -93,7 +93,7 @@ async function runPush(opts: PushOptions): Promise<number> {
   for (const destConfig of destinationConfigs) {
     let adapter;
     try {
-      adapter = createDestinationAdapter(destConfig, config.warehouse);
+      adapter = createDestinationAdapter(destConfig);
     } catch (err: any) {
       logger.error(`${destConfig.type}: ${err.message}`);
       hasErrors = true;

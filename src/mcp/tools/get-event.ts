@@ -56,7 +56,6 @@ export function getEventTool(catalogPath: string, input: GetEventInput) {
             source_file: event.source_file,
             source_line: event.source_line,
             all_call_sites: event.all_call_sites,
-            warehouse_stats: event.warehouse_stats,
             properties: propertySummary,
             flags: event.flags,
             review_required: event.review_required,

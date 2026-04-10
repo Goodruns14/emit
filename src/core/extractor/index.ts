@@ -1,6 +1,5 @@
 import type {
   CodeContext,
-  WarehouseEvent,
   PropertyStat,
   LiteralValues,
   ExtractedMetadata,
@@ -34,9 +33,8 @@ export class MetadataExtractor {
   async extractMetadata(
     eventName: string,
     codeContext: CodeContext,
-    warehouseEvent: WarehouseEvent,
     propertyStats: PropertyStat[],
-    literalValues: LiteralValues
+    literalValues: LiteralValues,
   ): Promise<ExtractedMetadata> {
     const cacheKey = codeContext.context + JSON.stringify(propertyStats);
     const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
@@ -45,9 +43,8 @@ export class MetadataExtractor {
     const prompt = buildExtractionPrompt(
       eventName,
       codeContext,
-      warehouseEvent,
       propertyStats,
-      literalValues
+      literalValues,
     );
 
     const text = await callLLM(prompt, this.cfg);

@@ -2,13 +2,6 @@
 // WAREHOUSE / SOURCE DATA TYPES
 // ─────────────────────────────────────────────
 
-export interface WarehouseEvent {
-  name: string;
-  daily_volume: number;
-  first_seen: string;
-  last_seen: string;
-}
-
 export interface PropertyStat {
   property_name: string;
   null_rate: number;
@@ -84,11 +77,6 @@ export interface CatalogEvent {
   source_file: string;
   source_line: number;
   all_call_sites: { file: string; line: number }[];
-  warehouse_stats: {
-    daily_volume: number;
-    first_seen: string;
-    last_seen: string;
-  };
   properties: Record<
     string,
     {
@@ -181,28 +169,21 @@ export interface CatalogDiff {
 // ADAPTER INTERFACES
 // ─────────────────────────────────────────────
 
-export interface WarehouseAdapter {
-  connect(): Promise<void>;
-  disconnect(): Promise<void>;
-  getTopEvents(limit: number): Promise<WarehouseEvent[]>;
-  getPropertyStats(eventName: string): Promise<PropertyStat[]>;
-  getDistinctPropertyValues?(eventName: string, propertyPath: string, limit?: number): Promise<string[]>;
-}
-
-export interface SourceAdapter {
-  listEvents(): Promise<WarehouseEvent[]>;
-  getPropertySchema(eventName: string): Promise<PropertyStat[]>;
-}
-
 export interface PushOpts {
   dryRun?: boolean;
   events?: string[];
 }
 
+export interface SkippedEvent {
+  event: string;
+  looked_for: string;
+  possible_matches: string[];
+}
+
 export interface PushResult {
   pushed: number;
   skipped: number;
-  skipped_events: string[];
+  skipped_events: SkippedEvent[];
   errors: string[];
 }
 
@@ -218,8 +199,6 @@ export interface DestinationAdapter {
 export type SchemaType = "monolith" | "per_event" | "custom";
 export type SdkType = "segment" | "rudderstack" | "snowplow" | "custom";
 export type DestinationType = "segment" | "amplitude" | "mixpanel" | "snowflake";
-export type SourceType = "segment";
-export type WarehouseType = "snowflake";
 
 // ─────────────────────────────────────────────
 // LLM PROVIDER TYPES
@@ -250,39 +229,6 @@ export interface LlmCallConfig {
   api_key_env?: string;
 }
 
-export type CdpPreset = "segment" | "rudderstack" | "snowplow" | "none";
-
-export interface SnowflakeWarehouseConfig {
-  type: "snowflake";
-  account: string;
-  username: string;
-  password: string;
-  database: string;
-  schema: string;
-  schema_type: SchemaType;
-  /** CDP preset — sets default table names and exclude lists */
-  cdp_preset?: CdpPreset;
-  events_table?: string;
-  /** Regex pattern to filter tables in per_event mode (e.g. "^TRACKS_.*") */
-  table_pattern?: string;
-  /** Tables to exclude in per_event mode */
-  exclude_tables?: string[];
-  top_n?: number;
-  custom?: {
-    table: string;
-    event_name_column: string;
-    properties_column: string;
-    timestamp_column: string;
-    properties_storage: "json" | "flattened";
-  };
-}
-
-export interface SegmentSourceConfig {
-  type: "segment";
-  workspace: string;
-  tracking_plan_id: string;
-}
-
 export interface SegmentDestinationConfig {
   type: "segment";
   workspace: string;
@@ -298,6 +244,8 @@ export interface MixpanelDestinationConfig {
   type: "mixpanel";
   project_id: string | number;
 }
+
+export type CdpPreset = "segment" | "rudderstack" | "snowplow" | "none";
 
 export interface SnowflakeDestinationConfig {
   type: "snowflake";
@@ -322,8 +270,6 @@ export type DiscriminatorPropertyConfig = string | {
 };
 
 export interface EmitConfig {
-  warehouse?: SnowflakeWarehouseConfig;
-  source?: SegmentSourceConfig;
   manual_events?: string[];
   discriminator_properties?: Record<string, DiscriminatorPropertyConfig>;
   repo: {
@@ -357,4 +303,5 @@ export interface CatalogHealth {
   review_required: number;
   stale_events: string[];
   flagged_events: string[];
+  flagged_event_details: { event: string; flags: string[] }[];
 }

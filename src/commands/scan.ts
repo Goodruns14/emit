@@ -6,8 +6,6 @@ import { logger } from "../utils/logger.js";
 import { getCurrentCommit, getLastModifier } from "../utils/git.js";
 import { computeContextHash } from "../utils/hash.js";
 import { readCatalog, catalogExists } from "../core/catalog/index.js";
-import { createWarehouseAdapter } from "../core/warehouse/index.js";
-import { createSourceAdapter } from "../core/sources/index.js";
 import { RepoScanner } from "../core/scanner/index.js";
 import { setExcludePaths } from "../core/scanner/search.js";
 import { extractAllLiteralValues } from "../core/scanner/context.js";
@@ -19,12 +17,9 @@ import { getCatalogHealth } from "../core/catalog/health.js";
 import { renderHealthSection } from "../utils/health-render.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
-  WarehouseEvent,
   PropertyStat,
   CatalogEvent,
   EmitCatalog,
-  WarehouseAdapter,
-  SourceAdapter,
   LlmProvider,
   ResolvedEvent,
 } from "../types/index.js";
@@ -95,58 +90,18 @@ async function runScan(opts: ScanOptions): Promise<number> {
     return 1;
   }
 
-  // ── Connect to data source ────────────────────────────────────────
-  const usingManualEvents = (config.manual_events?.length ?? 0) > 0;
-  let events: WarehouseEvent[];
-  let warehouseAdapter: WarehouseAdapter | null = null;
-  let sourceAdapter: SourceAdapter | null = null;
+  // ── Build events list from manual_events ────────────────────────────
+  type EventEntry = { name: string };
+  let events: EventEntry[];
 
-  if (usingManualEvents) {
+  if ((config.manual_events?.length ?? 0) > 0) {
     if (!json) logger.info(`Using ${config.manual_events!.length} manually specified events`);
     events = config.manual_events!.map((nameOrObj: any) => {
-      // Handle both string[] and {name: string}[] YAML formats
       const name = typeof nameOrObj === "string" ? nameOrObj : String(nameOrObj?.name ?? nameOrObj);
-      return { name, daily_volume: 0, first_seen: "unknown", last_seen: "unknown" };
+      return { name };
     });
-  } else if (config.warehouse) {
-    if (!json) logger.spin("Connecting to Snowflake...");
-    try {
-      warehouseAdapter = createWarehouseAdapter(config.warehouse);
-      await warehouseAdapter.connect();
-      if (!json) logger.succeed("Snowflake connected (read only)");
-    } catch (err: any) {
-      logger.fail("Snowflake connection failed");
-      logger.error(err.message);
-      return 1;
-    }
-
-    const limit = opts.topN
-      ? parseInt(opts.topN)
-      : (config.warehouse.top_n ?? 50);
-
-    if (!json) logger.spin(`Pulling top ${limit} events by volume...`);
-    try {
-      events = await warehouseAdapter.getTopEvents(limit);
-      if (!json) logger.succeed(`Found ${events.length} events`);
-    } catch (err: any) {
-      logger.fail("Failed to fetch events");
-      logger.error(err.message);
-      await warehouseAdapter.disconnect().catch(() => {});
-      return 1;
-    }
-  } else if (config.source) {
-    if (!json) logger.spin("Connecting to Segment...");
-    try {
-      sourceAdapter = createSourceAdapter(config.source);
-      events = await sourceAdapter.listEvents();
-      if (!json) logger.succeed(`Found ${events.length} events in tracking plan`);
-    } catch (err: any) {
-      logger.fail("Segment connection failed");
-      logger.error(err.message);
-      return 1;
-    }
   } else {
-    logger.error("No data source configured. Run `emit init` or add manual_events to config.");
+    logger.error("No events configured. Run `emit init` or add manual_events to config.");
     return 1;
   }
 
@@ -166,13 +121,12 @@ async function runScan(opts: ScanOptions): Promise<number> {
     const unmatchedNames = requestedNames.filter((n) => !events.some((e) => e.name === n));
     events = [
       ...matched,
-      ...unmatchedNames.map((name) => ({ name, daily_volume: 0, first_seen: "unknown", last_seen: "unknown" })),
+      ...unmatchedNames.map((name) => ({ name })),
     ];
   } else if (opts.event) {
     const matched = events.filter((e) => e.name === opts.event);
     if (matched.length === 0) {
-      // Allow scanning an event not in warehouse when using --event flag
-      events = [{ name: opts.event, daily_volume: 0, first_seen: "unknown", last_seen: "unknown" }];
+      events = [{ name: opts.event }];
     } else {
       events = matched;
     }
@@ -198,7 +152,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
       [...requestedNames].filter((n) => n.includes("."))
     );
 
-    const expansions = await expandDiscriminators(config, warehouseAdapter);
+    const expansions = await expandDiscriminators(config);
 
     for (const exp of expansions) {
       parentEventSet.add(exp.parentEvent);
@@ -230,23 +184,13 @@ async function runScan(opts: ScanOptions): Promise<number> {
 
         // Add sub-event to the events list if not already present
         if (!events.some((e) => e.name === subEventName)) {
-          events.push({
-            name: subEventName,
-            daily_volume: 0,
-            first_seen: "unknown",
-            last_seen: "unknown",
-          });
+          events.push({ name: subEventName });
         }
       }
 
       // Ensure the parent is in the events list if it was requested or has sub-events
       if (requestedNames.has(exp.parentEvent) && !events.some((e) => e.name === exp.parentEvent)) {
-        events.push({
-          name: exp.parentEvent,
-          daily_volume: 0,
-          first_seen: "unknown",
-          last_seen: "unknown",
-        });
+        events.push({ name: exp.parentEvent });
       }
     }
 
@@ -283,14 +227,14 @@ async function runScan(opts: ScanOptions): Promise<number> {
     logger.blank();
   }
 
-  const located: WarehouseEvent[] = [];
+  const located: EventEntry[] = [];
   const notFound: string[] = [];
   const codeContextMap = new Map<string, Awaited<ReturnType<RepoScanner["findEvent"]>>>();
 
   // Run grep searches concurrently, capped to avoid spawning too many
   // child processes at once (each findEvent can spawn multiple greps).
   const SCAN_CONCURRENCY = 20;
-  const scanResults: { event: WarehouseEvent; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
+  const scanResults: { event: EventEntry; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
   let scanIdx = 0;
   let scanCompleted = 0;
   async function scanWorker() {
@@ -376,32 +320,8 @@ async function runScan(opts: ScanOptions): Promise<number> {
     const previousEntry = previousCatalog?.events[event.name];
 
     if (previousEntry?.context_hash === contextHash) {
-      // Code unchanged — skip LLM but still refresh warehouse property stats
-      const propertyStatsForUnchanged: PropertyStat[] = warehouseAdapter
-        ? await warehouseAdapter.getPropertyStats(event.name).catch(() => [])
-        : [];
-
-      const updatedProperties = { ...previousEntry.properties };
-      for (const stat of propertyStatsForUnchanged) {
-        if (updatedProperties[stat.property_name]) {
-          updatedProperties[stat.property_name] = {
-            ...updatedProperties[stat.property_name],
-            null_rate: stat.null_rate,
-            cardinality: stat.cardinality,
-            sample_values: stat.sample_values,
-          };
-        }
-      }
-
-      catalog[event.name] = {
-        ...previousEntry,
-        warehouse_stats: {
-          daily_volume: event.daily_volume,
-          first_seen: event.first_seen,
-          last_seen: event.last_seen,
-        },
-        properties: updatedProperties,
-      };
+      // Code unchanged — skip LLM
+      catalog[event.name] = { ...previousEntry };
       stats[previousEntry.confidence]++;
       unchanged++;
       extracted++;
@@ -409,9 +329,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
       continue;
     }
 
-    const propertyStats: PropertyStat[] = warehouseAdapter
-      ? await warehouseAdapter.getPropertyStats(event.name).catch(() => [])
-      : [];
+    const propertyStats: PropertyStat[] = [];
 
     const subInfo = subEventMap.get(event.name);
     let meta;
@@ -429,10 +347,8 @@ async function runScan(opts: ScanOptions): Promise<number> {
       meta = await extractor.extractMetadata(
         event.name,
         ctx,
-        event,
         propertyStats,
         literalValues,
-        !!warehouseAdapter
       );
     }
 
@@ -477,11 +393,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
       source_file: ctx.file_path,
       source_line: ctx.line_number,
       all_call_sites: ctx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
-      warehouse_stats: {
-        daily_volume: event.daily_volume,
-        first_seen: event.first_seen,
-        last_seen: event.last_seen,
-      },
       properties: mergedProperties,
       flags: eventFlags,
     };
@@ -710,9 +621,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
     logger.blank();
     logger.info(`Written to ${outputPath}`);
   }
-
-  // Disconnect
-  if (warehouseAdapter) await warehouseAdapter.disconnect().catch(() => {});
 
   const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;
   return hasLowOrNotFound ? 2 : 0;

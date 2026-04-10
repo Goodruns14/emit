@@ -51,7 +51,6 @@ const fixture: EmitCatalog = {
       source_file: "./src/checkout.ts",
       source_line: 42,
       all_call_sites: [{ file: "./src/checkout.ts", line: 42 }],
-      warehouse_stats: { daily_volume: 500, first_seen: "2024-01-01", last_seen: "2026-03-20" },
       properties: {
         bill_amount: {
           description: "Total bill amount after discounts",
@@ -83,7 +82,6 @@ const fixture: EmitCatalog = {
       source_file: "./src/auth.ts",
       source_line: 18,
       all_call_sites: [{ file: "./src/auth.ts", line: 18 }],
-      warehouse_stats: { daily_volume: 200, first_seen: "2024-01-01", last_seen: "2026-03-22" },
       properties: {
         user_id: {
           description: "The new user's identifier",
@@ -106,7 +104,6 @@ const fixture: EmitCatalog = {
       source_file: "./src/app.ts",
       source_line: 5,
       all_call_sites: [{ file: "./src/app.ts", line: 5 }],
-      warehouse_stats: { daily_volume: 5000, first_seen: "2024-01-01", last_seen: "2026-03-24" },
       properties: {},
       flags: ["Multiple call sites — unclear trigger"],
     },

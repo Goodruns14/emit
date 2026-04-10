@@ -1,7 +1,6 @@
 import type {
   DestinationAdapter,
   DestinationConfig,
-  SnowflakeWarehouseConfig,
 } from "../../types/index.js";
 import { SegmentDestinationAdapter } from "./segment.js";
 import { AmplitudeDestinationAdapter } from "./amplitude.js";
@@ -15,7 +14,6 @@ export { SnowflakeDestinationAdapter } from "./snowflake.js";
 
 export function createDestinationAdapter(
   config: DestinationConfig,
-  warehouseConfig?: SnowflakeWarehouseConfig,
 ): DestinationAdapter {
   switch (config.type) {
     case "segment":
@@ -25,7 +23,7 @@ export function createDestinationAdapter(
     case "mixpanel":
       return new MixpanelDestinationAdapter(config);
     case "snowflake":
-      return new SnowflakeDestinationAdapter(config, warehouseConfig);
+      return new SnowflakeDestinationAdapter(config);
     default:
       throw new Error(`Unknown destination type: ${(config as any).type}`);
   }

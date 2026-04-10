@@ -393,15 +393,30 @@ async function runInit(dir) {
         }
     }
     else if (eventChoice === "file") {
-        const p2 = createPrompter();
-        logger.blank();
-        logger.line(chalk.gray("  Provide a CSV, plain text, or JSON file with one event name per row."));
-        const filePath = await p2.ask("  File path: ");
-        if (filePath.trim()) {
-            // Resolve relative paths against the target repo dir
-            const resolvedFilePath = path.isAbsolute(filePath.trim())
-                ? filePath.trim()
-                : path.resolve(repoDir, filePath.trim());
+        // File loading loop — retry on bad path or parse failure
+        fileLoop: while (true) {
+            const p2 = createPrompter();
+            logger.blank();
+            logger.line(chalk.gray("  Provide a CSV, plain text, or JSON file with one event name per row."));
+            const filePath = await p2.ask("  File path: ");
+            if (!filePath.trim()) {
+                p2.close();
+                logger.blank();
+                logger.line(chalk.gray("  Skipped — you can add events later with: emit import <file>"));
+                break;
+            }
+            // Expand ~, $VAR / ${VAR}, strip surrounding quotes, resolve relative paths
+            const expandedFilePath = filePath
+                .trim()
+                .replace(/^['"]|['"]$/g, "")
+                .replace(/^~/, process.env.HOME ?? "~")
+                .replace(/\$\{(\w+)\}|\$(\w+)/g, (_, braced, unbraced) => {
+                const name = braced || unbraced;
+                return process.env[name] ?? `$${name}`;
+            });
+            const resolvedFilePath = path.isAbsolute(expandedFilePath)
+                ? expandedFilePath
+                : path.resolve(repoDir, expandedFilePath);
             let selectedColumn;
             const headers = getCsvHeaders(resolvedFilePath);
             if (headers) {
@@ -432,22 +447,41 @@ async function runInit(dir) {
                 if (skipped > 0)
                     parts.push(`${skipped} duplicates skipped`);
                 logger.succeed(parts.join(" · "));
+                break;
             }
             catch (err) {
                 logger.blank();
                 logger.warn(`Could not load file: ${err.message}`);
-                logger.line(chalk.gray("  You can add events later with: emit import <file>"));
+                logger.blank();
+                logger.line("  What would you like to do?");
+                logger.blank();
+                const recovery = await arrowSelect([
+                    { label: "Type events in now", value: "inline" },
+                    { label: "Try a different file path", value: "retry" },
+                    { label: "Skip — I'll add events later", value: "skip" },
+                ]);
+                if (recovery === "inline") {
+                    collectedEvents = await collectEventsInline();
+                    if (collectedEvents.length > 0) {
+                        logger.blank();
+                        logger.succeed(`${collectedEvents.length} event${collectedEvents.length === 1 ? "" : "s"} collected`);
+                    }
+                    break fileLoop;
+                }
+                else if (recovery === "retry") {
+                    continue fileLoop;
+                }
+                else {
+                    logger.blank();
+                    logger.line(chalk.gray("  Skipped — you can add events later with: emit import <file>"));
+                    break fileLoop;
+                }
             }
-        }
-        else {
-            p2.close();
-            logger.blank();
-            logger.line(chalk.gray("  Skipped — you can add events later with: emit import <file>"));
         }
     }
     // ── Step 2: Detect & configure ──────────────────────────────────────────
     showStep(2, 4);
-    logger.spin("Detecting your setup...");
+    logger.spin(collectedEvents.length > 0 ? "Detecting LLM provider..." : "Detecting tracking patterns...");
     const detectedLlm = await detectLlmProvider();
     const detectedSdk = detectSdkType(scanPaths);
     let patterns;

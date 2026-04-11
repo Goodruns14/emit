@@ -2,7 +2,7 @@
 
 Automatic event catalog generator. Extracts semantic metadata from your instrumentation code.
 
-Emit scans your codebase for analytics tracking calls (Segment, PostHog, Amplitude, Mixpanel, RudderStack, etc.), uses LLM analysis to enrich them, and produces a structured event catalog (`emit.catalog.yml`).
+Emit scans your codebase for analytics tracking calls (custom pipelines, Segment, PostHog, RudderStack, Amplitude, etc.), uses LLM analysis to enrich them, and produces a structured event catalog (`emit.catalog.yml`).
 
 ## Prerequisites
 
@@ -43,7 +43,7 @@ emit --help
 emit init
 ```
 
-Interactive setup wizard. You'll enter your event names (inline or from a CSV/JSON file), emit auto-detects your LLM provider, and then kicks off your first scan. That's it.
+Interactive setup wizard. Enter your event names (CSV/JSON or in line), emit auto detects your LLM provider, and then kicks off your first scan. That's it.
 
 Creates `emit.config.yml`.
 

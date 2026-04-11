@@ -52,12 +52,6 @@ export function formatTerminalDiff(
     }
   }
 
-  // Low confidence warnings
-  if (diff.low_confidence.length > 0) {
-    lines.push("");
-    lines.push(chalk.yellow(`  ⚠  ${diff.low_confidence.length} low-confidence extraction${diff.low_confidence.length === 1 ? "" : "s"} — review recommended`));
-  }
-
   return lines.join("\n");
 }
 

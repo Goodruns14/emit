@@ -11,13 +11,14 @@ export function registerStatus(program: Command): void {
     .command("status")
     .description("Show catalog health report from emit.catalog.yml")
     .option("--format <format>", "Output format: text (default) or json")
-    .action(async (opts: { format?: string }) => {
+    .option("--event <name>", "Show full flag details for a specific event")
+    .action(async (opts: { format?: string; event?: string }) => {
       const exitCode = await runStatus(opts);
       process.exit(exitCode);
     });
 }
 
-export async function runStatus(opts: { format?: string }): Promise<number> {
+export async function runStatus(opts: { format?: string; event?: string }): Promise<number> {
   const json = opts.format === "json";
 
   let config;
@@ -41,6 +42,27 @@ export async function runStatus(opts: { format?: string }): Promise<number> {
 
   if (json) {
     process.stdout.write(JSON.stringify({ catalog: resolveOutputPath(config), ...health }, null, 2) + "\n");
+    return 0;
+  }
+
+  // ── Single-event detail mode ──────────────────────────────────────
+  if (opts.event) {
+    const event = catalog.events[opts.event];
+    if (!event) {
+      logger.error(`Event "${opts.event}" not found in catalog.`);
+      return 1;
+    }
+    logger.blank();
+    logger.line(chalk.bold(opts.event));
+    logger.blank();
+    if (!event.flags?.length) {
+      logger.line(chalk.gray("  No flags — looks good."));
+    } else {
+      for (const flag of event.flags) {
+        logger.line(`  ${chalk.yellow("⚠")} ${flag}`);
+      }
+    }
+    logger.blank();
     return 0;
   }
 

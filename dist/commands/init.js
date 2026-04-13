@@ -506,7 +506,7 @@ async function runInit(dir) {
             logger.blank();
             logger.line(`    llm:  ${chalk.cyan(LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm)}`);
             logger.blank();
-            const confirm = (await p.ask("  Look right? Save config and run first scan [Y/n]: ")) || "y";
+            const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
             if (confirm.trim().toLowerCase() === "n") {
                 llm = await askLlmProvider(p);
             }
@@ -619,22 +619,26 @@ async function runInit(dir) {
         { label: "Yes, add discriminator properties", value: "add" },
     ]);
     if (discChoice === "add") {
-        const dp = createPrompter();
         let addMore = true;
         while (addMore) {
+            // Fresh prompter each iteration — avoids readline crash on second discriminator
+            const dp = createPrompter();
             logger.blank();
             const eventName = (await dp.ask("  Event name: ")).trim();
-            if (!eventName)
+            if (!eventName) {
+                dp.close();
                 break;
+            }
             const property = (await dp.ask("  Property that identifies the action: ")).trim();
-            if (!property)
+            if (!property) {
+                dp.close();
                 break;
+            }
             logger.blank();
             logger.line("  How should emit discover the values?");
             logger.blank();
             dp.close();
             const valueChoice = await arrowSelect([
-                { label: "Discover from warehouse automatically", value: "discover" },
                 { label: "List specific values now", value: "list" },
             ]);
             const dp2 = createPrompter();
@@ -646,13 +650,32 @@ async function runInit(dir) {
                     values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
                 }
             }
-            discriminatorEntries.push({ eventName, property, values });
             logger.blank();
-            logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : " (discover from warehouse)"}`);
+            logger.line(`  ${chalk.cyan(eventName)} → ${chalk.cyan(property)}${values ? chalk.gray(` (${values.join(", ")})`) : ""}`);
             logger.blank();
-            const moreAnswer = (await dp2.ask("  Add another? [y/N]: ")).trim().toLowerCase();
-            addMore = moreAnswer === "y";
             dp2.close();
+            const confirmChoice = await arrowSelect([
+                { label: "Looks right — save it", value: "save" },
+                { label: "Redo this entry", value: "redo" },
+                { label: "Discard and stop adding", value: "stop" },
+            ]);
+            if (confirmChoice === "save") {
+                discriminatorEntries.push({ eventName, property, values });
+                logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : ""}`);
+                logger.blank();
+                const dp3 = createPrompter();
+                const moreAnswer = (await dp3.ask("  Add another? [y/N]: ")).trim().toLowerCase();
+                addMore = moreAnswer === "y";
+                dp3.close();
+            }
+            else if (confirmChoice === "redo") {
+                // Loop back without saving — user re-enters the same entry
+                addMore = true;
+            }
+            else {
+                // stop
+                addMore = false;
+            }
         }
         if (discChoice === "add" && discriminatorEntries.length === 0) {
             // User chose "add" but didn't enter anything
@@ -694,20 +717,15 @@ async function runInit(dir) {
     }
     // ── Validate config has a data source ────────────────────────────────────
     const written = yaml.load(fs.readFileSync(configPath, "utf8"));
-    const hasDataSource = !!written["warehouse"] ||
-        !!written["source"] ||
-        (Array.isArray(written["manual_events"]) && written["manual_events"].length > 0);
+    const hasDataSource = Array.isArray(written["manual_events"]) && written["manual_events"].length > 0;
     if (!hasDataSource) {
         logger.blank();
-        logger.warn("Your config has no event source yet (no warehouse, source, or manual_events).");
-        logger.line(chalk.gray("  emit scan will fail until you add one. Options:"));
+        logger.warn("Your config has no events yet (manual_events is empty).");
+        logger.line(chalk.gray("  emit scan will fail until you add events. Options:"));
         logger.line(chalk.gray("  • Add events:     ") + chalk.cyan("emit import <file>"));
         logger.line(chalk.gray("  • Add manually:   add ") +
             chalk.cyan("manual_events:") +
             chalk.gray(" to emit.config.yml"));
-        logger.line(chalk.gray("  • Add warehouse:  add ") +
-            chalk.cyan("warehouse:") +
-            chalk.gray(" section to emit.config.yml"));
     }
     // ── Step 3: Scan ──────────────────────────────────────────────────────────
     showStep(4, 4);

@@ -305,8 +305,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
   let unchanged = 0;
 
   for (const event of located) {
-    if (!json) logger.progress(extracted, located.length);
-
     const ctx = codeContextMap.get(event.name)!;
 
     const callSiteContexts = ctx.all_call_sites.slice(1).map((cs) => cs.context);
@@ -325,7 +323,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
       stats[previousEntry.confidence]++;
       unchanged++;
       extracted++;
-      if (!json) logger.scanRow(event.name, chalk.gray("(unchanged)"), "ok");
+      if (!json) logger.progress(extracted, located.length);
       continue;
     }
 
@@ -410,10 +408,10 @@ async function runScan(opts: ScanOptions): Promise<number> {
     catalog[event.name] = reconciled;
     stats[reconciled.confidence]++;
     extracted++;
+    if (!json) logger.progress(extracted, located.length);
   }
 
   if (!json) {
-    logger.progress(extracted, located.length);
     logger.blank();
     logger.succeed("Extraction complete");
   }

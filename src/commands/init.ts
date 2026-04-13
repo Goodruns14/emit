@@ -563,7 +563,7 @@ async function runInit(dir?: string): Promise<number> {
       logger.blank();
       logger.line(`    llm:  ${chalk.cyan(LLM_DISPLAY_LABELS[detectedLlm] ?? detectedLlm)}`);
       logger.blank();
-      const confirm = (await p.ask("  Look right? Save config and run first scan [Y/n]: ")) || "y";
+      const confirm = (await p.ask("  Look right? [Y/n]: ")) || "y";
       if (confirm.trim().toLowerCase() === "n") {
         llm = await askLlmProvider(p);
       } else {
@@ -680,16 +680,17 @@ async function runInit(dir?: string): Promise<number> {
   ]);
 
   if (discChoice === "add") {
-    const dp = createPrompter();
     let addMore = true;
 
     while (addMore) {
+      // Fresh prompter each iteration — avoids readline crash on second discriminator
+      const dp = createPrompter();
       logger.blank();
       const eventName = (await dp.ask("  Event name: ")).trim();
-      if (!eventName) break;
+      if (!eventName) { dp.close(); break; }
 
       const property = (await dp.ask("  Property that identifies the action: ")).trim();
-      if (!property) break;
+      if (!property) { dp.close(); break; }
 
       logger.blank();
       logger.line("  How should emit discover the values?");
@@ -710,14 +711,33 @@ async function runInit(dir?: string): Promise<number> {
         }
       }
 
-      discriminatorEntries.push({ eventName, property, values });
       logger.blank();
-      logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : ""}`);
+      logger.line(`  ${chalk.cyan(eventName)} → ${chalk.cyan(property)}${values ? chalk.gray(` (${values.join(", ")})`) : ""}`);
+      logger.blank();
 
-      logger.blank();
-      const moreAnswer = (await dp2.ask("  Add another? [y/N]: ")).trim().toLowerCase();
-      addMore = moreAnswer === "y";
       dp2.close();
+      const confirmChoice = await arrowSelect([
+        { label: "Looks right — save it", value: "save" as const },
+        { label: "Redo this entry", value: "redo" as const },
+        { label: "Discard and stop adding", value: "stop" as const },
+      ]);
+
+      if (confirmChoice === "save") {
+        discriminatorEntries.push({ eventName, property, values });
+        logger.succeed(`Added: ${eventName} → ${property}${values ? ` (${values.length} values)` : ""}`);
+        logger.blank();
+
+        const dp3 = createPrompter();
+        const moreAnswer = (await dp3.ask("  Add another? [y/N]: ")).trim().toLowerCase();
+        addMore = moreAnswer === "y";
+        dp3.close();
+      } else if (confirmChoice === "redo") {
+        // Loop back without saving — user re-enters the same entry
+        addMore = true;
+      } else {
+        // stop
+        addMore = false;
+      }
     }
 
     if (discChoice === "add" && discriminatorEntries.length === 0) {

@@ -692,23 +692,13 @@ async function runInit(dir?: string): Promise<number> {
       const property = (await dp.ask("  Property that identifies the action: ")).trim();
       if (!property) { dp.close(); break; }
 
-      logger.blank();
-      logger.line("  How should emit discover the values?");
-      logger.blank();
-
       dp.close();
-      const valueChoice = await arrowSelect([
-        { label: "List specific values now", value: "list" as const },
-      ]);
-
       const dp2 = createPrompter();
+      logger.blank();
+      const valInput = (await dp2.ask("  Values (comma-separated, or leave blank to add later): ")).trim();
       let values: string[] | undefined;
-      if (valueChoice === "list") {
-        logger.blank();
-        const valInput = (await dp2.ask("  Values (comma-separated): ")).trim();
-        if (valInput) {
-          values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
-        }
+      if (valInput) {
+        values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
       }
 
       logger.blank();

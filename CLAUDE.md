@@ -171,7 +171,7 @@ discriminator_properties:
 ### How it works
 
 1. Config normalization (`src/utils/config.ts`) converts shorthand → `{ property }` object form
-2. `expandDiscriminators()` (`src/core/discriminator/index.ts`) resolves values: config → warehouse → warning
+2. `expandDiscriminators()` (`src/core/discriminator/index.ts`) resolves values: config → warning (warehouse path removed)
 3. Scanner's `findDiscriminatorValue()` greps for the value without tracking pattern filtering
 4. Extractor's `extractDiscriminatorMetadata()` sends a discriminator-specific prompt to the LLM
 5. Scan command wires it all together: parent events scanned first, then sub-events
@@ -203,7 +203,7 @@ button_click.signup_cta:
 
 | File | Purpose |
 |------|---------|
-| `src/core/discriminator/index.ts` | Value discovery: config → warehouse → warning |
+| `src/core/discriminator/index.ts` | Value discovery: config → warning (warehouse path removed) |
 | `src/core/scanner/search.ts` | `searchDiscriminatorValue()` — grep without tracking pattern filter |
 | `src/core/scanner/index.ts` | `findDiscriminatorValue()` method on RepoScanner |
 | `src/core/extractor/prompts.ts` | `buildDiscriminatorExtractionPrompt()` |

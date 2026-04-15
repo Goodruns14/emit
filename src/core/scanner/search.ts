@@ -72,7 +72,8 @@ export function setExcludePaths(paths: string[]): void {
       // Path-based pattern — grep --exclude/--exclude-dir can't handle paths,
       // so store as a prefix for post-filtering of grep results.
       // Strip trailing wildcards and slashes: "backend/foo/**" → "backend/foo"
-      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "");
+      // Also strip leading "./" so it matches normalized file paths from grep output.
+      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
       if (prefix) extraExcludePathPrefixes.push(prefix);
     } else if (entry.includes("*")) {
       // Pure filename glob (no path separator) — strip leading **/ since

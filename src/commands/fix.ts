@@ -76,6 +76,8 @@ async function runFix(): Promise<number> {
   }
 
   // 5. Run Claude Code interactively
+  logger.line(chalk.gray("  Claude Code will open to apply the fix. Approve the edit, then type") + chalk.cyan(" /exit") + chalk.gray(" to continue."));
+  logger.blank();
   // Build richer prompt with full diagnosis context and call site locations
   const callSiteLines = (lastFix.flaggedEvents ?? []).map((ev) => {
     const sites = ev.all_call_sites.map((s) => `${s.file}:${s.line}`).join(", ");

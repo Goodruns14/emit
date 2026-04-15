@@ -6,7 +6,7 @@ import chalk from "chalk";
 import * as yaml from "js-yaml";
 import { execa } from "execa";
 import { logger } from "../utils/logger.js";
-import { parseEventsFile, getCsvHeaders, parseValuesFile } from "../core/import/parse.js";
+import { parseEventsFile, getCsvHeaders, parseDiscriminatorCsv } from "../core/import/parse.js";
 import { discoverBackendPatterns } from "../core/scanner/discovery.js";
 export function registerInit(program) {
     program
@@ -381,7 +381,6 @@ async function runInit(dir) {
         { label: "Skip — I'll do it later", value: "skip" },
     ]);
     let collectedEvents = [];
-    let discriminatorEntries = [];
     if (eventChoice === "inline") {
         collectedEvents = await collectEventsInline();
         if (collectedEvents.length > 0) {
@@ -441,16 +440,12 @@ async function runInit(dir) {
             }
             p2.close();
             try {
-                const { events, skipped, discriminators: csvDiscriminators } = parseEventsFile(resolvedFilePath, selectedColumn ? { column: selectedColumn } : undefined);
+                const { events, skipped } = parseEventsFile(resolvedFilePath, selectedColumn ? { column: selectedColumn } : undefined);
                 collectedEvents = events;
                 logger.blank();
                 const parts = [`${events.length} event${events.length === 1 ? "" : "s"} loaded`];
                 if (skipped > 0)
                     parts.push(`${skipped} duplicates skipped`);
-                if (csvDiscriminators && csvDiscriminators.length > 0) {
-                    discriminatorEntries = csvDiscriminators;
-                    parts.push(`${csvDiscriminators.length} discriminator${csvDiscriminators.length === 1 ? "" : "s"} configured`);
-                }
                 logger.succeed(parts.join(" · "));
                 break;
             }
@@ -609,6 +604,7 @@ async function runInit(dir) {
     }
     // ── Step 3: Discriminator properties (optional) ─────────────────────────
     showStep(3, 4);
+    const discriminatorEntries = [];
     logger.line("  " + chalk.bold("Discriminator properties") + chalk.gray(" (optional)"));
     logger.blank();
     logger.line(chalk.gray("  Some events act as containers for many distinct actions."));
@@ -618,28 +614,77 @@ async function runInit(dir) {
     logger.blank();
     logger.line(chalk.gray("  You can always add these later in emit.config.yml under ") + chalk.cyan("discriminator_properties") + chalk.gray("."));
     logger.blank();
-    let wantsToAdd = false;
-    if (discriminatorEntries.length > 0) {
-        // Already loaded from events CSV — show what we got and offer to add more
-        logger.line("  Discriminator properties loaded from your events file:");
-        logger.blank();
-        for (const d of discriminatorEntries) {
-            logger.line(`    ${chalk.cyan(d.eventName)} → ${chalk.cyan(d.property)} ${chalk.gray(`(${d.values?.length ?? 0} values)`)}`);
+    const discChoice = await arrowSelect([
+        { label: "Skip — none of my events work this way", value: "skip" },
+        { label: "Add manually", value: "add" },
+        { label: "Load from a CSV file", value: "csv" },
+    ]);
+    let enterManualLoop = discChoice === "add";
+    if (discChoice === "csv") {
+        // ── CSV loading flow ───────────────────────────────────────────────
+        csvLoop: while (true) {
+            const dp = createPrompter();
+            logger.blank();
+            logger.line(chalk.gray("  CSV format: 3 columns — event name, property, values"));
+            logger.line(chalk.gray("  Example row: ") + chalk.cyan('button_click,button_id,"signup_cta,add_to_cart,checkout"'));
+            logger.blank();
+            const filePath = await dp.ask("  File path: ");
+            if (!filePath.trim()) {
+                dp.close();
+                logger.blank();
+                logger.line(chalk.gray("  Skipped — you can add discriminators later in emit.config.yml"));
+                break;
+            }
+            const expandedPath = filePath
+                .trim()
+                .replace(/^['"]|['"]$/g, "")
+                .replace(/^~/, process.env.HOME ?? "~");
+            const resolvedPath = path.isAbsolute(expandedPath)
+                ? expandedPath
+                : path.resolve(repoDir, expandedPath);
+            dp.close();
+            try {
+                const entries = parseDiscriminatorCsv(resolvedPath);
+                for (const d of entries)
+                    discriminatorEntries.push(d);
+                logger.blank();
+                logger.succeed(`${entries.length} discriminator${entries.length === 1 ? "" : "s"} loaded`);
+                logger.blank();
+                for (const d of entries) {
+                    logger.line(`    ${chalk.cyan(d.eventName)} → ${chalk.cyan(d.property)} ${chalk.gray(`(${d.values.length} values)`)}`);
+                }
+                logger.blank();
+                const dpMore = createPrompter();
+                const moreAnswer = (await dpMore.ask("  Add more manually? [y/N]: ")).trim().toLowerCase();
+                dpMore.close();
+                enterManualLoop = moreAnswer === "y";
+                break;
+            }
+            catch (err) {
+                logger.blank();
+                logger.warn(`Could not load file: ${err.message}`);
+                logger.blank();
+                logger.line("  What would you like to do?");
+                logger.blank();
+                const recovery = await arrowSelect([
+                    { label: "Try a different file path", value: "retry" },
+                    { label: "Add manually instead", value: "manual" },
+                    { label: "Skip — I'll add them later", value: "skip" },
+                ]);
+                if (recovery === "retry") {
+                    continue csvLoop;
+                }
+                else if (recovery === "manual") {
+                    enterManualLoop = true;
+                    break csvLoop;
+                }
+                else {
+                    break;
+                }
+            }
         }
-        logger.blank();
-        const dp0 = createPrompter();
-        const moreAnswer = (await dp0.ask("  Add more? [y/N]: ")).trim().toLowerCase();
-        dp0.close();
-        wantsToAdd = moreAnswer === "y";
     }
-    else {
-        const discChoice = await arrowSelect([
-            { label: "Skip — none of my events work this way", value: "skip" },
-            { label: "Yes, add discriminator properties", value: "add" },
-        ]);
-        wantsToAdd = discChoice === "add";
-    }
-    if (wantsToAdd) {
+    if (enterManualLoop) {
         let addMore = true;
         while (addMore) {
             // Fresh prompter each iteration — avoids readline crash on second discriminator
@@ -658,23 +703,10 @@ async function runInit(dir) {
             dp.close();
             const dp2 = createPrompter();
             logger.blank();
-            const valInput = (await dp2.ask("  Values (comma-separated, file path, or leave blank): ")).trim();
+            const valInput = (await dp2.ask("  Values (comma-separated, or leave blank to add later): ")).trim();
             let values;
             if (valInput) {
-                if (valInput.includes("/") || valInput.includes("\\") || /\.(csv|json|txt)$/i.test(valInput)) {
-                    const resolvedVals = path.isAbsolute(valInput) ? valInput : path.resolve(repoDir, valInput);
-                    try {
-                        values = parseValuesFile(resolvedVals);
-                        logger.succeed(`${values.length} values loaded from file`);
-                    }
-                    catch (err) {
-                        logger.warn(`Could not load file: ${err.message}`);
-                        values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
-                    }
-                }
-                else {
-                    values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
-                }
+                values = valInput.split(",").map((v) => v.trim()).filter(Boolean);
             }
             logger.blank();
             logger.line(`  ${chalk.cyan(eventName)} → ${chalk.cyan(property)}${values ? chalk.gray(` (${values.join(", ")})`) : ""}`);
@@ -695,13 +727,15 @@ async function runInit(dir) {
                 dp3.close();
             }
             else if (confirmChoice === "redo") {
+                // Loop back without saving — user re-enters the same entry
                 addMore = true;
             }
             else {
+                // stop
                 addMore = false;
             }
         }
-        if (discriminatorEntries.length === 0) {
+        if (discChoice !== "csv" && discriminatorEntries.length === 0) {
             logger.blank();
             logger.line(chalk.gray("  No discriminator properties added."));
         }

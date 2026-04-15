@@ -1,0 +1,2 @@
+button_click,button_id,"signup_cta,add_to_cart,checkout,share_link"
+Workflow builder journey,event_type,"user_clicked_todo,user_clicked_implement_plan,browser_notification_ask_permission,user_saved_workflow"

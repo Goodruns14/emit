@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { parseEventsFile, parseValuesFile } from "../src/core/import/parse.js";
+import { parseEventsFile, parseValuesFile, parseDiscriminatorCsv } from "../src/core/import/parse.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -250,6 +250,100 @@ describe("CSV — discriminator columns", () => {
 });
 
 // ── parseValuesFile ────────────────────────────────────────────────────────────
+
+// ── parseDiscriminatorCsv ──────────────────────────────────────────────────────
+
+describe("parseDiscriminatorCsv", () => {
+  it("parses 3-column CSV without header row", () => {
+    const f = write("disc.csv", [
+      'button_click,button_id,"signup_cta,add_to_cart,checkout"',
+      'Workflow builder journey,event_type,"user_clicked_todo,user_clicked_implement_plan"',
+    ].join("\n"));
+    const result = parseDiscriminatorCsv(f);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      eventName: "button_click",
+      property: "button_id",
+      values: ["signup_cta", "add_to_cart", "checkout"],
+    });
+    expect(result[1]).toEqual({
+      eventName: "Workflow builder journey",
+      property: "event_type",
+      values: ["user_clicked_todo", "user_clicked_implement_plan"],
+    });
+  });
+
+  it("skips header row when present", () => {
+    const f = write("disc.csv", [
+      "event_name,property,values",
+      'button_click,button_id,"signup_cta,add_to_cart"',
+    ].join("\n"));
+    const result = parseDiscriminatorCsv(f);
+    expect(result).toHaveLength(1);
+    expect(result[0].eventName).toBe("button_click");
+  });
+
+  it("recognizes alternate header names", () => {
+    const f = write("disc.csv", [
+      "name,prop,vals",
+      'button_click,button_id,"signup_cta,add_to_cart"',
+    ].join("\n"));
+    const result = parseDiscriminatorCsv(f);
+    expect(result).toHaveLength(1);
+  });
+
+  it("skips rows with fewer than 3 columns", () => {
+    const f = write("disc.csv", [
+      'button_click,button_id,"signup_cta,add_to_cart"',
+      "incomplete_row,missing_values",
+      'nav_click,nav_id,"home,about"',
+    ].join("\n"));
+    const result = parseDiscriminatorCsv(f);
+    expect(result).toHaveLength(2);
+    expect(result[0].eventName).toBe("button_click");
+    expect(result[1].eventName).toBe("nav_click");
+  });
+
+  it("skips rows where event, property, or values are empty", () => {
+    const f = write("disc.csv", [
+      ',button_id,"signup_cta"',
+      'button_click,,"signup_cta"',
+      'button_click,button_id,',
+      'valid_event,valid_prop,"val1,val2"',
+    ].join("\n"));
+    const result = parseDiscriminatorCsv(f);
+    expect(result).toHaveLength(1);
+    expect(result[0].eventName).toBe("valid_event");
+  });
+
+  it("handles quoted cells with commas correctly", () => {
+    const f = write("disc.csv", [
+      'button_click,button_id,"val_a,val_b,val_c,val_d"',
+    ].join("\n"));
+    const result = parseDiscriminatorCsv(f);
+    expect(result[0].values).toEqual(["val_a", "val_b", "val_c", "val_d"]);
+  });
+
+  it("throws on file not found", () => {
+    expect(() => parseDiscriminatorCsv("/tmp/no-such-file-99999.csv")).toThrow(/File not found/);
+  });
+
+  it("throws on empty file", () => {
+    const f = write("disc.csv", "");
+    expect(() => parseDiscriminatorCsv(f)).toThrow(/empty/i);
+  });
+
+  it("throws when no valid entries found", () => {
+    const f = write("disc.csv", "event_name,property,values\n");
+    expect(() => parseDiscriminatorCsv(f)).toThrow(/No discriminator entries found/);
+  });
+
+  it("throws with helpful example on no valid entries", () => {
+    const f = write("disc.csv", "event,,\n,prop,\n,,vals\n");
+    expect(() => parseDiscriminatorCsv(f)).toThrow(/No discriminator entries/);
+    expect(() => parseDiscriminatorCsv(f)).toThrow(/button_click,button_id/);
+  });
+});
 
 describe("parseValuesFile", () => {
   it("loads values from a single-column CSV", () => {

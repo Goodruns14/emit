@@ -280,6 +280,89 @@ function extractDiscriminatorsFromCsv(lines: string[]): DiscriminatorEntry[] {
   return entries;
 }
 
+// ── Discriminator CSV ──────────────────────────────────────────────────────────
+
+const DISC_CSV_EVENT_HEADERS = new Set([
+  "event_name", "event", "name", "god_event",
+]);
+const DISC_CSV_PROP_HEADERS = new Set([
+  "property", "prop", "discriminator_property",
+]);
+const DISC_CSV_VAL_HEADERS = new Set([
+  "values", "vals", "discriminator_values",
+]);
+
+/**
+ * Parse a 3-column discriminator CSV file.
+ * Columns: event name, property, comma-separated values (quoted cell).
+ * Header row is optional — skipped if first row matches known header names.
+ */
+export function parseDiscriminatorCsv(filePath: string): DiscriminatorEntry[] {
+  const resolved = path.resolve(filePath);
+
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    throw new Error(`Expected a file but got a directory: ${filePath}`);
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(resolved, "utf8").replace(/^\uFEFF/, "");
+  } catch (err) {
+    throw new Error(`Failed to read file: ${(err as Error).message}`);
+  }
+
+  if (!raw.trim()) {
+    throw new Error(`File is empty: ${filePath}`);
+  }
+
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let startIdx = 0;
+
+  // Skip header row if first row looks like headers
+  const firstCells = splitCsvRow(lines[0]);
+  if (
+    firstCells.length >= 3 &&
+    DISC_CSV_EVENT_HEADERS.has(firstCells[0].trim().toLowerCase()) &&
+    DISC_CSV_PROP_HEADERS.has(firstCells[1].trim().toLowerCase()) &&
+    DISC_CSV_VAL_HEADERS.has(firstCells[2].trim().toLowerCase())
+  ) {
+    startIdx = 1;
+  }
+
+  const entries: DiscriminatorEntry[] = [];
+
+  for (let i = startIdx; i < lines.length; i++) {
+    const cells = splitCsvRow(lines[i]);
+    if (cells.length < 3) continue;
+
+    const eventName = cells[0].trim();
+    const property = cells[1].trim();
+    const valuesRaw = cells[2].trim();
+
+    if (!eventName || !property || !valuesRaw) continue;
+
+    const values = valuesRaw.split(",").map((v) => v.trim()).filter(Boolean);
+    if (values.length > 0) {
+      entries.push({ eventName, property, values });
+    }
+  }
+
+  if (entries.length === 0) {
+    throw new Error(
+      `No discriminator entries found in ${filePath}.\n` +
+      `  Expected 3 columns: event name, property, values\n` +
+      `  Example: button_click,button_id,"signup_cta,add_to_cart,checkout"`
+    );
+  }
+
+  return entries;
+}
+
 // ── Values file ────────────────────────────────────────────────────────────────
 
 /**

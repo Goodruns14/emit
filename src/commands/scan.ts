@@ -579,8 +579,37 @@ async function runScan(opts: ScanOptions): Promise<number> {
     ...(mergedResolved.length > 0 ? { resolved: mergedResolved } : {}),
   };
 
+  // ── Diagnostic pass (compute before JSON output) ──────────────────
+  const signal = collectDiagnosticSignal(output);
+  let diagnosis: { findings: string[]; fixInstruction: string } = { findings: [], fixInstruction: "" };
+  const runDiag = shouldRunDiagnostic(signal) && !opts.dryRun;
+
   if (json) {
-    process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+    if (runDiag) {
+      try {
+        diagnosis = await extractor.runDiagnostic(signal);
+      } catch {
+        // silently skip if diagnostic fails in JSON mode
+      }
+    }
+    const jsonOutput: Record<string, unknown> = { ...output };
+    if (diagnosis.findings.length > 0) {
+      const flagged = getFlaggedEvents(signal);
+      const flaggedEventDetails = [...flagged].map((name) => {
+        const event = output.events[name];
+        return {
+          name,
+          source_file: event?.source_file ?? "unknown",
+          all_call_sites: event?.all_call_sites ?? [],
+        };
+      });
+      jsonOutput.diagnosis = {
+        findings: diagnosis.findings,
+        fixInstruction: diagnosis.fixInstruction || null,
+        flaggedEvents: flaggedEventDetails,
+      };
+    }
+    process.stdout.write(JSON.stringify(jsonOutput, null, 2) + "\n");
     const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;
     return hasLowOrNotFound ? 2 : 0;
   }
@@ -591,13 +620,11 @@ async function runScan(opts: ScanOptions): Promise<number> {
   logger.line(diffSummary);
   logger.blank();
 
-  // ── Diagnostic pass (before save decision) ────────────────────────
+  // ── Diagnostic display (terminal only) ────────────────────────────
   let catalogToSave: EmitCatalog = output;
   let diagnosisShown = false;
-  let diagnosis: { findings: string[]; fixInstruction: string } = { findings: [], fixInstruction: "" };
 
-  const signal = collectDiagnosticSignal(output);
-  if (shouldRunDiagnostic(signal) && !opts.dryRun) {
+  if (runDiag) {
     logger.spin("Analyzing scan results...");
     try {
       diagnosis = await extractor.runDiagnostic(signal);
@@ -708,6 +735,8 @@ async function runScan(opts: ScanOptions): Promise<number> {
       logger.line(chalk.gray("  " + "─".repeat(40)));
       if (diagnosis.fixInstruction) {
         logger.line(`  ${chalk.cyan("emit fix")}        ${chalk.gray("Apply detected config fix with Claude Code")}`);
+        const fixHint = diagnosis.fixInstruction.length > 60 ? diagnosis.fixInstruction.slice(0, 57) + "..." : diagnosis.fixInstruction;
+        logger.line(`  ${chalk.gray(" ".repeat(16))}${chalk.gray(fixHint)}`);
       }
       logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
       logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);

@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import * as fs from "fs";
+import * as path from "path";
 import * as readline from "readline";
 import chalk from "chalk";
 import { loadConfig, resolveOutputPath } from "../utils/config.js";
@@ -15,6 +17,7 @@ import { diffCatalogs } from "../core/diff/index.js";
 import { formatTerminalDiff } from "../core/diff/format.js";
 import { getCatalogHealth } from "../core/catalog/health.js";
 import { renderHealthSection } from "../utils/health-render.js";
+import { collectDiagnosticSignal, shouldRunDiagnostic, getFlaggedEvents } from "../core/catalog/diagnostic.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
   PropertyStat,
@@ -578,11 +581,149 @@ async function runScan(opts: ScanOptions): Promise<number> {
 
   if (json) {
     process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+    const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;
+    return hasLowOrNotFound ? 2 : 0;
+  }
+
+  // ── Always show diff ──────────────────────────────────────────────
+  const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
+  logger.blank();
+  logger.line(diffSummary);
+  logger.blank();
+
+  // ── Diagnostic pass (before save decision) ────────────────────────
+  let catalogToSave: EmitCatalog = output;
+  let diagnosisShown = false;
+  let diagnosis: { findings: string[]; fixInstruction: string } = { findings: [], fixInstruction: "" };
+
+  const signal = collectDiagnosticSignal(output);
+  if (shouldRunDiagnostic(signal) && !opts.dryRun) {
+    logger.spin("Analyzing scan results...");
+    try {
+      diagnosis = await extractor.runDiagnostic(signal);
+      logger.succeed("Scan diagnosis");
+      diagnosisShown = true;
+      logger.blank();
+      logger.line(chalk.bold("  ── Scan diagnosis ") + chalk.bold("─".repeat(43)));
+      logger.blank();
+      for (const finding of diagnosis.findings) {
+        logger.warn(finding);
+        logger.blank();
+      }
+    } catch {
+      logger.stop();
+    }
+
+    if (diagnosisShown) {
+      const flagged = getFlaggedEvents(signal);
+      const allEventNames = Object.keys(output.events);
+      const cleanCount = allEventNames.filter((n) => !flagged.has(n)).length;
+      const dirtyCount = allEventNames.filter((n) => flagged.has(n)).length;
+
+      logger.line(chalk.bold("  How would you like to proceed?"));
+      logger.blank();
+      logger.line(`    ${chalk.cyan("1)")} Save clean events only (${cleanCount} of ${allEventNames.length} — skip ${dirtyCount} flagged)`);
+      logger.line(`    ${chalk.cyan("2)")} Save everything (you can fix and re-scan later)`);
+      logger.line(`    ${chalk.cyan("3)")} Don't save — I'll fix the config and re-scan`);
+      logger.blank();
+
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const choice = await new Promise<string>((resolve) => {
+        rl.question("  Choice [1]: ", (ans) => {
+          rl.close();
+          resolve(ans.trim() || "1");
+        });
+      });
+      logger.blank();
+
+      if (choice === "3") {
+        logger.line(
+          chalk.gray("  Not saved. Apply the suggested config fix, then run: ") +
+          chalk.cyan("emit scan --fresh")
+        );
+        logger.blank();
+        const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;
+        return hasLowOrNotFound ? 2 : 0;
+      }
+
+      if (choice === "1" && dirtyCount > 0) {
+        // Build a filtered catalog with only clean events
+        const cleanEvents: Record<string, CatalogEvent> = {};
+        for (const [name, event] of Object.entries(output.events)) {
+          if (!flagged.has(name)) cleanEvents[name] = event;
+        }
+        const cleanNotFound = output.not_found.filter((n) => !flagged.has(n));
+        const cleanStats = { high: 0, medium: 0, low: 0 };
+        for (const ev of Object.values(cleanEvents)) cleanStats[ev.confidence]++;
+        catalogToSave = {
+          ...output,
+          events: cleanEvents,
+          not_found: cleanNotFound,
+          stats: {
+            ...output.stats,
+            events_located: Object.keys(cleanEvents).length,
+            events_not_found: cleanNotFound.length,
+            high_confidence: cleanStats.high,
+            medium_confidence: cleanStats.medium,
+            low_confidence: cleanStats.low,
+          },
+        };
+      }
+
+      writeOutput(catalogToSave, outputPath);
+
+      // Save last-fix.json when there's a fix instruction, and ensure .gitignore excludes it
+      const emitDir = path.dirname(outputPath);
+      if (diagnosis.fixInstruction) {
+        const flaggedEventDetails = [...flagged].map((name) => {
+          const event = output.events[name];
+          return {
+            name,
+            source_file: event?.source_file ?? "unknown",
+            all_call_sites: event?.all_call_sites ?? [],
+          };
+        });
+        const lastFixData = {
+          timestamp: new Date().toISOString(),
+          fixInstruction: diagnosis.fixInstruction,
+          skippedCount: choice === "1" ? dirtyCount : 0,
+          findings: diagnosis.findings,
+          flaggedEvents: flaggedEventDetails,
+        };
+        fs.writeFileSync(path.join(emitDir, "last-fix.json"), JSON.stringify(lastFixData, null, 2));
+        const gitignorePath = path.join(emitDir, ".gitignore");
+        if (!fs.existsSync(gitignorePath) || !fs.readFileSync(gitignorePath, "utf8").includes("last-fix.json")) {
+          fs.appendFileSync(gitignorePath, "# Auto-generated by emit\nlast-fix.json\n");
+        }
+      }
+
+      logger.succeed(`Catalog saved → ${outputPath}`);
+      logger.line(chalk.gray("  Safe to commit to git — it's just event metadata, no credentials or secrets."));
+      logger.blank();
+      renderHealthSection(getCatalogHealth(catalogToSave), true, !!diagnosis.fixInstruction);
+      logger.blank();
+
+      // What's next
+      logger.line(chalk.bold("  What's next"));
+      logger.line(chalk.gray("  " + "─".repeat(40)));
+      if (diagnosis.fixInstruction) {
+        logger.line(`  ${chalk.cyan("emit fix")}        ${chalk.gray("Apply detected config fix with Claude Code")}`);
+      }
+      logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
+      logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);
+      logger.blank();
+
+      const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;
+      return hasLowOrNotFound ? 2 : 0;
+    }
+  }
+
+  // ── Normal save flow (no diagnostic issues) ───────────────────────
+  if (opts.dryRun) {
+    renderHealthSection(getCatalogHealth(output), shouldRunDiagnostic(signal));
+    logger.blank();
+    logger.warn("Dry run — catalog not written");
   } else if (opts.confirm) {
-    const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
-    logger.blank();
-    logger.line(diffSummary);
-    logger.blank();
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise<string>((resolve) => {
       rl.question("  Save these results to emit.catalog.yml? [Y/n]: ", (ans) => {
@@ -601,20 +742,8 @@ async function runScan(opts: ScanOptions): Promise<number> {
       logger.blank();
       logger.line(chalk.gray("  Discarded. Run ") + chalk.cyan("emit scan") + chalk.gray(" to try again."));
     }
-  } else if (opts.dryRun) {
-    const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
-    logger.blank();
-    logger.line(diffSummary);
-    logger.blank();
-    renderHealthSection(getCatalogHealth(output));
-    logger.blank();
-    logger.warn("Dry run — catalog not written");
   } else {
     writeOutput(output, outputPath);
-    const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
-    logger.blank();
-    logger.line(diffSummary);
-    logger.blank();
     renderHealthSection(getCatalogHealth(output));
     logger.blank();
     logger.info(`Written to ${outputPath}`);

@@ -174,6 +174,82 @@ Rules:
 `.trim();
 }
 
+export function buildDiagnosticPrompt(signal: import("../catalog/diagnostic.js").DiagnosticSignal): string {
+  const sections: string[] = [];
+
+  for (const cluster of signal.propertyClusters) {
+    if (cluster.propertyNames.length < 3) continue;
+    const samples = cluster.propertyNames
+      .slice(0, 12)
+      .map((p) => {
+        const vals = cluster.sampleValues[p];
+        return vals?.length ? `${p} (e.g. ${vals.slice(0, 3).join(", ")})` : p;
+      })
+      .join("; ");
+    sections.push(
+      `PROPERTY CLUSTER — ${cluster.propertyNames.length} undescribed properties on events [${cluster.eventSet.join(", ")}]:\n` +
+      `  Sample properties: ${samples}`
+    );
+  }
+
+  for (const anomaly of signal.propertyRatioAnomalies) {
+    sections.push(
+      `PROPERTY RATIO ANOMALY — event "${anomaly.eventName}" has ${anomaly.propertyCount} properties ` +
+      `(catalog median: ${anomaly.medianPropertyCount}):\n` +
+      `  Sample property names: ${anomaly.samplePropertyNames.slice(0, 10).join(", ")}`
+    );
+  }
+
+  for (const anomaly of signal.callSiteAnomalies) {
+    if (anomaly.events.length < 2) continue;
+    sections.push(
+      `CALL SITE ANOMALY — path segment "${anomaly.pathSegment}" appears in call sites for events [${anomaly.events.join(", ")}]:\n` +
+      `  Example paths: ${anomaly.filePaths.join(", ")}`
+    );
+  }
+
+  for (const cluster of signal.repeatedConfidenceReasons) {
+    if (cluster.events.length < 3) continue;
+    sections.push(
+      `REPEATED CONFIDENCE REASON — ${cluster.events.length} events share similar low/medium confidence reasons ` +
+      `(keywords: ${cluster.keywords.join(", ")}):\n` +
+      `  Events: ${cluster.events.slice(0, 10).join(", ")}\n` +
+      `  Sample reason: "${cluster.sampleReason}"`
+    );
+  }
+
+  for (const gap of signal.discriminatorGaps) {
+    if (gap.affectedSubEvents.length < 2) continue;
+    sections.push(
+      `DISCRIMINATOR GAP — parent event "${gap.parentEvent}" has ${gap.affectedSubEvents.length} affected sub-events ` +
+      `(issue type: ${gap.issueType}):\n` +
+      `  Affected: ${gap.affectedSubEvents.join(", ")}`
+    );
+  }
+
+  return `
+You are analyzing the results of an emit catalog scan of ${signal.eventCount} events.
+The following structural anomalies were detected. For each anomaly, you are given
+raw evidence: property names, code_sample_values, file paths, and/or confidence reasons.
+
+For each anomaly, write one short paragraph identifying the root cause — what
+non-analytics code or data is appearing in the catalog and why.
+
+Do not explain what emit is. Do not address single-event issues. Only address the
+cross-cutting patterns below.
+
+${sections.join("\n\n")}
+
+Return ONLY a valid JSON object. No preamble, no markdown fences:
+{
+  "findings": [
+    "One or two sentences per anomaly — what is leaking in and why. Be concise."
+  ],
+  "fix_instruction": "A single short clause, MAX 80 characters, no period. Imperative. E.g. \\"add backend/stacktraces/test-files/** to exclude_paths in emit.config.yml\\". If multiple fixes, combine into one clause with \\"and\\"."
+}
+`.trim();
+}
+
 export function buildPropertyDefinitionsPrompt(
   sharedProperties: Record<
     string,

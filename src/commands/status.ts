@@ -1,10 +1,13 @@
 import type { Command } from "commander";
+import * as fs from "fs";
+import * as path from "path";
 import chalk from "chalk";
 import { loadConfig, resolveOutputPath } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 import { readCatalog } from "../core/catalog/index.js";
 import { getCatalogHealth } from "../core/catalog/health.js";
 import { renderHealthSection } from "../utils/health-render.js";
+import { collectDiagnosticSignal, shouldRunDiagnostic } from "../core/catalog/diagnostic.js";
 
 export function registerStatus(program: Command): void {
   program
@@ -76,7 +79,10 @@ export async function runStatus(opts: { format?: string; event?: string }): Prom
   );
   logger.blank();
 
-  renderHealthSection(health);
+  const hasDiagnosticIssues = shouldRunDiagnostic(collectDiagnosticSignal(catalog));
+  const emitDir = path.dirname(resolveOutputPath(config));
+  const hasPendingFix = fs.existsSync(path.join(emitDir, "last-fix.json"));
+  renderHealthSection(health, hasDiagnosticIssues, hasPendingFix);
 
   if (health.stale_events.length > 0) {
     logger.blank();

@@ -23,7 +23,7 @@ function getAnthropicClient(): Anthropic {
 
 let _claudeBinaryPath: string | null = null;
 
-async function findClaudeBinary(): Promise<string> {
+export async function findClaudeBinary(): Promise<string> {
   if (_claudeBinaryPath) return _claudeBinaryPath;
 
   // Resolve absolute path via `which` so we can use execFile without shell: true

@@ -8,7 +8,8 @@ import type {
   LlmCallConfig,
   ResolvedEvent,
 } from "../../types/index.js";
-import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt } from "./prompts.js";
+import type { DiagnosticSignal } from "../catalog/diagnostic.js";
+import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt, buildDiagnosticPrompt } from "./prompts.js";
 import { callLLM, parseJsonResponse } from "./claude.js";
 import { getCached, setCached } from "./cache.js";
 import { searchBroad } from "../scanner/search.js";
@@ -114,6 +115,17 @@ export class MetadataExtractor {
       explanation: result.explanation ?? "",
       rename_detected: result.rename_detected ?? false,
       confidence: result.confidence ?? "low",
+    };
+  }
+
+  async runDiagnostic(signal: DiagnosticSignal): Promise<{ findings: string[]; fixInstruction: string }> {
+    const FALLBACK = { findings: ["Scan analysis failed — review the catalog manually."], fixInstruction: "" };
+    const prompt = buildDiagnosticPrompt(signal);
+    const text = await callLLM(prompt, { ...this.cfg, max_tokens: 2000 });
+    const result = parseJsonResponse<{ findings: string[]; fix_instruction: string }>(text, { findings: FALLBACK.findings, fix_instruction: "" });
+    return {
+      findings: Array.isArray(result.findings) ? result.findings : FALLBACK.findings,
+      fixInstruction: result.fix_instruction ?? "",
     };
   }
 

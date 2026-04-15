@@ -58,20 +58,40 @@ const EXCLUDE_DIRS = [
 
 /** Extra directories to exclude, set via config `repo.exclude_paths` */
 let extraExcludeDirs: string[] = [];
-/** Extra file glob patterns to exclude (entries with `*`), set via config `repo.exclude_paths` */
+/** Extra file glob patterns to exclude (entries with `*` but no `/`), set via config `repo.exclude_paths` */
 let extraExcludeFiles: string[] = [];
+/** Path-based prefixes to post-filter (patterns containing `/`), set via config `repo.exclude_paths` */
+let extraExcludePathPrefixes: string[] = [];
 
 export function setExcludePaths(paths: string[]): void {
   extraExcludeDirs = [];
   extraExcludeFiles = [];
+  extraExcludePathPrefixes = [];
   for (const entry of paths) {
-    if (entry.includes("*")) {
-      // File glob pattern — strip leading **/ since grep --exclude matches basename only
+    if (entry.includes("/")) {
+      // Path-based pattern — grep --exclude/--exclude-dir can't handle paths,
+      // so store as a prefix for post-filtering of grep results.
+      // Strip trailing wildcards and slashes: "backend/foo/**" → "backend/foo"
+      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "");
+      if (prefix) extraExcludePathPrefixes.push(prefix);
+    } else if (entry.includes("*")) {
+      // Pure filename glob (no path separator) — strip leading **/ since
+      // grep --exclude matches basename only. e.g. "**/*.module.css" → "*.module.css"
       extraExcludeFiles.push(entry.replace(/^\*\*\//, ""));
     } else {
+      // Plain directory name — pass as --exclude-dir
       extraExcludeDirs.push(entry);
     }
   }
+}
+
+/** Returns true if the given file path matches any excluded path prefix. */
+export function isPathExcluded(filePath: string): boolean {
+  if (extraExcludePathPrefixes.length === 0) return false;
+  const normalized = filePath.replace(/^\.\//, "");
+  return extraExcludePathPrefixes.some(
+    (prefix) => normalized === prefix || normalized.startsWith(prefix + "/")
+  );
 }
 
 export function buildExcludeArgs(): string[] {
@@ -162,7 +182,7 @@ export function parseCallSites(output: string): SearchMatch[] {
       if (isNaN(lineNum)) return null;
       return { file, line: lineNum, rawLine };
     })
-    .filter((m): m is SearchMatch => m !== null);
+    .filter((m): m is SearchMatch => m !== null && !isPathExcluded(m.file));
 }
 
 /**

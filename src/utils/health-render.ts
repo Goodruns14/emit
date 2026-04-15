@@ -2,7 +2,7 @@ import chalk from "chalk";
 import type { CatalogHealth } from "../types/index.js";
 import { logger } from "./logger.js";
 
-export function renderHealthSection(health: CatalogHealth): void {
+export function renderHealthSection(health: CatalogHealth, hasDiagnosticIssues = false, hasPendingFix = false): void {
   logger.summary([
     { label: "Extraction confidence (LLM):", value: `${health.located} events` },
     { label: "  ✓ High:", value: health.high_confidence },
@@ -32,6 +32,12 @@ export function renderHealthSection(health: CatalogHealth): void {
         chalk.yellow(`${count} flag${count === 1 ? "" : "s"}`) +
         chalk.gray(`  →  emit status --event ${event}`)
       );
+    }
+  } else if (hasDiagnosticIssues) {
+    if (hasPendingFix) {
+      logger.warn(`Catalog noise detected — run ${chalk.cyan("emit fix")} to apply the suggested config fix.`);
+    } else {
+      logger.warn(`Catalog noise detected — run ${chalk.cyan("emit scan --fresh")} for diagnosis and fix options.`);
     }
   } else {
     const n = health.located;

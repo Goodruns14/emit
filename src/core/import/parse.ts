@@ -5,11 +5,18 @@ export interface ParseOptions {
   column?: string; // user-specified column name for multi-column CSVs
 }
 
+export interface DiscriminatorEntry {
+  eventName: string;
+  property: string;
+  values: string[];
+}
+
 export interface ImportResult {
   events: string[];
   skipped: number; // duplicate count
   source_file: string;
   format: "csv" | "json";
+  discriminators?: DiscriminatorEntry[];
 }
 
 /**
@@ -124,7 +131,14 @@ function parseCsv(
     names = parseSingleColumnCsv(nonEmpty);
   }
 
-  return dedupe(names, filePath, "csv");
+  const result = dedupe(names, filePath, "csv");
+
+  if (isMultiColumn) {
+    const discriminators = extractDiscriminatorsFromCsv(nonEmpty);
+    if (discriminators.length > 0) result.discriminators = discriminators;
+  }
+
+  return result;
 }
 
 function parseMultiColumnCsv(lines: string[], column?: string): string[] {
@@ -233,6 +247,98 @@ function stripQuotes(s: string): string {
     return s.slice(1, -1).replace(/""/g, '"');
   }
   return s;
+}
+
+const DISC_PROPERTY_HEADERS = new Set(["discriminator_property", "disc_property"]);
+const DISC_VALUES_HEADERS = new Set(["discriminator_values", "disc_values"]);
+
+function extractDiscriminatorsFromCsv(lines: string[]): DiscriminatorEntry[] {
+  const rawHeaders = splitCsvRow(lines[0]);
+  const headers = rawHeaders.map((h) => h.trim().toLowerCase());
+
+  const propIdx = headers.findIndex((h) => DISC_PROPERTY_HEADERS.has(h));
+  const valIdx = headers.findIndex((h) => DISC_VALUES_HEADERS.has(h));
+
+  if (propIdx === -1 || valIdx === -1) return [];
+
+  const entries: DiscriminatorEntry[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cells = splitCsvRow(lines[i]);
+    const eventName = (cells[0] ?? "").trim();
+    const property = (cells[propIdx] ?? "").trim();
+    const valuesRaw = (cells[valIdx] ?? "").trim();
+
+    if (!eventName || !property || !valuesRaw) continue;
+
+    const values = valuesRaw.split(",").map((v) => v.trim()).filter(Boolean);
+    if (values.length > 0) {
+      entries.push({ eventName, property, values });
+    }
+  }
+
+  return entries;
+}
+
+// ── Values file ────────────────────────────────────────────────────────────────
+
+/**
+ * Load a flat list of discriminator values from a file.
+ * Supports single-column CSV, plain text (one value per line), and JSON arrays.
+ */
+export function parseValuesFile(filePath: string): string[] {
+  const resolved = path.resolve(filePath);
+
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    throw new Error(`Expected a file but got a directory: ${filePath}`);
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(resolved, "utf8").replace(/^\uFEFF/, "");
+  } catch (err) {
+    throw new Error(`Failed to read file: ${(err as Error).message}`);
+  }
+
+  if (!raw.trim()) {
+    throw new Error(`File is empty: ${filePath}`);
+  }
+
+  const ext = path.extname(resolved).toLowerCase();
+
+  if (ext === ".json") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`Invalid JSON in ${filePath}`);
+    }
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+      const values = (parsed as string[]).map((v) => v.trim()).filter(Boolean);
+      if (values.length === 0) throw new Error(`No values found in ${filePath}`);
+      return values;
+    }
+    throw new Error(`Values file must be a JSON array of strings`);
+  }
+
+  // .csv, .tsv, .txt — one value per line (single-column)
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const values: string[] = [];
+  for (const line of lines) {
+    const val = stripQuotes(line);
+    if (val) values.push(val);
+  }
+
+  if (values.length === 0) {
+    throw new Error(`No values found in ${filePath}`);
+  }
+
+  return values;
 }
 
 // ── JSON ───────────────────────────────────────────────────────────────────────

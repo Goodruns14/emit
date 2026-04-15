@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { parseEventsFile } from "../src/core/import/parse.js";
+import { parseEventsFile, parseValuesFile } from "../src/core/import/parse.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -173,6 +173,124 @@ describe("JSON — error cases", () => {
 });
 
 // ── Shared ─────────────────────────────────────────────────────────────────────
+
+// ── Discriminator columns ──────────────────────────────────────────────────────
+
+describe("CSV — discriminator columns", () => {
+  it("extracts discriminators when discriminator_property and discriminator_values columns are present", () => {
+    const f = write("events.csv", [
+      "event_name,discriminator_property,discriminator_values",
+      'Workflow builder journey,event_type,"user_clicked_todo,user_clicked_implement_plan"',
+      "button_click,button_id,\"signup_cta,add_to_cart\"",
+      "page_view,,",
+    ].join("\n"));
+    const result = parseEventsFile(f);
+    expect(result.events).toEqual(["Workflow builder journey", "button_click", "page_view"]);
+    expect(result.discriminators).toHaveLength(2);
+    expect(result.discriminators![0]).toEqual({
+      eventName: "Workflow builder journey",
+      property: "event_type",
+      values: ["user_clicked_todo", "user_clicked_implement_plan"],
+    });
+    expect(result.discriminators![1]).toEqual({
+      eventName: "button_click",
+      property: "button_id",
+      values: ["signup_cta", "add_to_cart"],
+    });
+  });
+
+  it("accepts disc_property and disc_values as shorthand column names", () => {
+    const f = write("events.csv", [
+      "event_name,disc_property,disc_values",
+      "button_click,button_id,signup_cta",
+    ].join("\n"));
+    const result = parseEventsFile(f);
+    expect(result.discriminators).toHaveLength(1);
+    expect(result.discriminators![0].property).toBe("button_id");
+  });
+
+  it("skips rows with empty discriminator_property or discriminator_values", () => {
+    const f = write("events.csv", [
+      "event_name,discriminator_property,discriminator_values",
+      "page_view,,",
+      "button_click,button_id,",
+      "nav_click,,signup_cta",
+      "purchase,action,checkout",
+    ].join("\n"));
+    const result = parseEventsFile(f);
+    expect(result.events).toEqual(["page_view", "button_click", "nav_click", "purchase"]);
+    expect(result.discriminators).toHaveLength(1);
+    expect(result.discriminators![0].eventName).toBe("purchase");
+  });
+
+  it("returns no discriminators when columns are absent — backwards compatible", () => {
+    const f = write("events.csv", [
+      "event_name,description",
+      "checkout_completed,Order done",
+    ].join("\n"));
+    const result = parseEventsFile(f);
+    expect(result.events).toEqual(["checkout_completed"]);
+    expect(result.discriminators).toBeUndefined();
+  });
+
+  it("returns no discriminators for single-column CSVs", () => {
+    const f = write("events.csv", "checkout_completed\nsignup_form_submitted\n");
+    const result = parseEventsFile(f);
+    expect(result.discriminators).toBeUndefined();
+  });
+
+  it("parses quoted cell containing comma-separated values", () => {
+    const f = write("events.csv", [
+      "event_name,discriminator_property,discriminator_values",
+      '"click","button_id","val_a,val_b,val_c"',
+    ].join("\n"));
+    const result = parseEventsFile(f);
+    expect(result.discriminators![0].values).toEqual(["val_a", "val_b", "val_c"]);
+  });
+});
+
+// ── parseValuesFile ────────────────────────────────────────────────────────────
+
+describe("parseValuesFile", () => {
+  it("loads values from a single-column CSV", () => {
+    const f = write("vals.csv", "signup_cta\nadd_to_cart\ncheckout\n");
+    expect(parseValuesFile(f)).toEqual(["signup_cta", "add_to_cart", "checkout"]);
+  });
+
+  it("loads values from a plain text file", () => {
+    const f = write("vals.txt", "signup_cta\nadd_to_cart\ncheckout\n");
+    expect(parseValuesFile(f)).toEqual(["signup_cta", "add_to_cart", "checkout"]);
+  });
+
+  it("loads values from a JSON array of strings", () => {
+    const f = write("vals.json", JSON.stringify(["signup_cta", "add_to_cart", "checkout"]));
+    expect(parseValuesFile(f)).toEqual(["signup_cta", "add_to_cart", "checkout"]);
+  });
+
+  it("strips surrounding quotes from CSV values", () => {
+    const f = write("vals.csv", '"signup_cta"\n"add_to_cart"\n');
+    expect(parseValuesFile(f)).toEqual(["signup_cta", "add_to_cart"]);
+  });
+
+  it("throws on non-existent file", () => {
+    expect(() => parseValuesFile("/tmp/no-such-file-99999.txt")).toThrow(/File not found/);
+  });
+
+  it("throws on empty file", () => {
+    const f = write("vals.txt", "");
+    expect(() => parseValuesFile(f)).toThrow(/empty/i);
+  });
+
+  it("throws on JSON that is not a string array", () => {
+    const f = write("vals.json", JSON.stringify({ values: ["a", "b"] }));
+    expect(() => parseValuesFile(f)).toThrow(/JSON array of strings/);
+  });
+
+  it("throws on invalid JSON", () => {
+    const f = write("vals.json", "{ not valid }");
+    expect(() => parseValuesFile(f)).toThrow(/Invalid JSON/);
+  });
+});
 
 describe("shared edge cases", () => {
   it("throws on empty CSV file", () => {

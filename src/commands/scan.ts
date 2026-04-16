@@ -37,6 +37,7 @@ interface ScanOptions {
   provider?: LlmProvider;
   fresh?: boolean;
   resolveMissing?: boolean | string;
+  yes?: boolean;
 }
 
 export function registerScan(program: Command): void {
@@ -58,6 +59,7 @@ export function registerScan(program: Command): void {
       "Override LLM provider: claude-code | anthropic | openai | openai-compatible"
     )
     .option("--fresh", "Force full re-extraction, ignoring cached results")
+    .option("--yes", "Non-interactive: auto-save everything without prompting (useful for CI)")
     .option(
       "--resolve-missing [events]",
       "Use LLM to find renamed/missing events. Pass comma-separated names, or omit for all not-found events"
@@ -649,13 +651,15 @@ async function runScan(opts: ScanOptions): Promise<number> {
       logger.line(`    ${chalk.cyan("3)")} Don't save — I'll fix the config and re-scan`);
       logger.blank();
 
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const choice = await new Promise<string>((resolve) => {
-        rl.question("  Choice [1]: ", (ans) => {
-          rl.close();
-          resolve(ans.trim() || "1");
-        });
-      });
+      const choice = opts.yes
+        ? "2"
+        : await new Promise<string>((resolve) => {
+            const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+            rl.question("  Choice [1]: ", (ans) => {
+              rl.close();
+              resolve(ans.trim() || "1");
+            });
+          });
       logger.blank();
 
       if (choice === "3") {
@@ -695,7 +699,8 @@ async function runScan(opts: ScanOptions): Promise<number> {
       writeOutput(catalogToSave, outputPath);
 
       // Save last-fix.json when there's a fix instruction, and ensure .gitignore excludes it
-      const emitDir = path.dirname(outputPath);
+      const emitDir = path.resolve(process.cwd(), ".emit");
+      fs.mkdirSync(emitDir, { recursive: true });
       if (diagnosis.fixInstruction) {
         const flaggedEventDetails = [...flagged].map((name) => {
           const event = output.events[name];
@@ -748,13 +753,15 @@ async function runScan(opts: ScanOptions): Promise<number> {
     logger.blank();
     logger.warn("Dry run — catalog not written");
   } else if (opts.confirm) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await new Promise<string>((resolve) => {
-      rl.question("  Save these results to emit.catalog.yml? [Y/n]: ", (ans) => {
-        rl.close();
-        resolve(ans);
-      });
-    });
+    const answer = opts.yes
+      ? "y"
+      : await new Promise<string>((resolve) => {
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          rl.question("  Save these results to emit.catalog.yml? [Y/n]: ", (ans) => {
+            rl.close();
+            resolve(ans);
+          });
+        });
     if (answer.trim().toLowerCase() !== "n") {
       writeOutput(output, outputPath);
       logger.blank();

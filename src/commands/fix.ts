@@ -4,7 +4,7 @@ import * as path from "path";
 import * as readline from "readline";
 import chalk from "chalk";
 import { execa } from "execa";
-import { loadConfig, resolveOutputPath } from "../utils/config.js";
+import { loadConfig } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 import { findClaudeBinary } from "../core/extractor/claude.js";
 
@@ -38,8 +38,7 @@ async function runFix(): Promise<number> {
   }
 
   // 2. Read .emit/last-fix.json
-  const outputPath = resolveOutputPath(config);
-  const emitDir = path.dirname(outputPath);
+  const emitDir = path.resolve(process.cwd(), ".emit");
   const lastFixPath = path.join(emitDir, "last-fix.json");
 
   if (!fs.existsSync(lastFixPath)) {

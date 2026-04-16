@@ -235,6 +235,16 @@ cross-cutting patterns below.
 
 ${sections.join("\n\n")}
 
+Valid emit.config.yml options you may suggest in fix_instruction:
+- exclude_paths: string[] — glob patterns to exclude from scanning
+- track_pattern: string — the function call pattern to match (e.g., "analytics.track(")
+- discriminator_properties: object — maps parent event to property + values for sub-event expansion
+
+Do NOT suggest any other config options. Options like \`context_lines\`, \`window_size\`,
+\`max_context\`, or similar DO NOT EXIST. The context window size is hardcoded.
+If the problem cannot be fixed via the options above, say so explicitly in the
+fix_instruction and describe the problem rather than inventing a solution.
+
 Return ONLY a valid JSON object. No preamble, no markdown fences:
 {
   "findings": [

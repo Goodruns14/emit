@@ -1,6 +1,5 @@
 import type {
   CodeContext,
-  PropertyStat,
   LiteralValues,
   ExtractedMetadata,
   PropertyDefinition,
@@ -34,17 +33,15 @@ export class MetadataExtractor {
   async extractMetadata(
     eventName: string,
     codeContext: CodeContext,
-    propertyStats: PropertyStat[],
     literalValues: LiteralValues,
   ): Promise<ExtractedMetadata> {
-    const cacheKey = codeContext.context + JSON.stringify(propertyStats);
+    const cacheKey = codeContext.context;
     const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
     if (cached) return cached;
 
     const prompt = buildExtractionPrompt(
       eventName,
       codeContext,
-      propertyStats,
       literalValues,
     );
 

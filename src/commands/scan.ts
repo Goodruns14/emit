@@ -20,7 +20,6 @@ import { renderHealthSection } from "../utils/health-render.js";
 import { collectDiagnosticSignal, shouldRunDiagnostic, getFlaggedEvents } from "../core/catalog/diagnostic.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
-  PropertyStat,
   CatalogEvent,
   EmitCatalog,
   LlmProvider,
@@ -330,8 +329,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
       continue;
     }
 
-    const propertyStats: PropertyStat[] = [];
-
     const subInfo = subEventMap.get(event.name);
     let meta;
     if (subInfo) {
@@ -348,7 +345,6 @@ async function runScan(opts: ScanOptions): Promise<number> {
       meta = await extractor.extractMetadata(
         event.name,
         ctx,
-        propertyStats,
         literalValues,
       );
     }
@@ -356,12 +352,11 @@ async function runScan(opts: ScanOptions): Promise<number> {
     // ── Build catalog event ──────────────────────────────────────
     const mergedProperties: CatalogEvent["properties"] = {};
     for (const [propName, propMeta] of Object.entries(meta.properties)) {
-      const stat = propertyStats.find((s) => s.property_name === propName);
       mergedProperties[propName] = {
         ...propMeta,
-        null_rate: stat?.null_rate ?? 0,
-        cardinality: stat?.cardinality ?? 0,
-        sample_values: stat?.sample_values ?? [],
+        null_rate: 0,
+        cardinality: 0,
+        sample_values: [],
         code_sample_values: literalValues[propName] ?? [],
       };
     }

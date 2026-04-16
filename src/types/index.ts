@@ -1,15 +1,4 @@
 // ─────────────────────────────────────────────
-// WAREHOUSE / SOURCE DATA TYPES
-// ─────────────────────────────────────────────
-
-export interface PropertyStat {
-  property_name: string;
-  null_rate: number;
-  cardinality: number;
-  sample_values: string[];
-}
-
-// ─────────────────────────────────────────────
 // SCANNER TYPES
 // ─────────────────────────────────────────────
 
@@ -196,9 +185,7 @@ export interface DestinationAdapter {
 // CONFIG TYPES
 // ─────────────────────────────────────────────
 
-export type SchemaType = "monolith" | "per_event" | "custom";
 export type SdkType = "segment" | "rudderstack" | "snowplow" | "custom";
-export type DestinationType = "segment" | "amplitude" | "mixpanel" | "snowflake";
 
 // ─────────────────────────────────────────────
 // LLM PROVIDER TYPES

@@ -1,9 +1,8 @@
-import type { CodeContext, PropertyStat, LiteralValues } from "../../types/index.js";
+import type { CodeContext, LiteralValues } from "../../types/index.js";
 
 export function buildExtractionPrompt(
   eventName: string,
   codeContext: CodeContext,
-  propertyStats: PropertyStat[],
   literalValues: LiteralValues,
 ): string {
   const additionalSites = codeContext.all_call_sites.slice(1);
@@ -26,10 +25,6 @@ export function buildExtractionPrompt(
           .join("\n")}\n`
       : "";
 
-  const warehouseSection = propertyStats.length > 0
-    ? `\nProperty stats: ${JSON.stringify(propertyStats, null, 2)}\n`
-    : "";
-
   return `
 You are analyzing analytics instrumentation code to extract semantic metadata.
 Your job is to understand what this event means in business terms.
@@ -40,7 +35,7 @@ Event name: ${eventName}${
       : ""
   }
 Call sites found: ${codeContext.all_call_sites.length}
-${warehouseSection}${literalSection}
+${literalSection}
 Primary call site (${codeContext.file_path}:${codeContext.line_number}):
 \`\`\`
 ${codeContext.context}

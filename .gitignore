@@ -9,6 +9,7 @@ emit.config.yml
 !.env.example
 .DS_Store
 test-repos/
+emit-cli/
 md files/
 action/*.js
 action/*.js.map

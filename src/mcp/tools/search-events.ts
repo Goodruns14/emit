@@ -9,23 +9,24 @@ export function searchEventsTool(catalogPath: string, input: SearchEventsInput) 
   try {
     const catalog = readCatalog(catalogPath);
     const results = searchEvents(catalog, input.query);
-    const q = input.query.toLowerCase();
+    const tokens = input.query.toLowerCase().split(/\s+/).filter(Boolean);
+    const hitsAny = (text: string) => tokens.some((t) => text.toLowerCase().includes(t));
 
-    const events = Object.entries(results).map(([name, event]) => {
+    const events = results.map(({ name, event, score }) => {
       // Determine what matched so the agent knows why this event was returned
       const matchedOn: string[] = [];
-      if (name.toLowerCase().includes(q)) matchedOn.push("event_name");
-      if (event.description?.toLowerCase().includes(q)) matchedOn.push("description");
-      if (event.fires_when?.toLowerCase().includes(q)) matchedOn.push("fires_when");
+      if (hitsAny(name)) matchedOn.push("event_name");
+      if (event.description && hitsAny(event.description)) matchedOn.push("description");
+      if (event.fires_when && hitsAny(event.fires_when)) matchedOn.push("fires_when");
 
       const matchedProperties: string[] = [];
       for (const [propName, prop] of Object.entries(event.properties ?? {})) {
         const hits =
-          propName.toLowerCase().includes(q) ||
-          prop.description?.toLowerCase().includes(q) ||
-          (prop.edge_cases ?? []).some((e) => e.toLowerCase().includes(q)) ||
-          (prop.sample_values ?? []).some((v) => String(v).toLowerCase().includes(q)) ||
-          (prop.code_sample_values ?? []).some((v) => String(v).toLowerCase().includes(q));
+          hitsAny(propName) ||
+          (prop.description != null && hitsAny(prop.description)) ||
+          (prop.edge_cases ?? []).some((e) => hitsAny(e)) ||
+          (prop.sample_values ?? []).some((v) => hitsAny(String(v))) ||
+          (prop.code_sample_values ?? []).some((v) => hitsAny(String(v)));
         if (hits) matchedProperties.push(propName);
       }
       if (matchedProperties.length > 0) matchedOn.push("properties");
@@ -36,6 +37,7 @@ export function searchEventsTool(catalogPath: string, input: SearchEventsInput) 
         fires_when: event.fires_when,
         confidence: event.confidence,
         source_file: event.source_file,
+        relevance_score: Math.round(score * 10) / 10,
         matched_on: matchedOn,
         ...(matchedProperties.length > 0 ? { matched_properties: matchedProperties } : {}),
         ...(event.parent_event ? {

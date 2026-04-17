@@ -242,25 +242,40 @@ export interface LlmCallConfig {
   api_key_env?: string;
 }
 
-export interface SegmentDestinationConfig {
+/**
+ * Fields shared by every destination config.
+ *
+ * `include_sub_events` controls whether discriminator sub-events are rolled up
+ * into their parent event before the adapter sees them. Default behavior
+ * (`false` or omitted) is to roll up — most destinations (Mixpanel, Amplitude,
+ * Snowflake per-event) only recognize the parent event name on the wire, so
+ * pushing sub-events creates phantom entries. Set to `true` if your adapter
+ * genuinely treats each sub-event as a distinct push target.
+ */
+export interface DestinationConfigBase {
+  /** If true, skip the discriminator rollup and pass sub-events through to the adapter. */
+  include_sub_events?: boolean;
+}
+
+export interface SegmentDestinationConfig extends DestinationConfigBase {
   type: "segment";
   workspace: string;
   tracking_plan_id: string;
 }
 
-export interface AmplitudeDestinationConfig {
+export interface AmplitudeDestinationConfig extends DestinationConfigBase {
   type: "amplitude";
   project_id: string | number;
 }
 
-export interface MixpanelDestinationConfig {
+export interface MixpanelDestinationConfig extends DestinationConfigBase {
   type: "mixpanel";
   project_id: string | number;
 }
 
 export type CdpPreset = "segment" | "rudderstack" | "snowplow" | "none";
 
-export interface SnowflakeDestinationConfig {
+export interface SnowflakeDestinationConfig extends DestinationConfigBase {
   type: "snowflake";
   account?: string;
   username?: string;
@@ -286,7 +301,7 @@ export interface SnowflakeDestinationConfig {
  *       options:                     # passed to the adapter constructor
  *         api_key_env: STATSIG_API_KEY
  */
-export interface CustomDestinationConfig {
+export interface CustomDestinationConfig extends DestinationConfigBase {
   type: "custom";
   /** Path to the adapter module (.mjs or .js), relative to emit.config.yml. */
   module: string;

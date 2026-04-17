@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { loadConfigWithPath, resolveOutputPath } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 import { readCatalog } from "../core/catalog/index.js";
+import { rollupDiscriminators } from "../core/catalog/rollup.js";
 import { filterEvents } from "../core/catalog/search.js";
 import { createDestinationAdapter } from "../core/destinations/index.js";
 import type { PushResult } from "../types/index.js";
@@ -215,8 +216,16 @@ async function runPush(opts: PushOptions): Promise<number> {
         logger.line(chalk.bold(`Pushing to ${adapter.name}...`));
       }
 
+      // Roll up discriminator sub-events into their parents unless this
+      // destination explicitly opts out. Sub-events are logical entries in the
+      // catalog that don't exist as distinct event names on the wire, so
+      // pushing them naively creates phantom schemas in SaaS destinations.
+      const catalogForAdapter = destConfig.include_sub_events
+        ? catalog
+        : rollupDiscriminators(catalog);
+
       try {
-        const result = await adapter.push(catalog, {
+        const result = await adapter.push(catalogForAdapter, {
           dryRun: opts.dryRun,
           events: targetEvents,
         });

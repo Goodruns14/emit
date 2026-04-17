@@ -66,6 +66,7 @@ Rules:
 - Edge cases must be visible in the code — do not invent them
 - Only include properties you can actually see in the code
 - For properties where literal values were provided above, reflect those in your description (e.g. "one of: X, Y, Z")
+- If a property is named \`$set\` (literal dollar sign + "set"), SKIP it entirely. \`$set\` is a PostHog person-property update block, not an event property — its contents describe user identity/traits, not this event's payload. Do not include \`$set\` in the returned properties object.
 `.trim();
 }
 

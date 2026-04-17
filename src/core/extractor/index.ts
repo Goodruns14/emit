@@ -23,6 +23,20 @@ const EXTRACTION_FALLBACK: ExtractedMetadata = {
   flags: ["Extraction failed — manual review required"],
 };
 
+/**
+ * Strip scanner/LLM artifacts that aren't real event properties.
+ * Applied to both cache hits and fresh LLM results so legacy cached
+ * entries get cleaned transparently.
+ */
+function sanitizeExtraction(m: ExtractedMetadata): ExtractedMetadata {
+  if (m.properties && "$set" in m.properties) {
+    const { $set, ...rest } = m.properties as Record<string, unknown>;
+    void $set;
+    return { ...m, properties: rest as ExtractedMetadata["properties"] };
+  }
+  return m;
+}
+
 export class MetadataExtractor {
   private cfg: LlmCallConfig;
 
@@ -37,7 +51,7 @@ export class MetadataExtractor {
   ): Promise<ExtractedMetadata> {
     const cacheKey = codeContext.context;
     const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
-    if (cached) return cached;
+    if (cached) return sanitizeExtraction(cached);
 
     const prompt = buildExtractionPrompt(
       eventName,
@@ -48,8 +62,9 @@ export class MetadataExtractor {
     const text = await callLLM(prompt, this.cfg);
     const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
 
-    setCached(eventName, cacheKey, result);
-    return result;
+    const sanitized = sanitizeExtraction(result);
+    setCached(eventName, cacheKey, sanitized);
+    return sanitized;
   }
 
   async extractDiscriminatorMetadata(

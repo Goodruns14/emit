@@ -123,7 +123,7 @@ export class RepoScanner {
   }
 
   async findDiscriminatorValue(value: string): Promise<CodeContext> {
-    const matches = await searchDiscriminatorValue(value, this.paths);
+    const matches = await searchDiscriminatorValue(value, this.paths, this.customPatterns);
 
     if (matches.length > 0) {
       const primary = matches[0];

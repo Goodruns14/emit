@@ -385,10 +385,15 @@ export function generateCasingVariants(eventName: string): string[] {
  * Unlike searchDirect, this does NOT filter by tracking patterns —
  * the value may appear in handlers, enums, GraphQL definitions, etc.
  * Filters out comments and imports only.
+ *
+ * If `trackPatterns` is provided, matches within N lines of a tracking call
+ * are preferred over matches in unrelated files. Falls back to all matches
+ * when no candidate is near a tracking call.
  */
 export async function searchDiscriminatorValue(
   value: string,
-  paths: string[]
+  paths: string[],
+  trackPatterns: string[] = []
 ): Promise<SearchMatch[]> {
   const allMatches: SearchMatch[] = [];
 
@@ -433,6 +438,18 @@ export async function searchDiscriminatorValue(
       }
     } catch {
       // no matches
+    }
+  }
+
+  // Rank by proximity to tracking calls when track patterns are provided.
+  // If any matches are near a tracking call, return only those; otherwise
+  // fall back to the unfiltered list to preserve current behavior.
+  if (trackPatterns.length > 0 && allMatches.length > 0) {
+    const nearTracking = allMatches.filter((m) =>
+      hasNearbyTrackingCall(m.file, m.line, trackPatterns)
+    );
+    if (nearTracking.length > 0) {
+      return nearTracking.slice(0, 20);
     }
   }
 

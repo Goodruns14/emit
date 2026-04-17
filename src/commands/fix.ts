@@ -24,10 +24,11 @@ export function registerFix(program: Command): void {
   program
     .command("fix")
     .description("Apply the config fix suggested by the last scan diagnosis")
-    .action(async () => { process.exit(await runFix()); });
+    .option("--yes", "Run Claude Code headlessly (no interactive session); auto-run rescan after fix")
+    .action(async (opts: { yes?: boolean }) => { process.exit(await runFix(opts)); });
 }
 
-async function runFix(): Promise<number> {
+async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
   // 1. Load config to resolve .emit/ dir
   let config;
   try {
@@ -74,8 +75,12 @@ async function runFix(): Promise<number> {
     return 1;
   }
 
-  // 5. Run Claude Code interactively
-  logger.line(chalk.gray("  Claude Code will open to apply the fix. Approve the edit, then type") + chalk.cyan(" /exit") + chalk.gray(" to continue."));
+  // 5. Run Claude Code (interactive by default, headless with --yes)
+  if (opts.yes) {
+    logger.line(chalk.gray("  Running Claude Code headlessly (--yes)..."));
+  } else {
+    logger.line(chalk.gray("  Claude Code will open to apply the fix. Approve the edit, then type") + chalk.cyan(" /exit") + chalk.gray(" to continue."));
+  }
   logger.blank();
   // Build richer prompt with full diagnosis context and call site locations
   const callSiteLines = (lastFix.flaggedEvents ?? []).map((ev) => {
@@ -98,11 +103,33 @@ async function runFix(): Promise<number> {
     ``,
     `Add the right exclude_paths to emit.config.yml to exclude the files causing noise.`,
     `Make only this config change — do not run any other commands.`,
+    ``,
+    `SAFETY RULES:`,
+    `1. Preserve discovery. For each file you're considering excluding, cross-reference`,
+    `   every flagged event's all_call_sites above. If the file appears in an event's`,
+    `   all_call_sites AND excluding it would leave that event with ZERO remaining call`,
+    `   sites, DO NOT exclude it — that file is the only evidence the event exists, and`,
+    `   excluding it will send the event to not_found on rescan. Skip that exclude and`,
+    `   note the concern for the user. Only exclude such a file if you have explicit`,
+    `   evidence the event is dead/legacy.`,
+    `2. Small scope. Prefer ONE file or ONE directory per fix round. If you've identified`,
+    `   multiple noise sources, pick the most impactful one; the user will re-run emit fix`,
+    `   after rescanning to address the next. Bulk multi-file excludes in a single edit`,
+    `   compound risk and make it harder to attribute regressions.`,
   ].join("\n");
 
   let claudeRan = false;
   try {
-    await execa(claudeBin, [prompt], { stdio: "inherit" });
+    if (opts.yes) {
+      // Headless: prompt via stdin, auto-accept edits, inherit stdio for visibility
+      await execa(
+        claudeBin,
+        ["-p", "--permission-mode", "acceptEdits", prompt],
+        { stdio: ["ignore", "inherit", "inherit"] }
+      );
+    } else {
+      await execa(claudeBin, [prompt], { stdio: "inherit" });
+    }
     claudeRan = true;
   } catch (err: any) {
     if (err.exitCode !== undefined) {
@@ -125,19 +152,33 @@ async function runFix(): Promise<number> {
     }
   }
 
-  // 6. Prompt to re-scan
+  // 6. Prompt to re-scan (auto-run with --yes)
   logger.blank();
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((resolve) => {
-    rl.question("  Run emit scan --fresh to verify? [Y/n]: ", (ans) => {
-      rl.close();
-      resolve(ans.trim());
+  let runRescan: boolean;
+  if (opts.yes) {
+    runRescan = true;
+  } else {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise<string>((resolve) => {
+      rl.question("  Run emit scan --fresh to verify? [Y/n]: ", (ans) => {
+        rl.close();
+        resolve(ans.trim());
+      });
     });
-  });
+    runRescan = answer.toLowerCase() !== "n";
+  }
 
-  if (answer.toLowerCase() !== "n") {
-    // 7. Run scan --fresh inline
-    await execa("node", [process.argv[1], "scan", "--fresh"], { stdio: "inherit" });
+  if (runRescan) {
+    // 7. Run scan --fresh inline (with --yes when non-interactive)
+    const scanArgs = ["scan", "--fresh"];
+    if (opts.yes) scanArgs.push("--yes");
+    try {
+      await execa("node", [process.argv[1], ...scanArgs], { stdio: "inherit" });
+    } catch (err: any) {
+      // scan may exit non-zero for soft diagnostics (not-found events, etc.).
+      // That's not a failure of emit fix — the scan output is what the user wanted.
+      if (err.exitCode === undefined) throw err;
+    }
   } else {
     // 8. Show message
     logger.blank();

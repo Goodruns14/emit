@@ -284,6 +284,14 @@ export interface SnowflakeDestinationConfig extends DestinationConfigBase {
   schema?: string;
   schema_type: "per_event" | "monolith";
   cdp_preset?: CdpPreset;
+  /**
+   * Additional column names to skip when writing COMMENTs, merged with (not
+   * replacing) the cdp_preset's exclude list. Useful for non-standard warehouse
+   * schemas — e.g. Fivetran's `_FIVETRAN_*` columns, custom ETL pipelines'
+   * internal tracking columns. Matched case-insensitively against the
+   * uppercase column names Snowflake returns from information_schema.
+   */
+  exclude_columns?: string[];
 }
 
 /**

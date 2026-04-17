@@ -158,8 +158,14 @@ export interface CatalogDiff {
 // ADAPTER INTERFACES
 // ─────────────────────────────────────────────
 
+/**
+ * Options passed to a destination adapter's push() call.
+ * Set by `emit push` based on CLI flags.
+ */
 export interface PushOpts {
+  /** If true, the adapter should count what it would push but make no API calls. */
   dryRun?: boolean;
+  /** If provided, the adapter should only push these event names (filter the catalog). */
   events?: string[];
 }
 
@@ -169,15 +175,35 @@ export interface SkippedEvent {
   possible_matches: string[];
 }
 
+/**
+ * The shape every destination adapter must return from push().
+ * `pushed` + `skipped` + `errors.length` should equal the number of target events.
+ */
 export interface PushResult {
+  /** Number of events successfully pushed to the destination. */
   pushed: number;
+  /** Number of events intentionally skipped (e.g. not found at the destination). */
   skipped: number;
+  /** Details about each skipped event — surfaced to the user by emit push. */
   skipped_events: SkippedEvent[];
+  /** Human-readable error messages, one per failed event. */
   errors: string[];
 }
 
+/**
+ * Interface every destination adapter must implement.
+ *
+ * Built-in adapters (Mixpanel, Snowflake, etc.) implement this class-style.
+ * User-authored custom adapters loaded via `type: custom` default-export a class
+ * implementing this interface. See docs/DESTINATIONS.md for the authoring guide.
+ */
 export interface DestinationAdapter {
+  /** Display name shown in emit push output (e.g. "Mixpanel", "Snowflake"). */
   name: string;
+  /**
+   * Push the catalog's metadata to the destination.
+   * Must respect opts.dryRun (count only, no network) and opts.events (filter).
+   */
   push(catalog: EmitCatalog, opts?: PushOpts): Promise<PushResult>;
 }
 
@@ -245,11 +271,37 @@ export interface SnowflakeDestinationConfig {
   cdp_preset?: CdpPreset;
 }
 
+/**
+ * User-authored custom destination adapter.
+ *
+ * Emit loads the module at `module` (resolved relative to emit.config.yml)
+ * and calls `new <DefaultExport>(options)`. The exported class must implement
+ * the `DestinationAdapter` interface.
+ *
+ * Example:
+ *   destinations:
+ *     - type: custom
+ *       module: ./emit.destinations/statsig.mjs
+ *       name: Statsig                # optional display name override
+ *       options:                     # passed to the adapter constructor
+ *         api_key_env: STATSIG_API_KEY
+ */
+export interface CustomDestinationConfig {
+  type: "custom";
+  /** Path to the adapter module (.mjs or .js), relative to emit.config.yml. */
+  module: string;
+  /** Optional display name override. Defaults to the adapter's declared `name`. */
+  name?: string;
+  /** Arbitrary options passed to the adapter constructor. */
+  options?: Record<string, unknown>;
+}
+
 export type DestinationConfig =
   | SegmentDestinationConfig
   | AmplitudeDestinationConfig
   | MixpanelDestinationConfig
-  | SnowflakeDestinationConfig;
+  | SnowflakeDestinationConfig
+  | CustomDestinationConfig;
 
 export type DiscriminatorPropertyConfig = string | {
   property: string;

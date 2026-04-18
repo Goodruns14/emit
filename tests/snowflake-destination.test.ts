@@ -528,3 +528,560 @@ describe("SnowflakeDestinationAdapter", () => {
     );
   });
 });
+
+// ── Phase 4: event_table_mapping override for per-event mode ──────────
+
+describe("SnowflakeDestinationAdapter — event_table_mapping override", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses event_table_mapping when provided instead of the naming convention", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      event_table_mapping: {
+        purchase_completed: "EVT_PURCHASE_COMPLETED",
+      },
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        // Notice: the "default" naming (PURCHASE_COMPLETED) is NOT in the
+        // discovered set — only the custom-mapped name.
+        return [{ TABLE_NAME: "EVT_PURCHASE_COMPLETED" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "BILL_AMOUNT" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(baseCatalog, { events: ["purchase_completed"] });
+
+    expect(result.pushed).toBe(1);
+    expect(result.skipped).toBe(0);
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE PUBLIC.EVT_PURCHASE_COMPLETED IS"),
+    );
+    // Did NOT try to comment on the default-convention name:
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE PUBLIC.PURCHASE_COMPLETED IS"),
+    );
+  });
+
+  it("falls through to naming convention for events not in event_table_mapping", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      event_table_mapping: {
+        purchase_completed: "EVT_PURCHASE_COMPLETED",
+        // user_signed_up intentionally NOT mapped → falls through to USER_SIGNED_UP
+      },
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVT_PURCHASE_COMPLETED" }, { TABLE_NAME: "USER_SIGNED_UP" }];
+      }
+      if (sql.includes("information_schema.columns") && sql.includes("EVT_PURCHASE_COMPLETED")) {
+        return [{ COLUMN_NAME: "BILL_AMOUNT" }];
+      }
+      if (sql.includes("information_schema.columns") && sql.includes("USER_SIGNED_UP")) {
+        return [{ COLUMN_NAME: "EMAIL" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(baseCatalog);
+
+    expect(result.pushed).toBe(2);
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE PUBLIC.EVT_PURCHASE_COMPLETED IS"),
+    );
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE PUBLIC.USER_SIGNED_UP IS"),
+    );
+  });
+
+  it("event_table_mapping overrides cdp_preset's naming convention (explicit > implicit)", async () => {
+    // User has cdp_preset: segment (which derives PURCHASE_COMPLETED) AND
+    // an explicit event_table_mapping → mapping wins.
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      cdp_preset: "segment",
+      event_table_mapping: {
+        purchase_completed: "CUSTOM_TABLE_NAME",
+      },
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "CUSTOM_TABLE_NAME" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "BILL_AMOUNT" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(baseCatalog, { events: ["purchase_completed"] });
+
+    expect(result.pushed).toBe(1);
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE PUBLIC.CUSTOM_TABLE_NAME IS"),
+    );
+  });
+});
+
+// ── Phase 4: multi_event mode ────────────────────────────────────────
+
+// Catalog with one shared property (user_id, used by both events) and
+// several event-specific ones. Used to verify property attribution and
+// property_definitions handling.
+const multiEventCatalog: EmitCatalog = {
+  ...baseCatalog,
+  property_definitions: {
+    user_id: {
+      description: "The user's stable ID.",
+      events: ["purchase_completed", "user-signed-up"],
+      deviations: {},
+    },
+  },
+  events: {
+    purchase_completed: {
+      ...baseCatalog.events.purchase_completed,
+      properties: {
+        bill_amount: {
+          description: "Total in cents.",
+          edge_cases: [],
+          null_rate: 0,
+          cardinality: 50,
+          sample_values: [],
+          code_sample_values: [],
+          confidence: "high",
+        },
+        user_id: {
+          description: "Shared user ID.",
+          edge_cases: [],
+          null_rate: 0,
+          cardinality: 1000,
+          sample_values: [],
+          code_sample_values: [],
+          confidence: "high",
+        },
+      },
+    },
+    "user-signed-up": {
+      ...baseCatalog.events["user-signed-up"],
+      properties: {
+        email: {
+          description: "The user's email.",
+          edge_cases: [],
+          null_rate: 0,
+          cardinality: 1000,
+          sample_values: [],
+          code_sample_values: [],
+          confidence: "high",
+        },
+        user_id: {
+          description: "Shared user ID.",
+          edge_cases: [],
+          null_rate: 0,
+          cardinality: 1000,
+          sample_values: [],
+          code_sample_values: [],
+          confidence: "high",
+        },
+      },
+    },
+  },
+};
+
+describe("SnowflakeDestinationAdapter — multi_event mode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("wide layout: COMMENTs on table, event column, and matching property columns", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      // No cdp_preset → no auto-excludes; test pure wide-mode behavior.
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        // Table has event-property columns (wide layout)
+        return [
+          { COLUMN_NAME: "EVENT_NAME" },
+          { COLUMN_NAME: "USER_ID" },
+          { COLUMN_NAME: "BILL_AMOUNT" },
+          { COLUMN_NAME: "EMAIL" },
+        ];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(multiEventCatalog);
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.pushed).toBe(2);
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+
+    // Table comment with rolled-up event summary
+    const tableComment = calls.find((c: string) =>
+      c.startsWith("COMMENT ON TABLE ANALYTICS.EVENTS IS"),
+    );
+    expect(tableComment).toBeDefined();
+    expect(tableComment).toContain("Contains events:");
+    expect(tableComment).toContain("purchase_completed");
+    expect(tableComment).toContain("user-signed-up");
+
+    // Event column comment with the same summary
+    const eventColComment = calls.find((c: string) =>
+      c.startsWith("COMMENT ON COLUMN ANALYTICS.EVENTS.EVENT_NAME IS"),
+    );
+    expect(eventColComment).toBeDefined();
+    expect(eventColComment).toContain("Contains events:");
+
+    // Per-property-column comments
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.BILL_AMOUNT IS"),
+    );
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.EMAIL IS"),
+    );
+
+    // Shared user_id property should use property_definitions consensus
+    const userIdComment = calls.find((c: string) =>
+      c.startsWith("COMMENT ON COLUMN ANALYTICS.EVENTS.USER_ID IS"),
+    );
+    expect(userIdComment).toBeDefined();
+    expect(userIdComment).toContain("The user''s stable ID."); // from property_definitions (SQL-escaped)
+    expect(userIdComment).toContain("Populated for events:");
+    expect(userIdComment).toContain("purchase_completed");
+    expect(userIdComment).toContain("user-signed-up");
+  });
+
+  it("single-event property gets attribution suffix 'Populated when EVENT_NAME=...'", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "EVENT_NAME" }, { COLUMN_NAME: "BILL_AMOUNT" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(multiEventCatalog, { events: ["purchase_completed"] });
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    const billComment = calls.find((c: string) =>
+      c.startsWith("COMMENT ON COLUMN ANALYTICS.EVENTS.BILL_AMOUNT IS"),
+    );
+    expect(billComment).toBeDefined();
+    expect(billComment).toContain("Total in cents.");
+    // Single quotes are SQL-escaped as doubled quotes within the COMMENT literal
+    expect(billComment).toContain("Populated when EVENT_NAME=''purchase_completed''");
+  });
+
+  it("narrow layout: only the table/event-column get comments; properties_column gets pointer", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      properties_column: "PROPERTIES",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        // No event-property columns, just the VARIANT blob
+        return [{ COLUMN_NAME: "EVENT_NAME" }, { COLUMN_NAME: "PROPERTIES" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(multiEventCatalog);
+
+    expect(result.errors).toHaveLength(0);
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE ANALYTICS.EVENTS IS"),
+    );
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.EVENT_NAME IS"),
+    );
+
+    // Generic pointer on the properties column
+    const propsComment = calls.find((c: string) =>
+      c.startsWith("COMMENT ON COLUMN ANALYTICS.EVENTS.PROPERTIES IS"),
+    );
+    expect(propsComment).toBeDefined();
+    expect(propsComment).toContain("emit.catalog.yml");
+
+    // No per-property-column comments (those properties don't exist as columns)
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.BILL_AMOUNT IS"),
+    );
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.EMAIL IS"),
+    );
+  });
+
+  it("hybrid layout: some props as columns + VARIANT — column-props commented, JSON-props skipped", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      properties_column: "PROPERTIES",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        // BILL_AMOUNT exists as a column, EMAIL does not (it lives in PROPERTIES JSON)
+        return [
+          { COLUMN_NAME: "EVENT_NAME" },
+          { COLUMN_NAME: "BILL_AMOUNT" },
+          { COLUMN_NAME: "PROPERTIES" },
+        ];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(multiEventCatalog);
+
+    expect(result.errors).toHaveLength(0);
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+
+    // BILL_AMOUNT got commented
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.BILL_AMOUNT IS"),
+    );
+    // EMAIL did NOT get commented (column doesn't exist)
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.EMAIL IS"),
+    );
+    // PROPERTIES column got pointer
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.PROPERTIES IS"),
+    );
+  });
+
+  it("exclude_columns still honored in multi_event mode", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      cdp_preset: undefined,
+      exclude_columns: ["BILL_AMOUNT"],
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [
+          { COLUMN_NAME: "EVENT_NAME" },
+          { COLUMN_NAME: "BILL_AMOUNT" },
+          { COLUMN_NAME: "EMAIL" },
+        ];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(multiEventCatalog);
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    // BILL_AMOUNT excluded
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.BILL_AMOUNT IS"),
+    );
+    // EMAIL still commented
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN ANALYTICS.EVENTS.EMAIL IS"),
+    );
+  });
+
+  it("errors fast if multi_event_table doesn't exist on Snowflake", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.NONEXISTENT",
+      event_column: "EVENT_NAME",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return []; // table not found
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(multiEventCatalog);
+
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain("Multi-event table not found");
+    expect(result.errors[0]).toContain("ANALYTICS.NONEXISTENT");
+  });
+
+  it("errors fast if event_column doesn't exist on the table", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "NONEXISTENT_COL",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "EVENT_NAME" }, { COLUMN_NAME: "USER_ID" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(multiEventCatalog);
+
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain("event_column 'NONEXISTENT_COL' not found");
+  });
+
+  it("events filter scopes the table comment to just the listed events", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "EVENT_NAME" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(multiEventCatalog, { events: ["purchase_completed"] });
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    const tableComment = calls.find((c: string) =>
+      c.startsWith("COMMENT ON TABLE ANALYTICS.EVENTS IS"),
+    );
+    expect(tableComment).toBeDefined();
+    expect(tableComment).toContain("purchase_completed");
+    expect(tableComment).not.toContain("user-signed-up");
+  });
+
+  it("accepts bare table name (no schema prefix), qualifying with config.schema", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "EVENTS", // bare table name
+      event_column: "EVENT_NAME",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "EVENT_NAME" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    const result = await adapter.push(multiEventCatalog);
+
+    expect(result.errors).toHaveLength(0);
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    // Table reference should be qualified with config.schema (PUBLIC)
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON TABLE PUBLIC.EVENTS IS"),
+    );
+  });
+
+  it("does not overwrite a property column's comment when multiple events share it (first-write-wins)", async () => {
+    // user_id is shared by both events; without first-write-wins we'd issue
+    // TWO COMMENT ON COLUMN statements for USER_ID. Verify we only issue one.
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      schema_type: "multi_event",
+      multi_event_table: "ANALYTICS.EVENTS",
+      event_column: "EVENT_NAME",
+      cdp_preset: undefined,
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "EVENTS" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "EVENT_NAME" }, { COLUMN_NAME: "USER_ID" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(multiEventCatalog);
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    const userIdComments = calls.filter((c: string) =>
+      c.startsWith("COMMENT ON COLUMN ANALYTICS.EVENTS.USER_ID IS"),
+    );
+    expect(userIdComments).toHaveLength(1); // exactly once, no overwrites
+  });
+});

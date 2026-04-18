@@ -72,6 +72,28 @@ export function rollupDiscriminators(catalog: EmitCatalog): EmitCatalog {
 }
 
 /**
+ * Format a list of events as a bullet-pointed summary. Shared between the
+ * discriminator rollup (Phase 1.5) and the multi-event table comment generator
+ * (Phase 4). Each line: "  - <label>: <description>[. Fires when: <fires_when>.]"
+ * (fires_when included only when present and `includeFiresWhen` is true).
+ *
+ * Lines are sorted alphabetically by label for stable output.
+ */
+export function formatEventList(
+  items: Array<{ label: string; description: string; firesWhen?: string }>,
+  opts: { includeFiresWhen?: boolean } = {}
+): string {
+  const sorted = [...items].sort((a, b) => a.label.localeCompare(b.label));
+  return sorted
+    .map(({ label, description, firesWhen }) => {
+      const suffix =
+        opts.includeFiresWhen && firesWhen ? ` Fires when: ${firesWhen}` : "";
+      return `  - ${label}: ${description}${suffix}`;
+    })
+    .join("\n");
+}
+
+/**
  * Build a description + property enrichment for a parent event based on its
  * sub-events. Sub-events are sorted by discriminator_value for stable output.
  */
@@ -79,27 +101,29 @@ function enrichParent(
   parent: CatalogEvent,
   subEvents: [string, CatalogEvent][],
 ): CatalogEvent {
-  // Sort sub-events by discriminator_value for stable output
-  const sorted = [...subEvents].sort(([, a], [, b]) =>
-    (a.discriminator_value ?? "").localeCompare(b.discriminator_value ?? "")
-  );
-
   // All sub-events should share the same discriminator_property; take the first
   // as canonical. (In the catalog writer, this is always true.)
-  const discriminatorProperty = sorted[0][1].discriminator_property;
+  const discriminatorProperty = subEvents[0][1].discriminator_property;
   if (!discriminatorProperty) return parent;
 
   // Enriched description: parent's existing description, then a block listing
   // each sub-event's value + description.
-  const valueLines = sorted.map(([, sub]) => {
-    const val = sub.discriminator_value ?? "";
-    return `  - ${val}: ${sub.description}`;
-  });
+  const lines = formatEventList(
+    subEvents.map(([, sub]) => ({
+      label: sub.discriminator_value ?? "",
+      description: sub.description,
+    }))
+  );
 
   const enrichedDescription =
     parent.description +
     `\n\nKnown \`${discriminatorProperty}\` values:\n` +
-    valueLines.join("\n");
+    lines;
+
+  // Sort sub-events by discriminator_value for enriching the property description.
+  const sorted = [...subEvents].sort(([, a], [, b]) =>
+    (a.discriminator_value ?? "").localeCompare(b.discriminator_value ?? "")
+  );
 
   // Enrich the discriminator property's description with the list of known values
   const newProperties = { ...parent.properties };

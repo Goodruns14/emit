@@ -272,17 +272,6 @@ export interface DestinationConfigBase {
   events?: string[];
 }
 
-export interface SegmentDestinationConfig extends DestinationConfigBase {
-  type: "segment";
-  workspace: string;
-  tracking_plan_id: string;
-}
-
-export interface AmplitudeDestinationConfig extends DestinationConfigBase {
-  type: "amplitude";
-  project_id: string | number;
-}
-
 export interface MixpanelDestinationConfig extends DestinationConfigBase {
   type: "mixpanel";
   project_id: string | number;
@@ -389,8 +378,6 @@ export interface CustomDestinationConfig extends DestinationConfigBase {
 }
 
 export type DestinationConfig =
-  | SegmentDestinationConfig
-  | AmplitudeDestinationConfig
   | MixpanelDestinationConfig
   | SnowflakeDestinationConfig
   | CustomDestinationConfig;

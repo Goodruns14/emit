@@ -287,9 +287,11 @@ async function runPush(opts: PushOptions): Promise<number> {
 
           if (result.skipped_events?.length > 0) {
             logger.blank();
-            logger.line(chalk.gray(`  Skipped (no matching table in Snowflake):`));
-            for (const name of result.skipped_events) {
-              logger.line(chalk.gray(`    · ${name}`));
+            logger.line(chalk.gray(`  Skipped (no matching table in destination):`));
+            for (const s of result.skipped_events) {
+              logger.line(
+                chalk.gray(`    · ${s.event}  (looked for ${s.looked_for})`)
+              );
             }
           }
         }

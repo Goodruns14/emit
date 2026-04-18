@@ -144,6 +144,31 @@ function validate(config: EmitConfig): void {
       }
     }
   }
+
+  // Validate multi_event destinations have the required fields. Fail fast at
+  // config load rather than at push time so users learn about misconfig early.
+  if (config.destinations) {
+    for (let i = 0; i < config.destinations.length; i++) {
+      const dest = config.destinations[i];
+      if (dest.type !== "snowflake") continue;
+      if (dest.schema_type !== "multi_event") continue;
+      const missing: string[] = [];
+      if (!dest.multi_event_table) missing.push("multi_event_table");
+      if (!dest.event_column) missing.push("event_column");
+      if (missing.length > 0) {
+        throw new Error(
+          `destinations[${i}]: Snowflake destination with schema_type: "multi_event" ` +
+            `requires the following fields: ${missing.join(", ")}.\n` +
+            `  Example:\n` +
+            `    destinations:\n` +
+            `      - type: snowflake\n` +
+            `        schema_type: multi_event\n` +
+            `        multi_event_table: ANALYTICS.EVENTS\n` +
+            `        event_column: EVENT_NAME`
+        );
+      }
+    }
+  }
 }
 
 /**

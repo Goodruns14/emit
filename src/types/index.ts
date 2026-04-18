@@ -251,10 +251,25 @@ export interface LlmCallConfig {
  * Snowflake per-event) only recognize the parent event name on the wire, so
  * pushing sub-events creates phantom entries. Set to `true` if your adapter
  * genuinely treats each sub-event as a distinct push target.
+ *
+ * `events` scopes a destination to a specific subset of catalog events. This
+ * is what makes multi-table layouts work cleanly — one destination per table,
+ * each scoped to the events that actually live in that table. When omitted
+ * (the default), the destination processes every event in the catalog.
+ *
+ * Composition with the `--event` CLI flag: a destination processes an event
+ * if and only if (1) it's in `events:` (or `events:` is unset), AND (2) the
+ * `--event` flag (if any) selects it. If the intersection is empty for a
+ * given destination, it silently skips — not an error.
  */
 export interface DestinationConfigBase {
   /** If true, skip the discriminator rollup and pass sub-events through to the adapter. */
   include_sub_events?: boolean;
+  /**
+   * Scope this destination to a specific subset of catalog events.
+   * Omit to process every catalog event (existing behavior).
+   */
+  events?: string[];
 }
 
 export interface SegmentDestinationConfig extends DestinationConfigBase {
@@ -282,7 +297,16 @@ export interface SnowflakeDestinationConfig extends DestinationConfigBase {
   password?: string;
   database?: string;
   schema?: string;
-  schema_type: "per_event" | "monolith";
+  /**
+   * Which schema layout describes the user's warehouse:
+   *   "per_event"   — one table per event (Segment/Rudderstack CDP default)
+   *   "multi_event" — one or more tables where each holds rows for multiple
+   *                    events, discriminated by an event-name column
+   *                    (Snowplow `ATOMIC.EVENTS`, custom domain-grouped
+   *                    layouts like `USER_EVENTS` + `ORDER_EVENTS`, or a
+   *                    single giant `TRACKS` table).
+   */
+  schema_type: "per_event" | "multi_event";
   cdp_preset?: CdpPreset;
   /**
    * Additional column names to skip when writing COMMENTs, merged with (not
@@ -292,6 +316,51 @@ export interface SnowflakeDestinationConfig extends DestinationConfigBase {
    * uppercase column names Snowflake returns from information_schema.
    */
   exclude_columns?: string[];
+
+  // ── per_event mode ───────────────────────────────────────────────────────
+
+  /**
+   * Per-event mode override: explicit mapping from catalog event name to the
+   * Snowflake table name that holds it. Only set entries you need to override;
+   * events not listed here fall through to the default naming convention
+   * (UPPERCASE event name with hyphens/dots/spaces replaced by underscores).
+   *
+   * Example:
+   *   event_table_mapping:
+   *     purchase_completed: EVT_PURCHASES
+   *     user_signed_up: USER_SIGNUP_V2
+   *
+   * When a mapping is present for an event, `event_table_mapping` wins
+   * unconditionally over the naming convention (explicit > implicit).
+   */
+  event_table_mapping?: Record<string, string>;
+
+  // ── multi_event mode ─────────────────────────────────────────────────────
+
+  /**
+   * Multi-event mode: the table that holds rows for multiple events.
+   * REQUIRED when `schema_type: multi_event`. Can be fully qualified
+   * ("ANALYTICS.EVENTS") or a bare table name (which uses the destination's
+   * `schema` field to qualify).
+   */
+  multi_event_table?: string;
+
+  /**
+   * Multi-event mode: the column name that discriminates rows by event type
+   * (e.g., `EVENT_NAME`, `EVENT`, `EVENT_TEXT`). REQUIRED when
+   * `schema_type: multi_event`.
+   */
+  event_column?: string;
+
+  /**
+   * Multi-event mode: optional. Name of a VARIANT/OBJECT column that holds
+   * per-event properties as JSON ("narrow multi-event" layout). When set,
+   * emit writes a generic pointer comment on this column explaining where
+   * to find per-event property docs (catalog.yml). When unset, emit assumes
+   * a "wide multi-event" layout where properties are their own columns on
+   * the same table — those columns get their own per-property COMMENTs.
+   */
+  properties_column?: string;
 }
 
 /**

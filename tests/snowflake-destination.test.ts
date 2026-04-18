@@ -363,4 +363,168 @@ describe("SnowflakeDestinationAdapter", () => {
     expect(result.pushed).toBe(1);
     expect(result.errors).toHaveLength(0);
   });
+
+  it("user-defined exclude_columns are merged with the cdp_preset list", async () => {
+    // Segment preset excludes RECEIVED_AT; user additionally excludes FIVETRAN_SYNCED.
+    // BILL_AMOUNT should still get commented.
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      cdp_preset: "segment",
+      exclude_columns: ["FIVETRAN_SYNCED"],
+    };
+
+    const catalog = structuredClone(baseCatalog);
+    catalog.events.purchase_completed.properties = {
+      bill_amount: {
+        description: "Total in cents",
+        edge_cases: [],
+        null_rate: 0,
+        cardinality: 50,
+        sample_values: [],
+        code_sample_values: [],
+        confidence: "high",
+      },
+      received_at: {
+        description: "Segment system column — CDP preset should exclude",
+        edge_cases: [],
+        null_rate: 0,
+        cardinality: 100,
+        sample_values: [],
+        code_sample_values: [],
+        confidence: "high",
+      },
+      fivetran_synced: {
+        description: "User-excluded column",
+        edge_cases: [],
+        null_rate: 0,
+        cardinality: 100,
+        sample_values: [],
+        code_sample_values: [],
+        confidence: "high",
+      },
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "PURCHASE_COMPLETED" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [
+          { COLUMN_NAME: "BILL_AMOUNT" },
+          { COLUMN_NAME: "RECEIVED_AT" },
+          { COLUMN_NAME: "FIVETRAN_SYNCED" },
+        ];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(catalog, { events: ["purchase_completed"] });
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+
+    // BILL_AMOUNT should be commented (not in any exclude list)
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN PUBLIC.PURCHASE_COMPLETED.BILL_AMOUNT IS"),
+    );
+    // RECEIVED_AT should NOT be commented (Segment preset)
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN PUBLIC.PURCHASE_COMPLETED.RECEIVED_AT IS"),
+    );
+    // FIVETRAN_SYNCED should NOT be commented (user-provided)
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN PUBLIC.PURCHASE_COMPLETED.FIVETRAN_SYNCED IS"),
+    );
+  });
+
+  it("exclude_columns work without a cdp_preset", async () => {
+    // No preset → only the user's list (+ hardcoded EVENT/EVENT_TEXT) should be excluded.
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      cdp_preset: undefined,
+      exclude_columns: ["INTERNAL_COL"],
+    };
+
+    const catalog = structuredClone(baseCatalog);
+    catalog.events.purchase_completed.properties = {
+      bill_amount: {
+        description: "Total",
+        edge_cases: [],
+        null_rate: 0,
+        cardinality: 50,
+        sample_values: [],
+        code_sample_values: [],
+        confidence: "high",
+      },
+      internal_col: {
+        description: "Should be skipped",
+        edge_cases: [],
+        null_rate: 0,
+        cardinality: 1,
+        sample_values: [],
+        code_sample_values: [],
+        confidence: "high",
+      },
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "PURCHASE_COMPLETED" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "BILL_AMOUNT" }, { COLUMN_NAME: "INTERNAL_COL" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(catalog, { events: ["purchase_completed"] });
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    expect(calls).toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN PUBLIC.PURCHASE_COMPLETED.BILL_AMOUNT IS"),
+    );
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN PUBLIC.PURCHASE_COMPLETED.INTERNAL_COL IS"),
+    );
+  });
+
+  it("exclude_columns matching is case-insensitive (user lowercase vs Snowflake uppercase)", async () => {
+    const destConfig: SnowflakeDestinationConfig = {
+      ...baseDestConfig,
+      cdp_preset: undefined,
+      exclude_columns: ["internal_col"], // lowercase in config
+    };
+
+    const catalog = structuredClone(baseCatalog);
+    catalog.events.purchase_completed.properties = {
+      internal_col: {
+        description: "Should be skipped via case-insensitive match",
+        edge_cases: [],
+        null_rate: 0,
+        cardinality: 1,
+        sample_values: [],
+        code_sample_values: [],
+        confidence: "high",
+      },
+    };
+
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes("information_schema.tables")) {
+        return [{ TABLE_NAME: "PURCHASE_COMPLETED" }];
+      }
+      if (sql.includes("information_schema.columns")) {
+        return [{ COLUMN_NAME: "INTERNAL_COL" }];
+      }
+      return [];
+    });
+
+    const adapter = new SnowflakeDestinationAdapter(destConfig);
+    await adapter.push(catalog, { events: ["purchase_completed"] });
+
+    const calls = mockQuery.mock.calls.map((c: any) => c[0] as string);
+    expect(calls).not.toContainEqual(
+      expect.stringContaining("COMMENT ON COLUMN PUBLIC.PURCHASE_COMPLETED.INTERNAL_COL IS"),
+    );
+  });
 });

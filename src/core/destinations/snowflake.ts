@@ -73,6 +73,13 @@ export class SnowflakeDestinationAdapter implements DestinationAdapter {
     // Per-event tables may have a redundant event name column
     cols.add("EVENT");
     cols.add("EVENT_TEXT");
+    // Merge in any user-provided exclude columns. Normalize to uppercase to
+    // match Snowflake's information_schema.COLUMN_NAME.
+    if (this.config.exclude_columns) {
+      for (const col of this.config.exclude_columns) {
+        cols.add(col.toUpperCase());
+      }
+    }
     return cols;
   }
 

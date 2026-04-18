@@ -16,6 +16,16 @@
   },
   "type": "module",
   "main": "./dist/cli.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/cli.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts"
+    }
+  },
   "files": [
     "dist"
   ],

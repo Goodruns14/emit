@@ -165,6 +165,19 @@ export async function loadConfigLight(searchFrom?: string): Promise<EmitConfig> 
 }
 
 export async function loadConfig(searchFrom?: string): Promise<EmitConfig> {
+  const { config } = await loadConfigWithPath(searchFrom);
+  return config;
+}
+
+/**
+ * Same as loadConfig but also returns the absolute path to the config file.
+ *
+ * Needed by `emit push` to resolve relative `module:` paths in custom
+ * destination configs — those paths are relative to emit.config.yml, not cwd.
+ */
+export async function loadConfigWithPath(
+  searchFrom?: string,
+): Promise<{ config: EmitConfig; filepath: string }> {
   const result = await explorer.search(searchFrom ?? process.cwd());
 
   if (!result || result.isEmpty) {
@@ -178,7 +191,7 @@ export async function loadConfig(searchFrom?: string): Promise<EmitConfig> {
   const config = applyDefaults(resolved);
   validate(config);
 
-  return config;
+  return { config, filepath: result.filepath };
 }
 
 export function resolveOutputPath(config: EmitConfig, cwd?: string): string {

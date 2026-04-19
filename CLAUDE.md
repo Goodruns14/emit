@@ -27,14 +27,12 @@ src/
     tools/           # One file per tool (get-event, update-event, get-property, etc.)
   core/
     catalog/         # Catalog read/write, health scoring, search
-    destinations/    # Push adapters (Segment, Amplitude, Mixpanel, Snowflake)
+    destinations/    # Push adapters — Mixpanel + Snowflake built-ins; `type: custom` for everything else (see docs/DESTINATIONS.md)
     diff/            # Catalog diffing for PR comments
     discriminator/   # Discriminator property expansion (god events → sub-events)
     extractor/       # Multi-provider LLM client, prompt templates
     import/          # CSV/JSON event list parsing
     scanner/         # Grep-based code search, context extraction
-    sources/         # Segment tracking plan import
-    warehouse/       # Snowflake adapter (read-only), event ranking
     writer/          # emit.catalog.yml output
   types/             # TypeScript type definitions (index.ts is the source of truth)
   utils/             # Config loading, git helpers, hashing, logger

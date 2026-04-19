@@ -75,7 +75,7 @@ Shows a catalog health report with confidence breakdown, stale events, and flagg
 | `emit init` | Interactive setup wizard, creates `emit.config.yml` |
 | `emit scan` | Scan repo and extract event metadata into `emit.catalog.yml` |
 | `emit import <file>` | Import event names from a CSV or JSON file |
-| `emit push` | Push catalog to destinations (Segment, Amplitude, Mixpanel, Snowflake) |
+| `emit push` | Push catalog to destinations (Mixpanel, Snowflake built-ins; `type: custom` for everything else) |
 | `emit status` | Show catalog health report |
 | `emit revert` | Restore an event definition from git history |
 | `emit mcp` | Start a local MCP server exposing the catalog to AI agents |
@@ -177,15 +177,26 @@ repo:
 
 ### Push destinations
 
+Two built-ins are tested against real APIs: **Mixpanel** and **Snowflake** (per-event or multi-event table layouts). Everything else uses `type: custom` — you write a small adapter file (~100 lines) that implements the `DestinationAdapter` interface. See [`docs/DESTINATIONS.md`](docs/DESTINATIONS.md) for the authoring guide + Mixpanel reference implementation.
+
 ```yaml
 destinations:
-  - type: segment
-    workspace: my-workspace
-    tracking_plan_id: tp_abc123
+  - type: mixpanel
+    project_id: "4005814"
 
-  - type: amplitude
-    project_id: 12345
+  - type: snowflake
+    schema_type: per_event
+    schema: ANALYTICS
+    cdp_preset: segment
+
+  - type: custom
+    module: ./emit.destinations/statsig.mjs
+    name: Statsig
+    options:
+      api_key_env: STATSIG_API_KEY
 ```
+
+**Moving off a removed built-in?** If you previously had `type: segment | amplitude | rudderstack`, see the migration recipe in [`docs/DESTINATIONS.md`](docs/DESTINATIONS.md) — the old adapter code is recoverable from git history and ports to a custom adapter in a few minutes.
 
 ## Environment Variables
 
@@ -195,7 +206,8 @@ Copy `.env.example` to `.env` and fill in the values you need:
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API provider |
 | `OPENAI_API_KEY` | OpenAI provider |
-| `SEGMENT_API_TOKEN` | Segment push destination |
+| `MIXPANEL_SERVICE_ACCOUNT_USER` / `MIXPANEL_SERVICE_ACCOUNT_SECRET` | Mixpanel push destination |
+| `SNOWFLAKE_ACCOUNT` / `_USERNAME` / `_PASSWORD` / `_DATABASE` / `_SCHEMA` | Snowflake push destination |
 
 Environment variables can be referenced in `emit.config.yml` with `${VAR_NAME}` syntax.
 

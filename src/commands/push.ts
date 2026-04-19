@@ -8,7 +8,7 @@ import { filterEvents } from "../core/catalog/search.js";
 import { createDestinationAdapter } from "../core/destinations/index.js";
 import type { PushResult } from "../types/index.js";
 
-interface PushOptions {
+export interface PushOptions {
   destination?: string;
   dryRun?: boolean;
   event?: string;
@@ -150,7 +150,7 @@ export function computeScopedEvents(
   return cliEvents.filter((e) => configSet.has(e));
 }
 
-async function runPush(opts: PushOptions): Promise<number> {
+export async function runPush(opts: PushOptions): Promise<number> {
   const json = opts.format === "json";
 
   if (!json) {

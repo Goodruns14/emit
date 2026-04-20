@@ -49,14 +49,31 @@ export function appendCustomDestination(
   entry: CustomDestinationEntry,
 ): string {
   const entryBlock = renderCustomEntry(entry);
-  const lines = yamlText.split("\n");
-  const destIdx = findTopLevelKey(lines, "destinations");
+  let lines = yamlText.split("\n");
+  let destIdx = findTopLevelKey(lines, "destinations");
 
   if (destIdx === -1) {
     const needsNewline = yamlText.length > 0 && !yamlText.endsWith("\n");
     const prefix = needsNewline ? "\n" : "";
     const sep = yamlText.length > 0 ? "\n" : "";
     return yamlText + prefix + sep + "destinations:\n" + entryBlock;
+  }
+
+  // Normalize flow-array form `destinations: []` (or any inline value on the
+  // destinations line) to block-style `destinations:` before appending block
+  // entries — otherwise we produce invalid YAML (indented list under a scalar).
+  const flowMatch = lines[destIdx].match(/^destinations\s*:\s*(.*)$/);
+  const inlineValue = flowMatch?.[1].trim();
+  if (inlineValue && inlineValue !== "") {
+    // Only safe to rewrite if the inline value is an empty flow collection.
+    if (inlineValue === "[]" || inlineValue === "{}") {
+      lines[destIdx] = "destinations:";
+    } else {
+      throw new Error(
+        `Can't append destination: \`destinations:\` in emit.config.yml has an inline value (${inlineValue}). ` +
+          `Rewrite it as a block list manually, then re-run.`,
+      );
+    }
   }
 
   // Insert at end of the destinations block — before the next top-level key.

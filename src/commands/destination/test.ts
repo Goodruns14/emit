@@ -71,9 +71,17 @@ export async function runDestinationTest(
     ),
   );
 
-  return runPush({
+  const code = await runPush({
     destination: name,
     event: eventName,
     verbose: true,
   });
+
+  if (code === 0) {
+    logger.blank();
+    logger.line(chalk.gray(`Next: \`emit push --destination ${name}\` to push all events,`));
+    logger.line(chalk.gray(`      or \`emit push\` to push everything to every destination.`));
+  }
+
+  return code;
 }

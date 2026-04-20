@@ -36,10 +36,14 @@ export async function arrowSelect<T extends string>(
       } else if (key === "\r" || key === "\n") {
         process.stdin.removeListener("data", onData);
         process.stdin.setRawMode(false);
-        process.stdin.pause();
+        // NOTE: intentionally do NOT pause stdin here — callers may want to
+        // read more input (e.g. a readline prompter) after arrowSelect
+        // returns. Pausing would starve subsequent reads and cause Node to
+        // exit with the process hanging mid-prompt.
         process.stdout.write("\n");
         resolve(options[idx].value);
       } else if (key === "\u0003") {
+        process.stdin.setRawMode(false);
         process.exit(0);
       }
     };

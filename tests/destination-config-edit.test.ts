@@ -71,6 +71,17 @@ describe("appendCustomDestination", () => {
     expect(out).toContain("  - type: custom\n    name: Statsig\n");
   });
 
+  it("rewrites flow-array `destinations: []` to block form before appending", () => {
+    const input = `source:\n  path: ./src\n\ndestinations: []\n\nllm:\n  provider: anthropic\n`;
+    const out = appendCustomDestination(input, {
+      name: "Statsig",
+      module: "./emit.destinations/statsig.mjs",
+    });
+    expect(out).toContain("destinations:\n  - type: custom\n    name: Statsig");
+    expect(out).not.toContain("destinations: []");
+    expect(out.indexOf("name: Statsig")).toBeLessThan(out.indexOf("llm:"));
+  });
+
   it("creates a destinations block when absent", () => {
     const noDests = `source:\n  path: ./src\n`;
     const out = appendCustomDestination(noDests, {

@@ -42,6 +42,35 @@ describe("runDestinationTest", () => {
     });
   });
 
+  it("prints a next-step hint pointing at `emit push` on success", async () => {
+    readCatalogMock.mockReturnValue({ events: { first_event: {} } });
+    const logs: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: any) => {
+      logs.push(typeof chunk === "string" ? chunk : chunk.toString());
+      return true;
+    });
+
+    await runDestinationTest("Statsig");
+    spy.mockRestore();
+
+    const out = logs.join("");
+    expect(out).toContain("emit push --destination Statsig");
+  });
+
+  it("does not print the next-step hint when runPush fails", async () => {
+    runPushMock.mockResolvedValueOnce(1);
+    const logs: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: any) => {
+      logs.push(typeof chunk === "string" ? chunk : chunk.toString());
+      return true;
+    });
+
+    const code = await runDestinationTest("Statsig", { event: "x" });
+    spy.mockRestore();
+    expect(code).toBe(1);
+    expect(logs.join("")).not.toContain("emit push --destination");
+  });
+
   it("respects --event override and skips catalog load when provided", async () => {
     const code = await runDestinationTest("Statsig", { event: "custom_event" });
     expect(code).toBe(0);

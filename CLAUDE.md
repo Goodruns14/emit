@@ -55,6 +55,50 @@ node dist/cli.js mcp       # Start local MCP server (stdio)
 node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
 ```
 
+### Non-interactive / agentic use
+
+Every command below can run headless (no TTY). Use these when an agent drives emit:
+
+```bash
+# init — two non-interactive shapes
+emit init --yes --llm-provider anthropic --events signup,purchase     # inline
+emit init --yes --llm-provider anthropic --skip-events                  # no events seeded
+emit init --yes --config-file ./emit.config.yml --force                 # validate + copy YAML
+# Flag rules: --yes is required; --config-file conflicts with --llm-provider/--events/--skip-events.
+# Valid --llm-provider: claude-code | anthropic | openai | openai-compatible
+
+# scan — auto-answer any diagnostic prompts
+emit scan --yes --dry-run
+emit scan --yes --events foo,bar --fresh
+
+# import — fully flag-driven
+emit import events.csv --column event_name --replace
+
+# push — fully flag-driven
+emit push --destination mixpanel --dry-run
+
+# status — no prompts
+emit status --format json
+
+# revert — --yes skips confirm, --commit is REQUIRED in non-interactive mode
+emit revert --event signup_completed --commit <sha> --yes
+# Optional AI-safety guard: refuse unless historical description matches
+emit revert --event signup_completed --commit <sha> --yes \
+  --expect-description "user finished signup"
+
+# mcp — always non-interactive
+emit mcp --catalog ./emit.catalog.yml
+
+# destination — add requires --yes + explicit --auth (no silent default)
+emit destination add Statsig --yes --auth custom-header --header-name X-API-Key
+emit destination list --format json
+emit destination test Mixpanel
+emit destination remove Statsig
+
+# fix — --yes skips rescan confirm
+emit fix --yes
+```
+
 ## Key Files
 
 | File | Purpose |

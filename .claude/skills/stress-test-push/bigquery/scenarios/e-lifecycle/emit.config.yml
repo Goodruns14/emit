@@ -3,8 +3,10 @@ repo:
   sdk: segment
 
 output:
-  # Local copy so we can edit descriptions in-place between pushes.
-  file: ./catalog.yml
+  # Runtime copy. `run-lifecycle.mjs` seeds this from ../../master-catalog.yml
+  # at the start of each run, then mutates it across E1-E6 to test overwrite
+  # + revert + idempotence.
+  file: .emit/catalog.yml
 
 llm:
   provider: claude-code

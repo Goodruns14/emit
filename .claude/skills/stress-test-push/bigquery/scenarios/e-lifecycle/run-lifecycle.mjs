@@ -9,13 +9,19 @@
  */
 import { connect, getColumnDescriptions, Checks } from "../_shared.mjs";
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CATALOG_PATH = resolve(__dirname, "catalog.yml");
+const MASTER_PATH = resolve(__dirname, "../../master-catalog.yml");
+// Runtime copy under .emit/ — gitignored globally, so the tree stays clean
+// between runs even though this scenario edits the catalog in place.
+const CATALOG_PATH = resolve(__dirname, ".emit/catalog.yml");
 const EMIT_CLI = "/Users/charliefitz/Desktop/Emit/dist/cli.js";
+
+mkdirSync(dirname(CATALOG_PATH), { recursive: true });
+copyFileSync(MASTER_PATH, CATALOG_PATH);
 
 const V1 = "STRESS-TEST: V1 LIFECYCLE-MARKER — Total transaction amount.";
 const V2 = "STRESS-TEST: V2 LIFECYCLE-MARKER — revised description.";

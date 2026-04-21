@@ -84,6 +84,21 @@ function buildRow(dest: any, configDir: string): ListRow {
     };
   }
 
+  if (type === "databricks") {
+    const schemaType = dest?.schema_type ?? "per_event";
+    const loc = dest?.catalog && dest?.schema ? ` ${dest.catalog}.${dest.schema}` : "";
+    const mt = dest?.multi_event_table
+      ? `, ${schemaType} ${dest.multi_event_table}`
+      : `, ${schemaType}${loc}`;
+    return {
+      type,
+      name: explicitName || "Databricks",
+      module: `(built-in${mt})`,
+      status: "configured",
+      status_label: "✓ configured",
+    };
+  }
+
   if (type === "mixpanel") {
     return {
       type,

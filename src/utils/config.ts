@@ -186,6 +186,28 @@ function validate(config: EmitConfig): void {
           );
         }
       }
+      if (dest.type === "databricks" && dest.schema_type === "multi_event") {
+        const missing: string[] = [];
+        if (!dest.multi_event_table) missing.push("multi_event_table");
+        if (!dest.event_column) missing.push("event_column");
+        if (missing.length > 0) {
+          throw new Error(
+            `destinations[${i}]: Databricks destination with schema_type: "multi_event" ` +
+              `requires the following fields: ${missing.join(", ")}.\n` +
+              `  Example:\n` +
+              `    destinations:\n` +
+              `      - type: databricks\n` +
+              `        host: dbc-12345678-abcd.cloud.databricks.com\n` +
+              `        http_path: /sql/1.0/warehouses/abc123\n` +
+              `        token: \${DATABRICKS_TOKEN}\n` +
+              `        catalog: main\n` +
+              `        schema: analytics\n` +
+              `        schema_type: multi_event\n` +
+              `        multi_event_table: events\n` +
+              `        event_column: event_name`
+          );
+        }
+      }
     }
   }
 }

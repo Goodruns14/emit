@@ -1,0 +1,10 @@
+{
+  "name": "emit-databricks-stress-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live stress-test rig for the Databricks destination adapter",
+  "dependencies": {
+    "@databricks/sql": "^1.13.0"
+  }
+}

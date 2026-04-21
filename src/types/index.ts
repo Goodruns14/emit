@@ -448,10 +448,81 @@ export interface BigQueryDestinationConfig extends DestinationConfigBase {
   properties_column?: string;
 }
 
+export interface DatabricksDestinationConfig extends DestinationConfigBase {
+  type: "databricks";
+  /**
+   * Databricks workspace host, e.g. `dbc-12345678-abcd.cloud.databricks.com`.
+   * Do not include `https://`. Falls back to DATABRICKS_HOST env var.
+   */
+  host?: string;
+  /**
+   * HTTP path of the SQL warehouse, e.g. `/sql/1.0/warehouses/abc123def456`.
+   * Find it under the warehouse's Connection details tab. Falls back to
+   * DATABRICKS_HTTP_PATH env var.
+   */
+  http_path?: string;
+  /**
+   * Personal access token or OAuth M2M token. Usually set via env-var
+   * substitution (`token: ${DATABRICKS_TOKEN}`). Falls back to
+   * DATABRICKS_TOKEN env var.
+   */
+  token?: string;
+  /** Unity Catalog name, e.g. `main` or `analytics`. */
+  catalog?: string;
+  /** Schema (= Snowflake-style schema, UC-style schema) within the catalog. */
+  schema?: string;
+  /**
+   * Which schema layout describes the user's warehouse. Same semantics as
+   * Snowflake/BigQuery.
+   */
+  schema_type: "per_event" | "multi_event";
+  cdp_preset?: CdpPreset;
+  /**
+   * Additional column names to skip when writing comments, merged with the
+   * cdp_preset's exclude list. Matched case-insensitively against Databricks
+   * lowercase column names.
+   */
+  exclude_columns?: string[];
+
+  // ── per_event mode ───────────────────────────────────────────────────────
+
+  /**
+   * Per-event mode override: explicit catalog event name → Databricks table
+   * name. Only set entries you need to override; unmapped events fall
+   * through to the default naming convention (lowercase, `[-.\s]` → `_`).
+   */
+  event_table_mapping?: Record<string, string>;
+
+  // ── multi_event mode ─────────────────────────────────────────────────────
+
+  /**
+   * Multi-event mode: the table that holds rows for multiple events.
+   * REQUIRED when `schema_type: multi_event`. Can be fully qualified
+   * (`reporting.events`) or a bare table name (uses the destination's
+   * `schema` field to qualify).
+   */
+  multi_event_table?: string;
+
+  /**
+   * Multi-event mode: the column name that discriminates rows by event type
+   * (e.g., `event_name`, `event`). REQUIRED when `schema_type: multi_event`.
+   */
+  event_column?: string;
+
+  /**
+   * Multi-event mode: optional JSON/STRUCT column that holds per-event
+   * properties. When set, emit writes a generic pointer comment on this
+   * column. When unset, emit assumes a wide layout (each property has its
+   * own column).
+   */
+  properties_column?: string;
+}
+
 export type DestinationConfig =
   | MixpanelDestinationConfig
   | SnowflakeDestinationConfig
   | BigQueryDestinationConfig
+  | DatabricksDestinationConfig
   | CustomDestinationConfig;
 
 export type DiscriminatorPropertyConfig = string | {

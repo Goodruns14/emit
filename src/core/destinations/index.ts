@@ -4,10 +4,12 @@ import type {
 } from "../../types/index.js";
 import { MixpanelDestinationAdapter } from "./mixpanel.js";
 import { SnowflakeDestinationAdapter } from "./snowflake.js";
+import { BigQueryDestinationAdapter } from "./bigquery.js";
 import { loadCustomAdapter } from "./custom.js";
 
 export { MixpanelDestinationAdapter } from "./mixpanel.js";
 export { SnowflakeDestinationAdapter } from "./snowflake.js";
+export { BigQueryDestinationAdapter } from "./bigquery.js";
 export { loadCustomAdapter } from "./custom.js";
 
 /**
@@ -33,6 +35,8 @@ export async function createDestinationAdapter(
       return new MixpanelDestinationAdapter(config);
     case "snowflake":
       return new SnowflakeDestinationAdapter(config);
+    case "bigquery":
+      return new BigQueryDestinationAdapter(config);
     case "custom":
       return loadCustomAdapter(config, configFilePath);
     default: {

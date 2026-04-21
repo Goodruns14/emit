@@ -1,8 +1,11 @@
 node_modules/
 dist/
 .emit/
-.claude/
+.claude/*
+!.claude/skills/
 emit.config.yml
+# ...but the stress-test rig needs its scenario configs tracked
+!.claude/skills/**/emit.config.yml
 *.log
 .env
 .env.*

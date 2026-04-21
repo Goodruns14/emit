@@ -150,22 +150,41 @@ function validate(config: EmitConfig): void {
   if (config.destinations) {
     for (let i = 0; i < config.destinations.length; i++) {
       const dest = config.destinations[i];
-      if (dest.type !== "snowflake") continue;
-      if (dest.schema_type !== "multi_event") continue;
-      const missing: string[] = [];
-      if (!dest.multi_event_table) missing.push("multi_event_table");
-      if (!dest.event_column) missing.push("event_column");
-      if (missing.length > 0) {
-        throw new Error(
-          `destinations[${i}]: Snowflake destination with schema_type: "multi_event" ` +
-            `requires the following fields: ${missing.join(", ")}.\n` +
-            `  Example:\n` +
-            `    destinations:\n` +
-            `      - type: snowflake\n` +
-            `        schema_type: multi_event\n` +
-            `        multi_event_table: ANALYTICS.EVENTS\n` +
-            `        event_column: EVENT_NAME`
-        );
+      if (dest.type === "snowflake" && dest.schema_type === "multi_event") {
+        const missing: string[] = [];
+        if (!dest.multi_event_table) missing.push("multi_event_table");
+        if (!dest.event_column) missing.push("event_column");
+        if (missing.length > 0) {
+          throw new Error(
+            `destinations[${i}]: Snowflake destination with schema_type: "multi_event" ` +
+              `requires the following fields: ${missing.join(", ")}.\n` +
+              `  Example:\n` +
+              `    destinations:\n` +
+              `      - type: snowflake\n` +
+              `        schema_type: multi_event\n` +
+              `        multi_event_table: ANALYTICS.EVENTS\n` +
+              `        event_column: EVENT_NAME`
+          );
+        }
+      }
+      if (dest.type === "bigquery" && dest.schema_type === "multi_event") {
+        const missing: string[] = [];
+        if (!dest.multi_event_table) missing.push("multi_event_table");
+        if (!dest.event_column) missing.push("event_column");
+        if (missing.length > 0) {
+          throw new Error(
+            `destinations[${i}]: BigQuery destination with schema_type: "multi_event" ` +
+              `requires the following fields: ${missing.join(", ")}.\n` +
+              `  Example:\n` +
+              `    destinations:\n` +
+              `      - type: bigquery\n` +
+              `        project_id: my-gcp-project\n` +
+              `        dataset: analytics\n` +
+              `        schema_type: multi_event\n` +
+              `        multi_event_table: events\n` +
+              `        event_column: event_name`
+          );
+        }
       }
     }
   }

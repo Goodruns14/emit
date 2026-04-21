@@ -2,8 +2,8 @@
 
 `emit push` has two kinds of destination:
 
-- **Built-in** — Mixpanel, Snowflake, and BigQuery. Live-tested. Just add a config block.
-- **Custom** — anything else (Segment, Amplitude, RudderStack, PostHog, Statsig, Redshift, Databricks, your-company-internal-thing). You write a small adapter file; emit loads it via dynamic import.
+- **Built-in** — Mixpanel, Snowflake, BigQuery, and Databricks. Live-tested. Just add a config block.
+- **Custom** — anything else (Segment, Amplitude, RudderStack, PostHog, Statsig, Redshift, your-company-internal-thing). You write a small adapter file; emit loads it via dynamic import.
 
 If you want to push to anything other than the built-ins, write a custom adapter. This doc tells you how.
 
@@ -156,6 +156,62 @@ Naming convention: BigQuery table and column names are conventionally snake_case
 - **Dataset location matters for multi-region setups.** If queries fail with "Not found: Dataset", set `location` explicitly.
 - **Column descriptions require the column to exist.** Emit queries `INFORMATION_SCHEMA.COLUMNS` and skips properties without a matching column — it won't add columns.
 - **Identifiers must match `[A-Za-z_][A-Za-z0-9_]*`.** Anything else is rejected before reaching BigQuery, so there's no SQL-injection surface through the config.
+
+---
+
+## Reference: Databricks
+
+Built-in. Writes catalog event descriptions onto Unity Catalog table comments (`COMMENT ON TABLE`) and catalog property descriptions onto column comments (`ALTER TABLE … ALTER COLUMN … COMMENT '…'`).
+
+### Authentication
+
+Use a PAT (personal access token) for local dev; OAuth M2M for production. The token needs the `sql` and `unity-catalog` scopes.
+
+1. Workspace → top-right avatar → **Settings** → **Developer** → **Access tokens** → **Generate new token**.
+2. Export it locally: `export DATABRICKS_TOKEN=dapi...`.
+3. Reference it from `emit.config.yml` as `token: ${DATABRICKS_TOKEN}` so the secret stays out of version control.
+
+The principal running the token needs: `USE CATALOG`, `USE SCHEMA`, and `MODIFY` on the target schema.
+
+### Config
+
+```yaml
+destinations:
+  - type: databricks
+    host: dbc-12345678-abcd.cloud.databricks.com   # no https://
+    http_path: /sql/1.0/warehouses/abc123def456    # from the warehouse's Connection details tab
+    token: ${DATABRICKS_TOKEN}
+    catalog: main
+    schema: analytics
+    schema_type: per_event                          # or "multi_event"
+
+    # Optional: reuse common ingestion-pipeline column filters.
+    # Values: segment, rudderstack, snowplow, none (default).
+    cdp_preset: none
+
+    # Optional: extra columns to skip (merged with the preset's list).
+    exclude_columns: [_fivetran_synced]
+
+    # per_event mode only — explicit event → table overrides.
+    event_table_mapping:
+      purchase_completed: evt_purchase_completed
+
+    # multi_event mode only — required when schema_type: multi_event.
+    multi_event_table: events                       # bare name uses config.schema
+    event_column: event_name
+    properties_column: properties                   # optional; JSON/STRUCT blob column
+```
+
+### SQL warehouse sizing
+
+A **Serverless Starter Warehouse** on 2X-Small is more than enough — emit only issues DDL (table and column `COMMENT ON`), not analytical queries. Cold-start is ~5 seconds; auto-stop 10 minutes keeps the cost near zero between pushes.
+
+### Gotchas
+
+- **Unity Catalog required.** The built-in uses `<catalog>.information_schema` for table/column discovery, which doesn't exist in the legacy Hive metastore. Non-UC workspaces should use a custom adapter.
+- **3-level namespace.** `catalog.schema.table` — Databricks `schema` is the same level as Snowflake's `schema` (and BigQuery's `dataset`).
+- **Identifiers must match `[A-Za-z_][A-Za-z0-9_]*`.** Anything else is rejected before reaching Databricks. Mixed-case identifiers work; the adapter preserves case when writing DDL.
+- **PAT rotation.** The default PAT lifetime is 90 days. For production, prefer OAuth M2M with a service principal — emit picks up the token the same way.
 
 ---
 

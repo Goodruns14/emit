@@ -5,11 +5,13 @@ import type {
 import { MixpanelDestinationAdapter } from "./mixpanel.js";
 import { SnowflakeDestinationAdapter } from "./snowflake.js";
 import { BigQueryDestinationAdapter } from "./bigquery.js";
+import { DatabricksDestinationAdapter } from "./databricks.js";
 import { loadCustomAdapter } from "./custom.js";
 
 export { MixpanelDestinationAdapter } from "./mixpanel.js";
 export { SnowflakeDestinationAdapter } from "./snowflake.js";
 export { BigQueryDestinationAdapter } from "./bigquery.js";
+export { DatabricksDestinationAdapter } from "./databricks.js";
 export { loadCustomAdapter } from "./custom.js";
 
 /**
@@ -37,6 +39,8 @@ export async function createDestinationAdapter(
       return new SnowflakeDestinationAdapter(config);
     case "bigquery":
       return new BigQueryDestinationAdapter(config);
+    case "databricks":
+      return new DatabricksDestinationAdapter(config);
     case "custom":
       return loadCustomAdapter(config, configFilePath);
     default: {

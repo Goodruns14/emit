@@ -377,9 +377,81 @@ export interface CustomDestinationConfig extends DestinationConfigBase {
   options?: Record<string, unknown>;
 }
 
+export interface BigQueryDestinationConfig extends DestinationConfigBase {
+  type: "bigquery";
+  /**
+   * GCP project ID holding the dataset. Falls back to
+   * GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env vars.
+   */
+  project_id?: string;
+  /** BigQuery dataset (analogous to Snowflake schema). */
+  dataset?: string;
+  /**
+   * Dataset location (e.g. "US", "us-central1"). Optional — BigQuery infers
+   * from the dataset. Set when cross-region metadata queries are ambiguous.
+   */
+  location?: string;
+  /**
+   * Path to a service-account JSON key file. Optional. When omitted, the
+   * `@google-cloud/bigquery` SDK falls back to Application Default
+   * Credentials (ADC) — see `gcloud auth application-default login`. Set
+   * via `key_file` here or the standard GOOGLE_APPLICATION_CREDENTIALS env var.
+   */
+  key_file?: string;
+  /**
+   * Which schema layout describes the user's warehouse. Same semantics as
+   * Snowflake's field — "per_event" (one table per event) vs "multi_event"
+   * (one table with an event-name discriminator column).
+   */
+  schema_type: "per_event" | "multi_event";
+  cdp_preset?: CdpPreset;
+  /**
+   * Additional column names to skip when writing descriptions, merged with
+   * (not replacing) the cdp_preset's exclude list. Matched case-insensitively
+   * against BigQuery's lowercase column names.
+   */
+  exclude_columns?: string[];
+
+  // ── per_event mode ───────────────────────────────────────────────────────
+
+  /**
+   * Per-event mode override: explicit mapping from catalog event name to the
+   * BigQuery table name that holds it. Only set entries you need to override;
+   * events not listed here fall through to the default naming convention
+   * (lowercase event name with hyphens/dots/spaces replaced by underscores).
+   */
+  event_table_mapping?: Record<string, string>;
+
+  // ── multi_event mode ─────────────────────────────────────────────────────
+
+  /**
+   * Multi-event mode: the table that holds rows for multiple events.
+   * REQUIRED when `schema_type: multi_event`. Can be fully qualified
+   * ("analytics.events") or a bare table name (which uses the destination's
+   * `dataset` field to qualify).
+   */
+  multi_event_table?: string;
+
+  /**
+   * Multi-event mode: the column name that discriminates rows by event type
+   * (e.g., `event_name`, `event`). REQUIRED when `schema_type: multi_event`.
+   */
+  event_column?: string;
+
+  /**
+   * Multi-event mode: optional. Name of a JSON/STRUCT column that holds
+   * per-event properties ("narrow multi-event" layout). When set, emit
+   * writes a generic pointer description on this column. When unset, emit
+   * assumes a "wide multi-event" layout where each property has its own
+   * column.
+   */
+  properties_column?: string;
+}
+
 export type DestinationConfig =
   | MixpanelDestinationConfig
   | SnowflakeDestinationConfig
+  | BigQueryDestinationConfig
   | CustomDestinationConfig;
 
 export type DiscriminatorPropertyConfig = string | {

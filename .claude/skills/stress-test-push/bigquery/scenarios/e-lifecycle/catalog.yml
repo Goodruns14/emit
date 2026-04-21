@@ -1,0 +1,623 @@
+version: 1
+generated_at: "2026-04-18T00:00:00Z"
+commit: "stress-test-pass-1"
+stats:
+  events_targeted: 18
+  events_located: 18
+  events_not_found: 0
+  high_confidence: 18
+  medium_confidence: 0
+  low_confidence: 0
+
+# Property definitions used across multiple events (tests consensus description
+# handling in multi-event mode)
+property_definitions:
+  user_id:
+    description: "STRESS-TEST: Stable user identifier used across all tracked events."
+    events:
+      - purchase_completed
+      - user_signed_up
+      - page_view
+      - button_click
+      - onboarding_completed
+      - booking_confirmed
+      - feature_flag_evaluated
+      - internal_health_check
+      - user_logged_in
+      - order_placed
+      - order_shipped
+      - payment_captured
+    deviations: {}
+  timestamp:
+    description: "STRESS-TEST: Wall-clock time the event was received by the warehouse."
+    events:
+      - purchase_completed
+      - user_signed_up
+      - page_view
+      - button_click
+    deviations: {}
+
+events:
+  # ─── Per-event CDP (BASIC_CDP_EVENTS schema) ────────────────────
+  booking_confirmed:
+    description: "STRESS-TEST: Fired after a user confirms a scheduled booking."
+    fires_when: "Immediately after the Confirm button on the booking review screen."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 1
+    all_call_sites: []
+    properties:
+      booking_id:
+        description: "STRESS-TEST: Unique identifier of the booking."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      duration_minutes:
+        description: "STRESS-TEST: Booking duration in minutes."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 10
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      user_id:
+        description: "Shared user_id — should use property_definitions consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  feature_flag_evaluated:
+    description: "STRESS-TEST: Fired when a feature flag is evaluated for a user."
+    fires_when: "On any code path that checks flag state."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 2
+    all_call_sites: []
+    properties:
+      flag_name:
+        description: "STRESS-TEST: Name of the feature flag being evaluated."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 50
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      variant:
+        description: "STRESS-TEST: Variant the user received (on/off/control/etc.)."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 5
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      user_id:
+        description: "Shared user_id — consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  onboarding_completed:
+    description: "STRESS-TEST: Fired when a user finishes the onboarding flow."
+    fires_when: "After the final onboarding step is submitted."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 3
+    all_call_sites: []
+    properties:
+      slug:
+        description: "STRESS-TEST: Default event type slug created during onboarding."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 3
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      profile_complete:
+        description: "STRESS-TEST: Whether the user completed the profile step."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 2
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  internal_health_check:
+    description: "STRESS-TEST: Internal heartbeat event for health monitoring."
+    fires_when: "Every minute by the health monitor cron."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 4
+    all_call_sites: []
+    properties:
+      service_name:
+        description: "STRESS-TEST: Which service the health check ran against."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 10
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      latency_ms:
+        description: "STRESS-TEST: Latency of the health check in milliseconds."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 500
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      status_code:
+        description: "STRESS-TEST: HTTP-like status code returned by the check."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 10
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  # ─── Cross-layout events ────────────────────────────────────────
+  # These appear in WIDE_EVENTS, HYBRID_EVENTS, MONOLITH, CUSTOM_NAMING, ETL_MIXED
+  # depending on the scenario. Each has properties matching real columns.
+
+  purchase_completed:
+    description: "STRESS-TEST: User completed a successful checkout."
+    fires_when: "After payment provider confirmation."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 5
+    all_call_sites: []
+    properties:
+      bill_amount:
+        description: "STRESS-TEST: V1 LIFECYCLE-MARKER — Total transaction amount."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      currency:
+        description: "STRESS-TEST: ISO 4217 currency code."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 5
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      user_id:
+        description: "Shared user_id — consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  user_signed_up:
+    description: "STRESS-TEST: New user registers an account."
+    fires_when: "After email verification."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 6
+    all_call_sites: []
+    properties:
+      email:
+        description: "STRESS-TEST: Registered email address."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      referrer:
+        description: "STRESS-TEST: Referring URL, if any."
+        edge_cases: []
+        null_rate: 0.3
+        cardinality: 20
+        sample_values: []
+        code_sample_values: []
+        confidence: medium
+      user_id:
+        description: "Shared user_id — consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  page_view:
+    description: "STRESS-TEST: User viewed a page."
+    fires_when: "On every rendered page view."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 7
+    all_call_sites: []
+    properties:
+      page_url:
+        description: "STRESS-TEST: Path of the viewed page."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 500
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      referrer:
+        description: "STRESS-TEST: URL that referred the user here."
+        edge_cases: []
+        null_rate: 0.2
+        cardinality: 50
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      user_id:
+        description: "Shared user_id — consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  button_click:
+    description: "STRESS-TEST: User clicked a button."
+    fires_when: "On any tracked button click."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 8
+    all_call_sites: []
+    properties:
+      button_id:
+        description: "STRESS-TEST: Identifier of the clicked button."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 20
+        sample_values:
+          - signup_cta
+          - add_to_cart
+          - dismiss_modal
+          - checkout_now
+        code_sample_values: []
+        confidence: high
+      user_id:
+        description: "Shared user_id — consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  # Discriminator sub-events of button_click — test Phase 1.5 rollup
+  button_click.signup_cta:
+    description: "STRESS-TEST: User clicked the signup CTA button."
+    fires_when: "Landing page signup button."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    parent_event: button_click
+    discriminator_property: button_id
+    discriminator_value: signup_cta
+    source_file: "tests/stress.mjs"
+    source_line: 9
+    all_call_sites: []
+    properties: {}
+    flags: []
+  button_click.add_to_cart:
+    description: "STRESS-TEST: User clicked the add-to-cart button."
+    fires_when: "Product detail page."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    parent_event: button_click
+    discriminator_property: button_id
+    discriminator_value: add_to_cart
+    source_file: "tests/stress.mjs"
+    source_line: 10
+    all_call_sites: []
+    properties: {}
+    flags: []
+  button_click.dismiss_modal:
+    description: "STRESS-TEST: User dismissed a modal dialog."
+    fires_when: "On any modal close."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    parent_event: button_click
+    discriminator_property: button_id
+    discriminator_value: dismiss_modal
+    source_file: "tests/stress.mjs"
+    source_line: 11
+    all_call_sites: []
+    properties: {}
+    flags: []
+
+  # ─── Domain-grouped events ──────────────────────────────────────
+  user_logged_in:
+    description: "STRESS-TEST: User logged in."
+    fires_when: "On successful authentication."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 12
+    all_call_sites: []
+    properties:
+      device_type:
+        description: "STRESS-TEST: Device the login came from."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 3
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      ip_address:
+        description: "STRESS-TEST: IP address of the login attempt."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      user_id:
+        description: "Shared user_id — consensus."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  user_logged_out:
+    description: "STRESS-TEST: User logged out."
+    fires_when: "On explicit logout or session expiry."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 13
+    all_call_sites: []
+    properties:
+      user_id:
+        description: "Shared user_id."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  order_placed:
+    description: "STRESS-TEST: User placed an order."
+    fires_when: "On order submission."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 14
+    all_call_sites: []
+    properties:
+      order_id:
+        description: "STRESS-TEST: Unique order identifier."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      amount:
+        description: "STRESS-TEST: Order total."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      status:
+        description: "STRESS-TEST: Current order status."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 5
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  order_shipped:
+    description: "STRESS-TEST: An order was shipped."
+    fires_when: "When the fulfillment system marks an order shipped."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 15
+    all_call_sites: []
+    properties:
+      order_id:
+        description: "STRESS-TEST: Unique order identifier."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  order_cancelled:
+    description: "STRESS-TEST: An order was cancelled."
+    fires_when: "On user or admin cancellation."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 16
+    all_call_sites: []
+    properties:
+      order_id:
+        description: "STRESS-TEST: Unique order identifier."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  payment_captured:
+    description: "STRESS-TEST: Payment was captured successfully."
+    fires_when: "After payment processor confirms capture."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 17
+    all_call_sites: []
+    properties:
+      payment_id:
+        description: "STRESS-TEST: Unique payment identifier."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      amount:
+        description: "STRESS-TEST: Captured amount."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      method:
+        description: "STRESS-TEST: Payment method (card/ach/wire)."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 3
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+      processor:
+        description: "STRESS-TEST: Payment processor (stripe/adyen)."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 2
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  payment_authorized:
+    description: "STRESS-TEST: Payment was authorized."
+    fires_when: "On initial authorization by the processor."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 18
+    all_call_sites: []
+    properties:
+      payment_id:
+        description: "STRESS-TEST: Unique payment identifier."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  payment_refunded:
+    description: "STRESS-TEST: Payment was refunded."
+    fires_when: "After a refund completes."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 19
+    all_call_sites: []
+    properties:
+      payment_id:
+        description: "STRESS-TEST: Unique payment identifier."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  user_deleted:
+    description: "STRESS-TEST: User account was deleted."
+    fires_when: "On explicit account deletion."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 20
+    all_call_sites: []
+    properties:
+      user_id:
+        description: "Shared user_id."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+  settings_team_invite_skip_clicked:
+    description: "STRESS-TEST: User clicked Skip on team-invite onboarding step."
+    fires_when: "On the team-invite screen, user chooses to skip."
+    confidence: high
+    confidence_reason: "stress-test fixture"
+    review_required: false
+    source_file: "tests/stress.mjs"
+    source_line: 21
+    all_call_sites: []
+    properties:
+      user_id:
+        description: "Shared user_id."
+        edge_cases: []
+        null_rate: 0
+        cardinality: 1000
+        sample_values: []
+        code_sample_values: []
+        confidence: high
+    flags: []
+
+not_found: []

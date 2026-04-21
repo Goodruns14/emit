@@ -1,0 +1,27 @@
+repo:
+  paths: ["./"]
+  sdk: segment
+
+output:
+  # Local copy so we can edit descriptions in-place between pushes.
+  file: ./catalog.yml
+
+llm:
+  provider: claude-code
+  model: claude-sonnet-4-6
+  max_tokens: 1000
+
+manual_events:
+  - purchase_completed
+
+destinations:
+  - type: bigquery
+    project_id: project-2d72861e-5770-4bc3-842
+    dataset: emit_stress_custom
+    location: US
+    schema_type: per_event
+    cdp_preset: none
+    event_table_mapping:
+      purchase_completed: evt_purchase_completed
+    events:
+      - purchase_completed

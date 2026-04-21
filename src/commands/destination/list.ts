@@ -69,6 +69,21 @@ function buildRow(dest: any, configDir: string): ListRow {
     };
   }
 
+  if (type === "bigquery") {
+    const schemaType = dest?.schema_type ?? "per_event";
+    const dataset = dest?.dataset ? ` ${dest.dataset}` : "";
+    const mt = dest?.multi_event_table
+      ? `, ${schemaType} ${dest.multi_event_table}`
+      : `, ${schemaType}${dataset}`;
+    return {
+      type,
+      name: explicitName || "BigQuery",
+      module: `(built-in${mt})`,
+      status: "configured",
+      status_label: "✓ configured",
+    };
+  }
+
   if (type === "mixpanel") {
     return {
       type,

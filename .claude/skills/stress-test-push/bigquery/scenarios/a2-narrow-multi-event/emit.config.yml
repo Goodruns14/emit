@@ -1,0 +1,30 @@
+repo:
+  paths: ["./"]
+  sdk: segment
+
+output:
+  file: ../../master-catalog.yml
+
+llm:
+  provider: claude-code
+  model: claude-sonnet-4-6
+  max_tokens: 1000
+
+manual_events:
+  - booking_confirmed
+
+destinations:
+  - type: bigquery
+    project_id: project-2d72861e-5770-4bc3-842
+    dataset: emit_stress_monolith
+    location: US
+    schema_type: multi_event
+    multi_event_table: tracks
+    event_column: event
+    properties_column: properties
+    cdp_preset: segment
+    events:
+      - booking_confirmed
+      - onboarding_completed
+      - internal_health_check
+      - settings_team_invite_skip_clicked

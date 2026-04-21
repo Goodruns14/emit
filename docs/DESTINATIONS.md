@@ -2,10 +2,10 @@
 
 `emit push` has two kinds of destination:
 
-- **Built-in** — Mixpanel and Snowflake. Live-tested. Just add a config block.
-- **Custom** — anything else (Segment, Amplitude, RudderStack, PostHog, Statsig, BigQuery, Redshift, Databricks, your-company-internal-thing). You write a small adapter file; emit loads it via dynamic import.
+- **Built-in** — Mixpanel, Snowflake, and BigQuery. Live-tested. Just add a config block.
+- **Custom** — anything else (Segment, Amplitude, RudderStack, PostHog, Statsig, Redshift, Databricks, your-company-internal-thing). You write a small adapter file; emit loads it via dynamic import.
 
-If you want to push to anything other than Mixpanel or Snowflake, write a custom adapter. This doc tells you how.
+If you want to push to anything other than the built-ins, write a custom adapter. This doc tells you how.
 
 ---
 
@@ -101,6 +101,61 @@ export default class MixpanelAdapter {
   }
 }
 ```
+
+---
+
+## Reference: BigQuery
+
+Built-in. Writes catalog event descriptions onto BigQuery table descriptions (`ALTER TABLE … SET OPTIONS(description=…)`) and catalog property descriptions onto matching column descriptions (`ALTER TABLE … ALTER COLUMN … SET OPTIONS(description=…)`).
+
+### Authentication
+
+Three options, in resolution order:
+
+1. **`key_file`** in the destination config — path to a service-account JSON key.
+2. **`GOOGLE_APPLICATION_CREDENTIALS`** environment variable — same thing, standard GCP convention.
+3. **Application Default Credentials (ADC)** — run `gcloud auth application-default login` once. Best for local dev.
+
+For CI, use a service-account key file (option 1 or 2). Grant the account:
+
+- `roles/bigquery.dataEditor` on the target dataset (required to alter table/column descriptions).
+- `roles/bigquery.jobUser` on the project (required to run queries).
+
+### Config
+
+```yaml
+destinations:
+  - type: bigquery
+    project_id: my-gcp-project          # or GOOGLE_CLOUD_PROJECT env var
+    dataset: analytics                    # or BIGQUERY_DATASET env var
+    location: US                          # optional; BigQuery infers from the dataset
+    key_file: ./sa-key.json               # optional; ADC used when omitted
+    schema_type: per_event                # or "multi_event"
+
+    # Optional: reuse common ingestion-pipeline column filters.
+    # Values: segment, rudderstack, snowplow, none (default).
+    cdp_preset: none
+
+    # Optional: extra columns to skip (merged with the preset's list).
+    exclude_columns: [_fivetran_synced]
+
+    # per_event mode only — explicit event → table overrides.
+    event_table_mapping:
+      purchase_completed: evt_purchase_completed
+
+    # multi_event mode only — required when schema_type: multi_event.
+    multi_event_table: events             # bare name uses config.dataset
+    event_column: event_name
+    properties_column: properties         # optional; JSON/STRUCT blob column
+```
+
+Naming convention: BigQuery table and column names are conventionally snake_case. Emit lowercases event names and replaces `-`, `.`, and whitespace with `_` when deriving table names. Override with `event_table_mapping` when your tables don't match.
+
+### Gotchas
+
+- **Dataset location matters for multi-region setups.** If queries fail with "Not found: Dataset", set `location` explicitly.
+- **Column descriptions require the column to exist.** Emit queries `INFORMATION_SCHEMA.COLUMNS` and skips properties without a matching column — it won't add columns.
+- **Identifiers must match `[A-Za-z_][A-Za-z0-9_]*`.** Anything else is rejected before reaching BigQuery, so there's no SQL-injection surface through the config.
 
 ---
 

@@ -14,6 +14,8 @@ import {
 interface RevertOptions {
   event: string;
   commit?: string;
+  yes?: boolean;
+  expectDescription?: string;
 }
 
 export function registerRevert(program: Command): void {
@@ -22,13 +24,20 @@ export function registerRevert(program: Command): void {
     .description("Restore a specific event definition from git history")
     .requiredOption("--event <name>", "Event name to revert")
     .option("--commit <sha>", "Commit SHA to restore from (prompted if omitted)")
+    .option("-y, --yes", "Skip the confirmation prompt. In non-interactive mode, --commit is required.")
+    .option(
+      "--expect-description <substring>",
+      "Safety check: refuse to write unless the historical description contains this substring (case-insensitive).",
+    )
     .action(async (opts: RevertOptions) => {
       const exitCode = await runRevert(opts);
       process.exit(exitCode);
     });
 }
 
-async function runRevert(opts: RevertOptions): Promise<number> {
+export async function runRevert(opts: RevertOptions): Promise<number> {
+  const nonInteractive = !!opts.yes || !process.stdin.isTTY;
+
   logger.blank();
   logger.line(chalk.bold("emit revert") + chalk.gray(` --event ${opts.event}`));
   logger.blank();
@@ -95,6 +104,13 @@ async function runRevert(opts: RevertOptions): Promise<number> {
 
     logger.blank();
 
+    if (nonInteractive) {
+      logger.error(
+        "--commit <sha> is required in non-interactive mode. Pick a SHA from the candidates above."
+      );
+      return 1;
+    }
+
     const answer = await prompt("  Enter commit number or SHA to restore from: ");
     const trimmed = answer.trim();
 
@@ -128,6 +144,20 @@ async function runRevert(opts: RevertOptions): Promise<number> {
 
   logger.succeed(`Found '${opts.event}' at commit ${targetSha}`);
 
+  // ── Optional safety check: historical description must match ────────
+  if (opts.expectDescription) {
+    const needle = opts.expectDescription.toLowerCase();
+    const haystack = (historicalEvent.description ?? "").toLowerCase();
+    if (!haystack.includes(needle)) {
+      logger.error(
+        `--expect-description did not match.\n` +
+          `  expected substring: "${opts.expectDescription}"\n` +
+          `  historical description: "${historicalEvent.description ?? ""}"`
+      );
+      return 1;
+    }
+  }
+
   // ── Show diff summary ─────────────────────────────────────────────
   const current = catalog.events[opts.event];
   logger.blank();
@@ -143,10 +173,12 @@ async function runRevert(opts: RevertOptions): Promise<number> {
   logger.blank();
 
   // ── Confirm and write ─────────────────────────────────────────────
-  const confirm = await prompt(`  Restore '${opts.event}' from commit ${targetSha}? [y/N] `);
-  if (confirm.trim().toLowerCase() !== "y") {
-    logger.warn("Revert cancelled.");
-    return 0;
+  if (!opts.yes) {
+    const confirm = await prompt(`  Restore '${opts.event}' from commit ${targetSha}? [y/N] `);
+    if (confirm.trim().toLowerCase() !== "y") {
+      logger.warn("Revert cancelled.");
+      return 0;
+    }
   }
 
   const updatedCatalog = updateEvent(catalog, opts.event, historicalEvent);

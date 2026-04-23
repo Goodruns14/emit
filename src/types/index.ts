@@ -367,3 +367,137 @@ export interface CatalogHealth {
   flagged_events: string[];
   flagged_event_details: { event: string; flags: string[] }[];
 }
+
+// ─────────────────────────────────────────────
+// SUGGEST TYPES
+// ─────────────────────────────────────────────
+
+/**
+ * Classification of the user's free-text ask. The router prompt produces this
+ * so the downstream pipeline knows which shape of suggestion to return.
+ */
+export type SuggestIntent =
+  | "measure"           // "help me measure survey drop-off"
+  | "edit_event"        // "add chart_type to chart_created" / "rename foo to bar"
+  | "global_prop"       // "add is_employee to every event"
+  | "feature_launch"    // "instrument this feature: apps/web/yir/"
+  | "other";            // catch-all handled as a generic edit
+
+/**
+ * Pre-bundled context handed to the LLM. All fields come from deterministic
+ * sources (catalog + scanner), never from the LLM itself.
+ */
+export interface SuggestContext {
+  /** The user's free-text ask, verbatim. */
+  user_ask: string;
+  /** Naming style inferred from existing event names in the catalog. */
+  naming_style:
+    | "snake_case"
+    | "SCREAMING_SNAKE_CASE"
+    | "Title Case"
+    | "camelCase"
+    | "kebab-case"
+    | "mixed";
+  /** Tracking wrapper(s) in use, e.g. "capturePostHogEvent(", "analytics.track(". */
+  track_patterns: string[];
+  /** Existing events summarized for the LLM (name + description + key props). */
+  existing_events: {
+    name: string;
+    description: string;
+    fires_when: string;
+    properties: string[]; // property names only, full details are too verbose
+  }[];
+  /** Reusable shared properties the LLM should prefer over inventing new ones. */
+  property_definitions: Record<string, { description: string }>;
+  /** 3–5 exemplar call sites to anchor code style. */
+  exemplars: {
+    event_name: string;
+    file: string;
+    line: number;
+    code: string; // windowed context
+  }[];
+  /** Feature code snippets when the user pointed at file paths. */
+  feature_files?: {
+    file: string;
+    code: string;
+  }[];
+}
+
+/**
+ * A proposed event or event-edit. Output of pass #1 (router + suggestion).
+ */
+export interface Suggestion {
+  /** Stable id the CLI uses in the picker. */
+  id: string;
+  /** For new events, the proposed event name. For edits, the existing event name. */
+  event_name: string;
+  /** What kind of change this suggestion represents. */
+  kind:
+    | "new_event"           // add a new event
+    | "add_property"        // add a prop to an existing event
+    | "rename_event"        // rename an existing event
+    | "rename_property"     // rename a prop on an existing event
+    | "change_fires_when"   // move the call site / change trigger
+    | "global_property";    // propagate a prop across many events / wrapper
+  /** Short description of what the event/change captures. */
+  description: string;
+  /** One-liner: why this is being suggested against the user's ask. */
+  rationale: string;
+  confidence: "high" | "medium" | "low";
+  /** Unique properties specific to this suggestion (not shared). */
+  unique_properties: {
+    name: string;
+    description: string;
+    type_hint?: string; // e.g. "string", "number", "boolean", "string | null"
+  }[];
+  /** Shared properties this suggestion reuses from property_definitions. */
+  shared_properties: string[];
+  /** For rename/edit kinds: what the change targets. Omitted for new events. */
+  target?: {
+    old_name?: string;        // for renames
+    old_property?: string;    // for rename_property
+    new_property?: string;    // for rename_property / add_property
+  };
+}
+
+/**
+ * The structured output of pass #1. Either a list of suggestions, or a request
+ * for clarification before suggestions can be made.
+ */
+export interface SuggestionBundle {
+  intent: SuggestIntent;
+  /** If present, the CLI asks these and re-calls. Max 1 round. */
+  clarifications_needed?: {
+    question: string;
+    options?: string[]; // optional choice list; if absent, free text
+  }[];
+  /** Maps gap analysis to existing catalog events, for transparency. */
+  gap_map?: {
+    need: string;
+    covered_by?: string; // existing event name, if any
+  }[];
+  suggestions: Suggestion[];
+  /** Top-level reasoning the LLM wrote; goes in the reasoning doc. */
+  reasoning: string;
+}
+
+/**
+ * A single code edit produced by pass #2 (instrumentation). One per accepted
+ * suggestion (with the global_prop flavor being an exception — may produce
+ * one hunk at the wrapper or multiple at call sites).
+ */
+export interface InstrumentationHunk {
+  suggestion_id: string;
+  file: string;
+  /** 1-indexed line number where the new code starts. */
+  line: number;
+  /** The lines to insert (or replace, when replace_range is set). */
+  new_code: string;
+  /** If replacing existing lines (e.g. rename), inclusive [start, end]. */
+  replace_range?: [number, number];
+  /** Any imports the new code depends on that must be added to the file. */
+  imports_needed?: string[];
+  /** LLM's rationale for this specific placement. Goes in reasoning doc. */
+  placement_rationale: string;
+  confidence: "high" | "medium" | "low";
+}

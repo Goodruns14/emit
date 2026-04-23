@@ -260,4 +260,43 @@ describe("emit scan — integration", () => {
     expect(reloaded.events.test_event.properties.amount.edge_cases).toEqual(["Can be negative for refunds"]);
     expect(reloaded.stats).toEqual(catalog.stats);
   });
+
+  // Regression test for the silent-empty-catalog bug discovered by the e2e
+  // harness. When all LLM calls return unparseable JSON (rate limit, session
+  // degradation, API error), emit was writing a catalog full of placeholder
+  // events and exiting 0. Users shipped broken catalogs. Fix: scan now exits
+  // 3 and refuses to write when every extraction returns the fallback.
+  it("refuses to save a catalog when all extractions return the JSON-parse fallback", async () => {
+    const { runScan } = await import("../src/commands/scan.js");
+
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "emit-scan-guard-"));
+    fs.writeFileSync(path.join(repoDir, "app.ts"),
+      `import { posthog } from 'posthog-js';\nposthog.capture("evt_a", {x:1});\nposthog.capture("evt_b", {y:2});\n`);
+    fs.writeFileSync(path.join(repoDir, "emit.config.yml"), `repo:
+  paths: ["${repoDir}"]
+  sdk: custom
+  track_pattern: "posthog.capture("
+output:
+  file: ${repoDir}/emit.catalog.yml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+manual_events:
+  - evt_a
+  - evt_b
+`);
+
+    process.cwd = () => repoDir;
+    process.env.ANTHROPIC_API_KEY = "sk-test-dummy";
+    // Mock LLM to return garbage so parseJsonResponse falls back to
+    // EXTRACTION_FALLBACK for every event.
+    vi.mocked(callLLM).mockResolvedValue("this is not json at all");
+
+    const exitCode = await runScan({ yes: true });
+
+    expect(exitCode).toBe(3);
+    expect(fs.existsSync(path.join(repoDir, "emit.catalog.yml"))).toBe(false);
+
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  }, 30000);
 });

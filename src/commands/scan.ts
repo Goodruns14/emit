@@ -77,7 +77,7 @@ export function registerScan(program: Command): void {
     });
 }
 
-async function runScan(opts: ScanOptions): Promise<number> {
+export async function runScan(opts: ScanOptions): Promise<number> {
   const json = opts.format === "json";
 
   if (!json) {
@@ -414,6 +414,31 @@ async function runScan(opts: ScanOptions): Promise<number> {
   if (!json) {
     logger.blank();
     logger.succeed("Extraction complete");
+  }
+
+  // ── Guard: refuse to write an empty catalog when events were configured ──
+  // If LLM calls fail at scale (rate limit, API error, claude-code session
+  // degradation), parseJsonResponse falls back to a placeholder per event and
+  // the user ends up with a catalog full of "Could not extract — JSON parse
+  // failed" rows or, worse, no catalog at all. Either way it's silently broken.
+  // Fail loudly here instead of pretending the scan worked.
+  const extractedKeys = Object.keys(catalog);
+  const placeholderCount = extractedKeys.filter((k) =>
+    catalog[k]?.confidence_reason === "LLM returned unparseable response"
+  ).length;
+  const successfulCount = extractedKeys.length - placeholderCount;
+
+  if (located.length > 0 && successfulCount === 0) {
+    const reason =
+      extractedKeys.length === 0
+        ? `extraction produced 0 events from ${located.length} located in code`
+        : `all ${extractedKeys.length} extractions returned the JSON-parse fallback (LLM is failing — likely rate limit, quota exhaustion, or claude-code session degradation)`;
+    logger.error(
+      `Refusing to save catalog: ${reason}.\n` +
+        `  No catalog file was written — your previous catalog (if any) is untouched.\n` +
+        `  Check the LLM provider in emit.config.yml. If using ${llmCfg.provider}, verify credentials/quota and retry.`
+    );
+    return 3;
   }
 
   // ── Property definitions glossary ─────────────────────────────────

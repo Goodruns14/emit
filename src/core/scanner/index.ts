@@ -1,5 +1,5 @@
 import type { CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches } from "./search.js";
+import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, SDK_PATTERNS } from "./search.js";
 import { extractContext, resolveEnumStringValue } from "./context.js";
 
 export class RepoScanner {
@@ -91,9 +91,19 @@ export class RepoScanner {
     }
 
     // ── Strategy 3: broad search fallback ────────────────────────────
-    // Search for all casing variants without pattern filtering,
-    // then pick the best match near a tracking call.
-    const broadMatches = await searchBroad(eventName, this.paths);
+    // Search for all casing variants without pattern filtering. Because this
+    // is case-insensitive and pattern-agnostic, fuzzy hits like comments,
+    // GraphQL field names, or stray identifiers can easily match. Require at
+    // least one match to sit near a real tracking call; otherwise treat as
+    // not_found rather than saddling the catalog with a phantom event.
+    const broadMatchesRaw = await searchBroad(eventName, this.paths);
+    const sdkPatterns = this.sdk === "custom"
+      ? this.customPatterns
+      : SDK_PATTERNS[this.sdk] ?? [];
+    const allTrackingPatterns = [...sdkPatterns, ...this.customPatterns, ...this.backendPatterns];
+    const broadMatches = allTrackingPatterns.length > 0
+      ? broadMatchesRaw.filter((m) => hasNearbyTrackingCall(m.file, m.line, allTrackingPatterns))
+      : broadMatchesRaw;
     if (broadMatches.length > 0) {
       const primary = broadMatches[0];
       const allCallSites: CallSite[] = broadMatches.slice(0, 10).map((m) => ({

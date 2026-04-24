@@ -365,18 +365,14 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     const eventFlags = [...meta.flags];
     for (const [propName, values] of Object.entries(literalValues)) {
       if (!mergedProperties[propName]) {
+        // Regex extractor saw a literal the LLM didn't include as a property.
+        // Trust the LLM — these are usually JSX attrs, CSS tokens, routing
+        // metadata, or framework option keys in surrounding code, not event
+        // payload fields. Surface as a human-review flag but do NOT inject a
+        // phantom property (which would pollute the catalog with fake fields).
         eventFlags.push(
-          `Property '${propName}' has code literal values but was not described by LLM — review`
+          `Literal '${propName}=${values.slice(0, 3).join("|")}' found in context but not extracted by LLM — likely not an event property`
         );
-        mergedProperties[propName] = {
-          description: "See code_sample_values for known literal values; LLM did not extract a description.",
-          edge_cases: [],
-          null_rate: 0,
-          cardinality: 0,
-          sample_values: [],
-          code_sample_values: values,
-          confidence: "low",
-        };
       }
     }
 

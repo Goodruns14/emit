@@ -49,7 +49,17 @@ export class MetadataExtractor {
     codeContext: CodeContext,
     literalValues: LiteralValues,
   ): Promise<ExtractedMetadata> {
-    const cacheKey = codeContext.context;
+    // Fold reference-helper file identity into the cache key so cached
+    // extractions invalidate when a configured context_file changes. Without
+    // this, adding context_files to a previously-cached event has no visible
+    // effect — the stale cache entry keeps winning.
+    const extraKey =
+      codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+        ? codeContext.extra_context_files
+            .map((f) => `${f.path}::${f.content.length}::${f.content.slice(0, 64)}`)
+            .join("|")
+        : "";
+    const cacheKey = codeContext.context + (extraKey ? `||extras:${extraKey}` : "");
     const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
     if (cached) return sanitizeExtraction(cached);
 

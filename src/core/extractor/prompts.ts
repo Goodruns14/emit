@@ -25,6 +25,13 @@ export function buildExtractionPrompt(
           .join("\n")}\n`
       : "";
 
+  const extraContextSection =
+    codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+      ? `\nReference helper sources — the call site above does not show the property payload directly because properties are assembled downstream in these helpers. Treat the properties emitted in these helpers as this event's properties when this event fires. Ignore any unrelated helpers in these files:\n\n${codeContext.extra_context_files
+          .map((f) => `Reference file (${f.path}):\n\`\`\`\n${f.content}\n\`\`\``)
+          .join("\n\n")}\n`
+      : "";
+
   return `
 You are analyzing analytics instrumentation code to extract semantic metadata.
 Your job is to understand what this event means in business terms.
@@ -41,7 +48,7 @@ Primary call site (${codeContext.file_path}:${codeContext.line_number}):
 ${codeContext.context}
 \`\`\`
 ${additionalContext ? `\nAdditional call sites:\n${additionalContext}` : ""}
-
+${extraContextSection}
 Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
 {
   "event_description": "One sentence. What this event means in business terms.",

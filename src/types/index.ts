@@ -16,7 +16,26 @@ export interface CodeContext {
   segment_event_name?: string;
   track_pattern?: string;
   all_call_sites: CallSite[];
+  /**
+   * Reference helper files attached to the LLM prompt when a match fires near
+   * a configured backend_patterns entry that declares `context_files`. Used
+   * for call sites that are thin wrappers where the property payload is
+   * assembled in a downstream helper (e.g. audit-event appenders, event
+   * builders). Empty/absent when no pattern matched or no files configured.
+   */
+  extra_context_files?: { path: string; content: string }[];
 }
+
+/**
+ * A backend tracking pattern entry. A bare string is a regex/substring the
+ * scanner treats as a tracking call — existing behavior. The object form lets
+ * users attach reference files that are loaded into the LLM prompt when the
+ * pattern matches. Useful when the actual property payload is assembled in a
+ * helper file (e.g. an audit-event appender) separate from the call site.
+ */
+export type BackendPatternConfig =
+  | string
+  | { pattern: string; context_files: string[] };
 
 export interface LiteralValues {
   [propertyName: string]: string[];
@@ -537,8 +556,14 @@ export interface EmitConfig {
     paths: string[];
     sdk: SdkType;
     track_pattern?: string | string[];
-    /** Additional patterns for backend tracking (e.g. Java audit helpers, server-side SDKs) */
-    backend_patterns?: string[];
+    /**
+     * Additional patterns for backend tracking (e.g. Java audit helpers,
+     * server-side SDKs). Entries may be a bare string, or an object with
+     * `context_files` pointing at helper files to load into the LLM prompt
+     * when the pattern matches — useful when the property payload is
+     * assembled downstream from the call site.
+     */
+    backend_patterns?: BackendPatternConfig[];
     /** Paths or file patterns to exclude from scanning (e.g. 'cypress', '*.test.*'). Directories are passed as --exclude-dir; glob patterns (containing *) as --exclude. Leading `**\/` is stripped automatically. */
     exclude_paths?: string[];
   };

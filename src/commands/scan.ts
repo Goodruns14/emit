@@ -318,7 +318,12 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       config.repo.paths
     );
 
-    const contextHash = computeContextHash(ctx.context, callSiteContexts, literalValues);
+    const contextHash = computeContextHash(
+      ctx.context,
+      callSiteContexts,
+      literalValues,
+      ctx.extra_context_files ?? []
+    );
     const previousEntry = previousCatalog?.events[event.name];
 
     if (previousEntry?.context_hash === contextHash) {

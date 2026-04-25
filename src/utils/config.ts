@@ -134,6 +134,31 @@ function validate(config: EmitConfig): void {
     );
   }
 
+  if (config.repo?.backend_patterns) {
+    for (let i = 0; i < config.repo.backend_patterns.length; i++) {
+      const entry = config.repo.backend_patterns[i];
+      if (typeof entry === "string") continue;
+      if (!entry || typeof entry !== "object") {
+        throw new Error(
+          `repo.backend_patterns[${i}]: must be a string or { pattern, context_files: [...] }`
+        );
+      }
+      if (typeof entry.pattern !== "string" || !entry.pattern) {
+        throw new Error(
+          `repo.backend_patterns[${i}].pattern: required string (the grep substring)`
+        );
+      }
+      if (
+        !Array.isArray(entry.context_files) ||
+        entry.context_files.some((p) => typeof p !== "string")
+      ) {
+        throw new Error(
+          `repo.backend_patterns[${i}].context_files: required string[] — paths to helper files to load into the LLM prompt`
+        );
+      }
+    }
+  }
+
   if (config.discriminator_properties) {
     for (const [eventName, cfg] of Object.entries(config.discriminator_properties)) {
       const prop = typeof cfg === "string" ? cfg : cfg.property;

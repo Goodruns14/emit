@@ -149,7 +149,7 @@ function isTrackingCallLine(line: string, patterns: string[]): boolean {
  *     { prop: "value" }
  *   )
  */
-function hasNearbyTrackingCall(
+export function hasNearbyTrackingCall(
   filePath: string,
   lineNumber: number,
   patterns: string[],

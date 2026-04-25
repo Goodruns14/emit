@@ -130,9 +130,12 @@ Valid providers are enforced at config load time. The `LlmProvider` type is defi
 
 ## Test Repos
 
-Test repos live in `test-repos/` (gitignored). Used for integration testing:
+Test repos live in `test-repos/` (gitignored). They're split by what they exercise:
 
-### Original repos
+- `test-repos/analytics/` — analytics SDK fixtures (Segment, PostHog, Amplitude, custom telemetry). Validates the original analytics catalog flow.
+- `test-repos/pubsub/` — pub/sub / event-driven architecture fixtures (Kafka, SNS/SQS, RabbitMQ, AWS CDK). Validates producer-mode and (eventually) consumer-side lineage. Each fixture exposes a distinct technical pattern; see `test-repos/pubsub/README.md` if present, otherwise the per-repo notes below.
+
+### Original repos (`test-repos/analytics/`)
 
 | Repo | SDK Pattern | Notes |
 |------|-------------|-------|
@@ -174,8 +177,26 @@ Added to stress-test emit across diverse real-world codebases:
 
 Each has its own `emit.config.yml`. Run tests against them with:
 ```bash
-cd test-repos/calcom && NODE_PATH=$(pwd)/../../node_modules node ../../dist/cli.js scan --format json
+cd test-repos/analytics/calcom && NODE_PATH=$(pwd)/../../../node_modules node ../../../dist/cli.js scan --format json
 ```
+
+### Pub/sub fixtures (`test-repos/pubsub/`)
+
+| Repo | SDK Pattern | Distinct test value |
+|------|-------------|---------------------|
+| `confluent-getting-started` | `kafkaTemplate.send`, `@KafkaListener`, raw `KafkaProducer.send(new ProducerRecord(...))` | Canonical Kafka. Same `purchases` event in 6 languages (Java, Spring, Go, Python, JS, .NET, C). Multi-language reference. |
+| `aleks-cqrs-eventsourcing` | `KafkaTemplate<String, byte[]>` + `@KafkaListener` consumer with `switch(event.getEventType())` | CQRS+ES with `_V1` versioning, event classes, discriminator-in-topic pattern, Spring `@Value("${...}")` config externalization. |
+| `ably-ticket-kafka` | Python `confluent_kafka.SerializingProducer.produce(topic, key, value)` | Has explicit Avro `.avsc` schema files — schema-as-source-of-truth case. Producer-only (consumer is external Ably). |
+| `aws-serverless-patterns` (sparse: `fargate-sns-sqs-cdk` + a few SNS/SQS dirs) | `sns.publish(params)`, `sqs.receiveMessage(params)`; topology in CDK | IaC-as-truth: topic ARN passed to app via `process.env`. Validates the gap that requires either IaC parsing or user-declared topic aliases. |
+| `golevelup-nestjs` | `@RabbitSubscribe({exchange, routingKey, queue})`, `@RabbitRPC(...)` | Routing-key wildcards (`hash-wildcard-rpc.#`, `star-wildcard-rpc.*.end`). Multiple decorated handlers per controller. |
+| `outbox-microservices-patterns` | Spring Boot outbox pattern: `OrderService.CreateOrder()` writes to outbox table; separate `@Scheduled` poller calls `kafkaTemplate.send("order-topic", ...)` | Outbox pattern. The grep for `kafkaTemplate.send` lands in the poller — but the *semantic* event is in `CreateOrder()` 50 lines away. Tests whether emit can recognize outbox split and expand context to whole-file. |
+| `kafka-protobuf` | `KafkaProtobufSerializer` + `producer.send(new ProducerRecord<>("protobuf-topic", null, simpleMessage))` | Protobuf `.proto` schema files (`SimpleMessage.proto`). Tests Phase-1 deliverable #5 (schema-file ingestion) for non-Avro formats. |
+| `mozilla-fxa` (sparse: `libs/shared/notifier`, `packages/fxa-event-broker`, `packages/fxa-auth-server/lib/notifier*`) | `@aws-sdk/client-sqs` Consumer + `@google-cloud/pubsub` `pubsub.topic(name).publishMessage(...)` + SQS notifier service | Real production at scale. Three things at once: SQS consumer via `sqs-consumer` lib (different from `@SqsMessageHandler`), Google Pub/Sub publish, **dynamic topic names** (`this.topicPrefix + clientId`), and cross-platform fan-out (one SQS message → N PubSub topics). |
+| `moleculer-go` | Go `transit` package, multi-transport (TCP, NATS) | Go pub/sub idioms. Validates that adding Go scanner support is the cost previously estimated (~200–400 LOC). |
+| `redhat-cloudevents` | `io.cloudevents.CloudEvent` + `OutboxEventEmitter.emitCloudEvent(ce)` translates envelope fields to outbox columns | **Envelope vs payload distinction**: `ce.getType()`, `ce.getSource()`, `ce.getTime()`, `ce.getExtension("aggregateid")` are envelope metadata, separate from `ce.getData()` (payload). Catalog must model these distinctly. Also: 3-layer outbox split (domain → emitter → poller). |
+| `misarch-dapr-inventory` | `daprClient.pubsub.publish(pubsubName, topic, data)` | **Broker abstraction**: Dapr's `pubsubName` refers to a YAML-configured component that maps to Kafka/Redis/RabbitMQ. Underlying broker is invisible to code. Same shape as IaC-as-truth gap. |
+| `temporal-samples` | `wf.defineSignal('unblock')`, `wf.setHandler(...)`, `workflowHandle.signal(...)` | **Out-of-scope confirmation**: Temporal signals are RPC-style targeted messages to specific workflow instances, not topic-broadcast events. emit's catalog model doesn't fit. Documented as known limitation, no Phase 1 work. |
+| `pipeshub-redis-streams` | `BaseRedisStreamsProducerConnection` wraps `ioredis` `xadd`/`xreadgroup` | Confirms wrapper-class pattern (same shape as custom analytics wrappers). User declares the wrapper as the `track_pattern`. No new code path. |
 
 ## Testing
 

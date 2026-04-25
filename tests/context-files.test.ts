@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { RepoScanner } from "../src/core/scanner/index.js";
-import { buildExtractionPrompt } from "../src/core/extractor/prompts.js";
+import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt } from "../src/core/extractor/prompts.js";
 import { computeContextHash } from "../src/utils/hash.js";
 import type { CodeContext } from "../src/types/index.js";
 
@@ -143,6 +143,52 @@ describe("RepoScanner + backend_patterns context_files", () => {
 });
 
 // ─────────────────────────────────────────────
+// Discriminator path also gets extras
+// ─────────────────────────────────────────────
+
+describe("RepoScanner.findDiscriminatorValue + context_files", () => {
+  let repo: string;
+
+  beforeEach(() => {
+    repo = mkTempRepo();
+  });
+
+  afterEach(() => {
+    rmRepo(repo);
+  });
+
+  it("attaches context_files to discriminator sub-event call sites via window scan", async () => {
+    fs.writeFileSync(
+      path.join(repo, "consumer.ts"),
+      `import { audit } from "./audit";\n` +
+        `audit.fire(\n` +
+        `  AuditEvents.SNAPSHOT_TAKEN\n` +
+        `);\n`
+    );
+    fs.writeFileSync(
+      path.join(repo, "appender.ts"),
+      `// downstream: analytics.track(event, { snapshot_id, workspace_id })\n`
+    );
+
+    const scanner = new RepoScanner({
+      paths: [repo],
+      sdk: "custom",
+      backendPatterns: [
+        {
+          pattern: "audit.fire(",
+          context_files: [path.join(repo, "appender.ts")],
+        },
+      ],
+    });
+
+    const ctx = await scanner.findDiscriminatorValue("SNAPSHOT_TAKEN");
+    expect(ctx.match_type).toBe("discriminator");
+    expect(ctx.extra_context_files).toBeDefined();
+    expect(ctx.extra_context_files![0].path).toContain("appender.ts");
+  });
+});
+
+// ─────────────────────────────────────────────
 // Prompt builder
 // ─────────────────────────────────────────────
 
@@ -177,6 +223,25 @@ describe("buildExtractionPrompt with extra_context_files", () => {
   it("omits the section when no extras are provided", () => {
     const prompt = buildExtractionPrompt("CAPTURE_ENTITY_CRUD", baseCtx, {});
     expect(prompt).not.toContain("Reference helper sources");
+  });
+
+  it("discriminator prompt also includes the section when extras are present", () => {
+    const ctx: CodeContext = {
+      ...baseCtx,
+      match_type: "discriminator",
+      extra_context_files: [
+        { path: "src/appender.ts", content: "downstream snapshot fields here" },
+      ],
+    };
+    const prompt = buildDiscriminatorExtractionPrompt(
+      "jb_command",
+      "action",
+      "snapshot",
+      ctx,
+      "Parent JetBrains command event"
+    );
+    expect(prompt).toContain("Reference helper sources");
+    expect(prompt).toContain("src/appender.ts");
   });
 });
 

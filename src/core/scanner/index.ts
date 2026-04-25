@@ -257,6 +257,10 @@ export class RepoScanner {
         context: extractContext(primary.file, primary.line, 50),
         match_type: "discriminator",
         all_call_sites: allCallSites,
+        // Discriminator sub-events typically share the parent's call-site
+        // context (same wrapper, same helper). Run the same window scan so
+        // configured helper files are attached here too.
+        extra_context_files: this.loadContextFilesFor(undefined, primary.file, primary.line),
       };
     }
 

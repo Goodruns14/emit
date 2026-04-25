@@ -157,6 +157,13 @@ Primary code reference (${codeContext.file_path}:${codeContext.line_number}):
 ${codeContext.context}
 \`\`\`
 ${additionalContext ? `\nAdditional references:\n${additionalContext}` : ""}
+${
+  codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+    ? `\nReference helper sources — the call site does not show the payload directly because properties are assembled downstream in these helpers. Use them to understand what fields belong to ${parentEventName} when ${discriminatorProperty} = "${discriminatorValue}":\n\n${codeContext.extra_context_files
+        .map((f) => `Reference file (${f.path}):\n\`\`\`\n${f.content}\n\`\`\``)
+        .join("\n\n")}\n`
+    : ""
+}
 
 Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
 {

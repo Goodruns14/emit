@@ -84,7 +84,16 @@ export class MetadataExtractor {
     ctx: CodeContext,
     parentDescription?: string,
   ): Promise<ExtractedMetadata> {
-    const cacheKey = ctx.context + `::disc::${parentEventName}::${property}::${value}`;
+    const extraKey =
+      ctx.extra_context_files && ctx.extra_context_files.length > 0
+        ? ctx.extra_context_files
+            .map((f) => `${f.path}::${f.content.length}::${f.content.slice(0, 64)}`)
+            .join("|")
+        : "";
+    const cacheKey =
+      ctx.context +
+      `::disc::${parentEventName}::${property}::${value}` +
+      (extraKey ? `||extras:${extraKey}` : "");
     const eventKey = `${parentEventName}.${value}`;
     const cached = getCached<ExtractedMetadata>(eventKey, cacheKey);
     if (cached) return cached;

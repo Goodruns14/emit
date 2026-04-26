@@ -78,9 +78,11 @@ Every event and every property in the catalog is scored on the same three-level 
 | **medium** | Only a type/interface declaration is visible (fire site inferred), or the trigger context is ambiguous | Name is visible but value, type, or origin isn't — passed as a typed parameter, set in a wrapper not shown, or assembled dynamically |
 | **low** | Can't confirm the event fires from the code shown | Can't tell whether this is an event property or an unrelated local variable |
 
-**Medium is acceptable**, not a failure to chase. It's the LLM saying "I have a justified read but couldn't fully verify." Focus iteration effort on **low** and **not-found** events. Today only the event-level score gates `review_required` and the high/medium/low breakdown — per-property scores are stored and surfaced via MCP for inspection but don't roll up into aggregates.
+**Low** and **not-found** events are the highest-priority for review — they're the ones that genuinely block. **Medium is acceptable on its own**: the LLM is saying "I have a justified read but couldn't fully verify." Medium events don't gate `review_required` and won't block you.
 
-For the **medium** wrapper case ("set in a wrapper not shown"), see `backend_patterns.context_files` under [Configuration](#configuration) — pointing emit at the helper file usually moves the affected events from low/medium to high.
+**You can still push Medium to High if you want.** Emit doesn't insist Medium events stay Medium — it just doesn't pressure you to chase them. The typical lever for pushing Medium → High is surfacing more context: for the wrapper-helper case ("set in a wrapper not shown"), `backend_patterns.context_files` (see [Configuration](#configuration)) points emit at the helper file and usually moves the affected events from medium to high. The choice is yours.
+
+Today only the event-level score gates `review_required` and the high/medium/low breakdown — per-property scores are stored and surfaced via MCP for inspection but don't roll up into aggregates.
 
 ## Commands
 

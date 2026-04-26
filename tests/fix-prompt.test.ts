@@ -96,11 +96,17 @@ describe("buildFixPrompt", () => {
     expect(prompt).not.toContain("--event ");
   });
 
-  it("frames the goal around resolving Low confidence, not Medium", () => {
+  it("frames Medium as acceptable but improvable, with the user driving", () => {
     const prompt = buildFixPrompt(baseLastFix);
-    expect(prompt).toContain("Goal: resolve low-confidence events");
-    expect(prompt).toContain("Medium is acceptable");
-    expect(prompt).toContain("Don't chase Medium → High");
+    // Medium is fine on its own, but the user can push it higher if they want
+    // — emit doesn't dictate priorities, it just makes the path clear.
+    expect(prompt).toContain("Medium-confidence events");
+    expect(prompt).toContain("acceptable on their own");
+    expect(prompt).toContain("push them to");
+    expect(prompt).toContain("Follow the user's lead");
+    // Make sure the old prescriptive wording is gone.
+    expect(prompt).not.toContain("Don't chase");
+    expect(prompt).not.toContain("Goal: resolve low-confidence events");
   });
 
   it("invites multi-turn iteration explicitly", () => {

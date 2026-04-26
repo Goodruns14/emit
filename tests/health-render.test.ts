@@ -58,8 +58,11 @@ describe("renderHealthSection — legend & framing visibility", () => {
       medium_confidence: 2,
     });
     expect(output()).toContain("✓ High = verified");
-    expect(output()).toContain("Focus iteration on Low and Not-found");
-    expect(output()).toContain("Medium is acceptable");
+    expect(output()).toContain("Low and Not-found are highest-priority");
+    expect(output()).toContain("Medium is acceptable on its own");
+    // Affirm that pushing Medium → High is offered as a user-driven option,
+    // not discouraged.
+    expect(output()).toContain("you can push it to High");
   });
 
   it("shows legend and framing when at least one low event exists", () => {
@@ -69,7 +72,17 @@ describe("renderHealthSection — legend & framing visibility", () => {
       low_confidence: 3,
     });
     expect(output()).toContain("✓ High = verified");
-    expect(output()).toContain("Focus iteration on Low");
+    expect(output()).toContain("Low and Not-found are highest-priority");
+  });
+
+  it("does not contain prescriptive wording that discourages improving Medium", () => {
+    renderHealthSection({
+      ...baseHealth,
+      high_confidence: 5,
+      medium_confidence: 1,
+    });
+    expect(output()).not.toContain("Focus iteration on Low and Not-found.");
+    expect(output()).not.toContain("Don't chase");
   });
 
   it("uses calibrated wording in the legend (matches prompt definitions)", () => {

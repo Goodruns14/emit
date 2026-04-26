@@ -68,6 +68,22 @@ emit status
 
 Shows a catalog health report with confidence breakdown, stale events, and flagged items.
 
+## Confidence levels
+
+Every event and every property in the catalog is scored on the same three-level scale. The two scores are independent — an event may be **high** while one of its properties is **medium**, or vice versa.
+
+| Level | Event | Property |
+|-------|-------|----------|
+| **high** | Track/fire call is visible AND its trigger context is clear | Property appears in the call site with a clear value, type, or literal |
+| **medium** | Only a type/interface declaration is visible (fire site inferred), or the trigger context is ambiguous | Name is visible but value, type, or origin isn't — passed as a typed parameter, set in a wrapper not shown, or assembled dynamically |
+| **low** | Can't confirm the event fires from the code shown | Can't tell whether this is an event property or an unrelated local variable |
+
+**Low** and **not-found** events are the highest-priority for review — they're the ones that genuinely block. **Medium is acceptable on its own**: the LLM is saying "I have a justified read but couldn't fully verify." Medium events don't gate `review_required` and won't block you.
+
+**You can still push Medium to High if you want.** Emit doesn't insist Medium events stay Medium — it just doesn't pressure you to chase them. The typical lever for pushing Medium → High is surfacing more context: for the wrapper-helper case ("set in a wrapper not shown"), `backend_patterns.context_files` (see [Configuration](#configuration)) points emit at the helper file and usually moves the affected events from medium to high. The choice is yours.
+
+Today only the event-level score gates `review_required` and the high/medium/low breakdown — per-property scores are stored and surfaced via MCP for inspection but don't roll up into aggregates.
+
 ## Commands
 
 | Command | Purpose |
@@ -210,6 +226,15 @@ Copy `.env.example` to `.env` and fill in the values you need:
 | `SNOWFLAKE_ACCOUNT` / `_USERNAME` / `_PASSWORD` / `_DATABASE` / `_SCHEMA` | Snowflake push destination |
 
 Environment variables can be referenced in `emit.config.yml` with `${VAR_NAME}` syntax.
+
+## Hitting a wall?
+
+Emit is open source. If your codebase has a pattern emit doesn't handle yet, the right path is usually:
+
+1. **File an issue** describing the pattern. Most "edge cases" we hear become config knobs in a future release — `backend_patterns.context_files` came from a user who needed it for a Java audit-event wrapper, and now any wrapper-helper case is configurable without touching source.
+2. **Read the scanner source.** `src/core/scanner/` and `src/core/extractor/` are small and well-commented. If you need to extend something locally to unblock yourself, fine, but please open a PR so the next user with the same pattern doesn't have to do the same work.
+
+`emit.config.yml` is the contract. Source modification is the contribution path, not a workaround — forking and silently diverging will leave you stranded on upgrades. We'd rather hear about your case.
 
 ## License
 

@@ -16,3 +16,5 @@ emit-cli/
 md files/
 action/*.js
 action/*.js.map
+# Local prototype work — not part of the shipped CLI
+frontend/

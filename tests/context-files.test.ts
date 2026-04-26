@@ -246,6 +246,61 @@ describe("buildExtractionPrompt with extra_context_files", () => {
 });
 
 // ─────────────────────────────────────────────
+// Confidence calibration — extraction prompts teach the LLM what each level
+// means so labels are reproducible across runs and dimensions (event vs.
+// property). Both extraction paths must include the same definitions so a
+// discriminator sub-event scored "medium" means the same thing as a
+// top-level event scored "medium".
+// ─────────────────────────────────────────────
+
+describe("Confidence-level calibration in extraction prompts", () => {
+  const baseCtx: CodeContext = {
+    file_path: "src/consumer.ts",
+    line_number: 3,
+    context: "audit.fire(AuditEvents.X);",
+    match_type: "direct",
+    all_call_sites: [
+      { file_path: "src/consumer.ts", line_number: 3, context: "audit.fire(AuditEvents.X);" },
+    ],
+  };
+
+  it("extraction prompt includes the confidence definitions block", () => {
+    const prompt = buildExtractionPrompt("X", baseCtx, {});
+    expect(prompt).toContain("Confidence levels");
+    expect(prompt).toContain("independent dimensions");
+  });
+
+  it("extraction prompt defines all three levels for both event and property dimensions", () => {
+    const prompt = buildExtractionPrompt("X", baseCtx, {});
+    // Each level must appear with both Event and Property bullets so the
+    // model applies them independently.
+    expect(prompt).toMatch(/high.+\n.+Event:/s);
+    expect(prompt).toMatch(/high.+\n.+\n.+Property:/s);
+    expect(prompt).toMatch(/medium.+\n.+Event:/s);
+    expect(prompt).toMatch(/low.+\n.+Event:/s);
+  });
+
+  it("medium definition includes the wrapper-helper case and points at the fix path", () => {
+    const prompt = buildExtractionPrompt("X", baseCtx, {});
+    // Whitespace-tolerant — the prompt is multi-line and may wrap across lines.
+    expect(prompt).toMatch(/wrapper\/helper\s+not\s+shown/);
+    expect(prompt).toContain("backend_patterns context_files");
+  });
+
+  it("discriminator prompt also includes the confidence definitions", () => {
+    const prompt = buildDiscriminatorExtractionPrompt(
+      "parent",
+      "action",
+      "snapshot",
+      baseCtx,
+      "parent event"
+    );
+    expect(prompt).toContain("Confidence levels");
+    expect(prompt).toContain("independent dimensions");
+  });
+});
+
+// ─────────────────────────────────────────────
 // Hashing — cache invalidation
 // ─────────────────────────────────────────────
 

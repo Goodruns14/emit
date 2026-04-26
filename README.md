@@ -227,6 +227,15 @@ Copy `.env.example` to `.env` and fill in the values you need:
 
 Environment variables can be referenced in `emit.config.yml` with `${VAR_NAME}` syntax.
 
+## Hitting a wall?
+
+Emit is open source. If your codebase has a pattern emit doesn't handle yet, the right path is usually:
+
+1. **File an issue** describing the pattern. Most "edge cases" we hear become config knobs in a future release — `backend_patterns.context_files` came from a user who needed it for a Java audit-event wrapper, and now any wrapper-helper case is configurable without touching source.
+2. **Read the scanner source.** `src/core/scanner/` and `src/core/extractor/` are small and well-commented. If you need to extend something locally to unblock yourself, fine, but please open a PR so the next user with the same pattern doesn't have to do the same work.
+
+`emit.config.yml` is the contract. Source modification is the contribution path, not a workaround — forking and silently diverging will leave you stranded on upgrades. We'd rather hear about your case.
+
 ## License
 
 MIT

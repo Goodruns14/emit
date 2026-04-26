@@ -58,6 +58,10 @@ function writeCatalogFile(filePath: string, catalog: EmitCatalog): void {
   // Stats
   parts.push("\n# ── Stats ───────────────────────────────────────────────────────────────────");
   parts.push("# How many events were scanned, located in code, and their confidence breakdown.");
+  parts.push("# Confidence levels (event-level scoring; per-property scoring uses the same scale):");
+  parts.push("#   high   — verified: track/fire call visible AND trigger context clear");
+  parts.push("#   medium — justified read but one piece of evidence missing (acceptable)");
+  parts.push("#   low    — critical evidence missing; needs human review");
   parts.push(yaml.dump({ stats: catalog.stats }, { lineWidth: 120 }).trimEnd());
 
   // Property definitions

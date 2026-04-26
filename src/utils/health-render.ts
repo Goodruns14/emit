@@ -4,6 +4,8 @@ import { logger } from "./logger.js";
 
 export function renderHealthSection(health: CatalogHealth, hasDiagnosticIssues = false, hasPendingFix = false): void {
   logger.summary([
+    // Counts here are EVENT-level. Per-property confidence is stored in the
+    // catalog and surfaced via MCP but does not roll up into this breakdown.
     { label: "Extraction confidence (LLM):", value: `${health.located} events` },
     { label: "  ✓ High:", value: health.high_confidence },
     { label: "  ~ Medium:", value: health.medium_confidence },
@@ -18,6 +20,16 @@ export function renderHealthSection(health: CatalogHealth, hasDiagnosticIssues =
       warn: health.not_found > 0,
     },
   ]);
+
+  // Legend + framing: shown only when there's actually a non-high event to
+  // explain. An all-high catalog gets a clean breakdown with no extra noise.
+  const hasNonHigh = health.medium_confidence > 0 || health.low_confidence > 0;
+  if (hasNonHigh) {
+    logger.line(chalk.gray(
+      "  ✓ High = verified  ~ Medium = some evidence missing, justified read  ⚠ Low = needs review"
+    ));
+    logger.line(chalk.gray("  Focus iteration on Low and Not-found. Medium is acceptable."));
+  }
 
   logger.blank();
 

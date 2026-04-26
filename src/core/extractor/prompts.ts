@@ -1,5 +1,45 @@
 import type { CodeContext, LiteralValues } from "../../types/index.js";
 
+/**
+ * Shared confidence-level definitions injected into every extraction prompt.
+ *
+ * Event-level and per-property confidence are scored on the same scale but
+ * independently — an event may be high while some of its properties are
+ * medium, or vice versa. This block teaches the LLM what each label means
+ * for each dimension so labels are calibrated and reproducible across runs.
+ *
+ * Note: today only event-level confidence drives downstream behavior
+ * (review_required, the high/medium/low breakdown). Per-property confidence
+ * is stored and surfaced via MCP but doesn't gate any user-facing aggregate.
+ * The scale still applies consistently so the catalog is self-consistent.
+ */
+export const CONFIDENCE_DEFINITIONS = `
+Confidence levels (apply consistently to both event and per-property
+confidence — they are independent dimensions; an event may be high while
+some of its properties are medium, or vice versa):
+
+- high   — The evidence is complete and unambiguous.
+  · Event:    an actual track/fire call is visible AND its trigger context
+              (function/handler/branch where it lives) is clear.
+  · Property: the property appears in the call site with a clear value,
+              type, or literal.
+
+- medium — Most evidence is present but one specific piece is missing.
+           A justified read, not fully verified.
+  · Event:    only a type/interface declaration is visible and the fire
+              site is inferred from naming, OR the trigger context is
+              ambiguous (multiple plausible flows).
+  · Property: the name is visible but value, type, or origin isn't — e.g.,
+              passed as a typed parameter, set in a wrapper/helper not
+              shown (backend_patterns context_files addresses this), or
+              assembled dynamically.
+
+- low    — Critical evidence is missing.
+  · Event:    you can't confirm the event fires from the code shown.
+  · Property: you can't tell whether this is an event property or an
+              unrelated local variable.
+`.trim();
+
 export function buildExtractionPrompt(
   eventName: string,
   codeContext: CodeContext,
@@ -49,6 +89,8 @@ ${codeContext.context}
 \`\`\`
 ${additionalContext ? `\nAdditional call sites:\n${additionalContext}` : ""}
 ${extraContextSection}
+${CONFIDENCE_DEFINITIONS}
+
 Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
 {
   "event_description": "One sentence. What this event means in business terms.",
@@ -164,6 +206,8 @@ ${
         .join("\n\n")}\n`
     : ""
 }
+
+${CONFIDENCE_DEFINITIONS}
 
 Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
 {

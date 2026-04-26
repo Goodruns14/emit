@@ -20,6 +20,88 @@ interface LastFix {
   }>;
 }
 
+/**
+ * Build the comma-separated event-name list for the scoped rescan command.
+ * Returns empty string when no events are flagged (caller falls back to full
+ * scan — typical for cross-cutting noise like exclude_paths fixes that don't
+ * tie to specific events).
+ */
+export function buildFlaggedEventsArg(lastFix: LastFix): string {
+  return (lastFix.flaggedEvents ?? []).map((e) => e.name).join(",");
+}
+
+/**
+ * Build the human-readable rescan command suggested in user-facing messages
+ * and the Claude prompt. Scoped to flagged events when present, full repo
+ * otherwise.
+ */
+export function buildRescanCommand(lastFix: LastFix): string {
+  const arg = buildFlaggedEventsArg(lastFix);
+  return arg ? `emit scan --event ${arg} --fresh` : `emit scan --fresh`;
+}
+
+/**
+ * Build the auto-rescan execa argv. Mirrors buildRescanCommand but as
+ * tokenized args. Caller appends --yes when running headless.
+ */
+export function buildRescanArgs(lastFix: LastFix): string[] {
+  const arg = buildFlaggedEventsArg(lastFix);
+  return arg ? ["scan", "--event", arg, "--fresh"] : ["scan", "--fresh"];
+}
+
+/**
+ * Build the prompt handed to Claude Code. Pure — testable without spinning up
+ * Claude. The framing intentionally encourages multi-turn iteration (Claude
+ * may run scoped rescans inline) and treats Medium confidence as acceptable
+ * rather than something to chase.
+ */
+export function buildFixPrompt(lastFix: LastFix): string {
+  const callSiteLines = (lastFix.flaggedEvents ?? []).map((ev) => {
+    const sites = ev.all_call_sites.map((s) => `${s.file}:${s.line}`).join(", ");
+    return `  - ${ev.name}: primary file ${ev.source_file}, all call sites: ${sites}`;
+  }).join("\n");
+  const findingsText = (lastFix.findings ?? []).join("\n\n");
+  const rescanCmd = buildRescanCommand(lastFix);
+
+  return [
+    `Fix emit.config.yml to resolve scanner noise detected by emit scan.`,
+    ``,
+    `Config fix needed: ${lastFix.fixInstruction}`,
+    ``,
+    `Full diagnosis:`,
+    findingsText,
+    ``,
+    `Flagged events and their source locations:`,
+    callSiteLines || "  (none recorded)",
+    ``,
+    `Goal: resolve low-confidence events. Medium is acceptable for events where the`,
+    `LLM is reasonably sure but couldn't fully verify. Don't chase Medium → High`,
+    `unless there's clear evidence to act on.`,
+    ``,
+    `You may iterate: edit emit.config.yml, run \`${rescanCmd}\` to test only the`,
+    `affected events, inspect the resulting catalog, refine the fix as needed.`,
+    `Reserve \`emit scan --fresh\` (full repo) for after the loop, as a regression`,
+    `check. Stop when the diagnosis is resolved.`,
+    ``,
+    `SAFETY RULES:`,
+    `1. Preserve discovery. For each file you're considering excluding, cross-reference`,
+    `   every flagged event's all_call_sites above. If the file appears in an event's`,
+    `   all_call_sites AND excluding it would leave that event with ZERO remaining call`,
+    `   sites, DO NOT exclude it — that file is the only evidence the event exists, and`,
+    `   excluding it will send the event to not_found on rescan. Skip that exclude and`,
+    `   note the concern for the user. Only exclude such a file if you have explicit`,
+    `   evidence the event is dead/legacy.`,
+    `2. One change per turn by default. You may bundle multiple changes in one turn`,
+    `   ONLY when BOTH of these hold:`,
+    `   a. The changes share a clear common root cause (e.g., all flagged events have`,
+    `      the same wrapper pattern, or all noise comes from one excluded directory).`,
+    `   b. You're confident a single rescan can validate all of them together — i.e.,`,
+    `      you can name what "fixed" looks like for each one before touching the config.`,
+    `   If either condition is uncertain, do ONE change, let the user rescan, then`,
+    `   address the next in the following round. When in doubt, split.`,
+  ].join("\n");
+}
+
 export function registerFix(program: Command): void {
   program
     .command("fix")
@@ -76,47 +158,17 @@ async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
   }
 
   // 5. Run Claude Code (interactive by default, headless with --yes)
+  const rescanCmd = buildRescanCommand(lastFix);
   if (opts.yes) {
     logger.line(chalk.gray("  Running Claude Code headlessly (--yes)..."));
   } else {
-    logger.line(chalk.gray("  Claude Code will open to apply the fix. Approve the edit, then type") + chalk.cyan(" /exit") + chalk.gray(" to continue."));
+    logger.line(chalk.gray("  Claude Code is opening with the diagnosis. Try the fix, then verify"));
+    logger.line(chalk.gray("  just the affected events with: ") + chalk.cyan(rescanCmd));
+    logger.line(chalk.gray("  Iterate as needed. When you're satisfied, type") + chalk.cyan(" /exit") + chalk.gray(" — emit will run"));
+    logger.line(chalk.gray("  the same scoped rescan and confirm."));
   }
   logger.blank();
-  // Build richer prompt with full diagnosis context and call site locations
-  const callSiteLines = (lastFix.flaggedEvents ?? []).map((ev) => {
-    const sites = ev.all_call_sites.map((s) => `${s.file}:${s.line}`).join(", ");
-    return `  - ${ev.name}: primary file ${ev.source_file}, all call sites: ${sites}`;
-  }).join("\n");
-
-  const findingsText = (lastFix.findings ?? []).join("\n\n");
-
-  const prompt = [
-    `Fix emit.config.yml to resolve scanner noise detected by emit scan.`,
-    ``,
-    `Config fix needed: ${lastFix.fixInstruction}`,
-    ``,
-    `Full diagnosis:`,
-    findingsText,
-    ``,
-    `Flagged events and their source locations:`,
-    callSiteLines || "  (none recorded)",
-    ``,
-    `Add the right exclude_paths to emit.config.yml to exclude the files causing noise.`,
-    `Make only this config change — do not run any other commands.`,
-    ``,
-    `SAFETY RULES:`,
-    `1. Preserve discovery. For each file you're considering excluding, cross-reference`,
-    `   every flagged event's all_call_sites above. If the file appears in an event's`,
-    `   all_call_sites AND excluding it would leave that event with ZERO remaining call`,
-    `   sites, DO NOT exclude it — that file is the only evidence the event exists, and`,
-    `   excluding it will send the event to not_found on rescan. Skip that exclude and`,
-    `   note the concern for the user. Only exclude such a file if you have explicit`,
-    `   evidence the event is dead/legacy.`,
-    `2. Small scope. Prefer ONE file or ONE directory per fix round. If you've identified`,
-    `   multiple noise sources, pick the most impactful one; the user will re-run emit fix`,
-    `   after rescanning to address the next. Bulk multi-file excludes in a single edit`,
-    `   compound risk and make it harder to attribute regressions.`,
-  ].join("\n");
+  const prompt = buildFixPrompt(lastFix);
 
   let claudeRan = false;
   try {
@@ -152,7 +204,14 @@ async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
     }
   }
 
-  // 6. Prompt to re-scan (auto-run with --yes)
+  // 6. Prompt to re-scan (auto-run with --yes). Default is the SCOPED rescan
+  //    against just the flagged events — much cheaper than a full repo scan
+  //    and the only feedback signal the user actually needs to verify the fix.
+  //    Falls back to full scan when no events are flagged (cross-cutting noise).
+  const flaggedArg = buildFlaggedEventsArg(lastFix);
+  const rescanCmdForPrompt = flaggedArg
+    ? `emit scan --event ${flaggedArg} --fresh`
+    : `emit scan --fresh`;
   logger.blank();
   let runRescan: boolean;
   if (opts.yes) {
@@ -160,7 +219,7 @@ async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
   } else {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise<string>((resolve) => {
-      rl.question("  Run emit scan --fresh to verify? [Y/n]: ", (ans) => {
+      rl.question(`  Run ${rescanCmdForPrompt} to verify? [Y/n]: `, (ans) => {
         rl.close();
         resolve(ans.trim());
       });
@@ -169,8 +228,8 @@ async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
   }
 
   if (runRescan) {
-    // 7. Run scan --fresh inline (with --yes when non-interactive)
-    const scanArgs = ["scan", "--fresh"];
+    // 7. Run scoped rescan inline (with --yes when non-interactive)
+    const scanArgs = buildRescanArgs(lastFix);
     if (opts.yes) scanArgs.push("--yes");
     try {
       await execa("node", [process.argv[1], ...scanArgs], { stdio: "inherit" });
@@ -179,10 +238,19 @@ async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
       // That's not a failure of emit fix — the scan output is what the user wanted.
       if (err.exitCode === undefined) throw err;
     }
+
+    // 8. Hint at the full regression check. Only meaningful when the rescan
+    //    above was scoped — for full-scan rescans the regression check IS the
+    //    rescan, so nothing more to suggest.
+    if (flaggedArg) {
+      logger.blank();
+      logger.line(chalk.gray("  Scoped rescan done. Run ") + chalk.cyan("emit scan --fresh") + chalk.gray(" for a full regression check"));
+      logger.line(chalk.gray("  across the rest of the catalog."));
+      logger.blank();
+    }
   } else {
-    // 8. Show message
     logger.blank();
-    logger.line(chalk.gray("  Run ") + chalk.cyan("emit scan --fresh") + chalk.gray(" when ready."));
+    logger.line(chalk.gray("  Run ") + chalk.cyan(rescanCmdForPrompt) + chalk.gray(" when ready."));
     logger.blank();
   }
 

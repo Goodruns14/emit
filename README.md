@@ -68,6 +68,20 @@ emit status
 
 Shows a catalog health report with confidence breakdown, stale events, and flagged items.
 
+## Confidence levels
+
+Every event and every property in the catalog is scored on the same three-level scale. The two scores are independent — an event may be **high** while one of its properties is **medium**, or vice versa.
+
+| Level | Event | Property |
+|-------|-------|----------|
+| **high** | Track/fire call is visible AND its trigger context is clear | Property appears in the call site with a clear value, type, or literal |
+| **medium** | Only a type/interface declaration is visible (fire site inferred), or the trigger context is ambiguous | Name is visible but value, type, or origin isn't — passed as a typed parameter, set in a wrapper not shown, or assembled dynamically |
+| **low** | Can't confirm the event fires from the code shown | Can't tell whether this is an event property or an unrelated local variable |
+
+**Medium is acceptable**, not a failure to chase. It's the LLM saying "I have a justified read but couldn't fully verify." Focus iteration effort on **low** and **not-found** events. Today only the event-level score gates `review_required` and the high/medium/low breakdown — per-property scores are stored and surfaced via MCP for inspection but don't roll up into aggregates.
+
+For the **medium** wrapper case ("set in a wrapper not shown"), see `backend_patterns.context_files` under [Configuration](#configuration) — pointing emit at the helper file usually moves the affected events from low/medium to high.
+
 ## Commands
 
 | Command | Purpose |

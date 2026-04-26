@@ -34,19 +34,44 @@ export function buildFlaggedEventsArg(lastFix: LastFix): string {
  * Build the human-readable rescan command suggested in user-facing messages
  * and the Claude prompt. Scoped to flagged events when present, full repo
  * otherwise.
+ *
+ * Picks the right CLI flag based on count:
+ *   0 events → `emit scan --fresh`
+ *   1 event  → `emit scan --event <name> --fresh`     (singular flag, literal name)
+ *   2+ events → `emit scan --events <a,b,c> --fresh`  (plural flag, comma-split)
+ *
+ * The CLI's --event treats its argument as a single literal name (no comma
+ * splitting), so a multi-event list passed to --event finds zero matches.
+ * --events is the correct flag for comma-separated lists. Surfaced via a
+ * real run against test-repos/papermark which has 2 flagged events; the
+ * --event form silently failed to locate either one.
+ *
+ * Also wraps the value in double quotes when any name contains a space
+ * (e.g. "Document Added") so a user copy-pasting the command — or Claude
+ * running it inline — gets a single argv token instead of word-split
+ * fragments.
  */
 export function buildRescanCommand(lastFix: LastFix): string {
-  const arg = buildFlaggedEventsArg(lastFix);
-  return arg ? `emit scan --event ${arg} --fresh` : `emit scan --fresh`;
+  const names = (lastFix.flaggedEvents ?? []).map((e) => e.name);
+  if (names.length === 0) return `emit scan --fresh`;
+  const arg = names.join(",");
+  const needsQuoting = /[\s"]/.test(arg);
+  const quoted = needsQuoting ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+  const flag = names.length === 1 ? "--event" : "--events";
+  return `emit scan ${flag} ${quoted} --fresh`;
 }
 
 /**
  * Build the auto-rescan execa argv. Mirrors buildRescanCommand but as
- * tokenized args. Caller appends --yes when running headless.
+ * tokenized args (no shell quoting needed). Caller appends --yes when
+ * running headless. Same singular/plural-flag selection rule as
+ * buildRescanCommand.
  */
 export function buildRescanArgs(lastFix: LastFix): string[] {
-  const arg = buildFlaggedEventsArg(lastFix);
-  return arg ? ["scan", "--event", arg, "--fresh"] : ["scan", "--fresh"];
+  const names = (lastFix.flaggedEvents ?? []).map((e) => e.name);
+  if (names.length === 0) return ["scan", "--fresh"];
+  const flag = names.length === 1 ? "--event" : "--events";
+  return ["scan", flag, names.join(","), "--fresh"];
 }
 
 /**
@@ -210,9 +235,9 @@ async function runFix(opts: { yes?: boolean } = {}): Promise<number> {
   //    and the only feedback signal the user actually needs to verify the fix.
   //    Falls back to full scan when no events are flagged (cross-cutting noise).
   const flaggedArg = buildFlaggedEventsArg(lastFix);
-  const rescanCmdForPrompt = flaggedArg
-    ? `emit scan --event ${flaggedArg} --fresh`
-    : `emit scan --fresh`;
+  // Reuse buildRescanCommand so the Y/n prompt and the post-rescan hint
+  // display the same correctly-quoted command the Claude prompt embeds.
+  const rescanCmdForPrompt = buildRescanCommand(lastFix);
   logger.blank();
   let runRescan: boolean;
   if (opts.yes) {

@@ -53,24 +53,76 @@ describe("buildFlaggedEventsArg", () => {
   });
 });
 
+// Single-event variant lets us exercise the --event (singular) flag path
+// alongside the multi-event --events (plural) path.
+const singleFlaggedEvent: LastFix = {
+  ...baseLastFix,
+  flaggedEvents: [
+    {
+      name: "capture_entity_crud",
+      source_file: "src/audit/Audit.java",
+      all_call_sites: [{ file: "src/audit/Audit.java", line: 42 }],
+    },
+  ],
+};
+
 describe("buildRescanCommand", () => {
-  it("produces scoped command when events are flagged", () => {
+  it("uses --events (plural) for two or more flagged events — comma-split", () => {
+    // Regression test for the bug a real papermark run surfaced. The CLI's
+    // --event flag treats its argument as a single literal name (no comma
+    // splitting), so passing a multi-event list to --event finds zero
+    // matches. --events is the correct flag for comma-separated lists.
     expect(buildRescanCommand(baseLastFix)).toBe(
-      "emit scan --event capture_entity_crud,delete_entity --fresh"
+      "emit scan --events capture_entity_crud,delete_entity --fresh"
+    );
+  });
+
+  it("uses --event (singular) for exactly one flagged event — literal name", () => {
+    expect(buildRescanCommand(singleFlaggedEvent)).toBe(
+      "emit scan --event capture_entity_crud --fresh"
     );
   });
 
   it("falls back to full scan when no events are flagged", () => {
     expect(buildRescanCommand(noFlaggedEvents)).toBe("emit scan --fresh");
   });
+
+  it("quotes the value when any event name contains a space", () => {
+    // Real shape from test-repos/papermark: 'Document Added' has a space.
+    // Two events → uses --events (plural). Without quoting, copy-pasting
+    // the command would word-split.
+    const lastFix: LastFix = {
+      ...baseLastFix,
+      flaggedEvents: [
+        { name: "YIR: Share Platform Clicked.twitter", source_file: "x.ts", all_call_sites: [] },
+        { name: "Document Added", source_file: "y.ts", all_call_sites: [] },
+      ],
+    };
+    expect(buildRescanCommand(lastFix)).toBe(
+      `emit scan --events "YIR: Share Platform Clicked.twitter,Document Added" --fresh`
+    );
+  });
+
+  it("does not quote when all event names are space-free", () => {
+    expect(buildRescanCommand(baseLastFix)).not.toContain('"');
+  });
 });
 
 describe("buildRescanArgs", () => {
-  it("produces tokenized scoped argv when events are flagged", () => {
+  it("uses --events (plural) for two or more flagged events", () => {
     expect(buildRescanArgs(baseLastFix)).toEqual([
       "scan",
-      "--event",
+      "--events",
       "capture_entity_crud,delete_entity",
+      "--fresh",
+    ]);
+  });
+
+  it("uses --event (singular) for exactly one flagged event", () => {
+    expect(buildRescanArgs(singleFlaggedEvent)).toEqual([
+      "scan",
+      "--event",
+      "capture_entity_crud",
       "--fresh",
     ]);
   });
@@ -85,15 +137,21 @@ describe("buildRescanArgs", () => {
 // ─────────────────────────────────────────────
 
 describe("buildFixPrompt", () => {
-  it("embeds the scoped rescan command when events are flagged", () => {
+  it("embeds the scoped rescan command (--events plural) when 2+ events flagged", () => {
     const prompt = buildFixPrompt(baseLastFix);
-    expect(prompt).toContain("emit scan --event capture_entity_crud,delete_entity --fresh");
+    expect(prompt).toContain("emit scan --events capture_entity_crud,delete_entity --fresh");
+  });
+
+  it("embeds the scoped rescan command (--event singular) when exactly 1 event flagged", () => {
+    const prompt = buildFixPrompt(singleFlaggedEvent);
+    expect(prompt).toContain("emit scan --event capture_entity_crud --fresh");
   });
 
   it("falls back to full-scan command when no events are flagged", () => {
     const prompt = buildFixPrompt(noFlaggedEvents);
     expect(prompt).toContain("emit scan --fresh");
     expect(prompt).not.toContain("--event ");
+    expect(prompt).not.toContain("--events ");
   });
 
   it("frames Medium as acceptable but improvable, with the user driving", () => {

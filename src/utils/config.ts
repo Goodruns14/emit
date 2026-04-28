@@ -69,6 +69,9 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
   );
   return {
     ...raw,
+    // Default mode is `analytics` so existing analytics-only configs keep
+    // working byte-identically without specifying `mode`.
+    mode: raw.mode ?? "analytics",
     ...(discriminator ? { discriminator_properties: discriminator } : {}),
     repo: {
       paths: ["./"],
@@ -89,6 +92,8 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
   };
 }
 
+const VALID_MODES = new Set<string>(["analytics", "producer", "both"]);
+
 const VALID_PROVIDERS = new Set<string>([
   "claude-code",
   "anthropic",
@@ -98,11 +103,50 @@ const VALID_PROVIDERS = new Set<string>([
 ]);
 
 function validate(config: EmitConfig): void {
-  if (!config.manual_events?.length) {
+  // Mode validation — fail fast on typos so producer-mode users get a clean error.
+  if (config.mode !== undefined && !VALID_MODES.has(config.mode)) {
+    throw new Error(
+      `Unknown mode: "${config.mode}"\n` +
+        `  Valid options: analytics, producer, both`
+    );
+  }
+
+  // Producer-mode services validation
+  if (config.services !== undefined) {
+    if (!Array.isArray(config.services)) {
+      throw new Error("services: must be an array of { name, path } objects");
+    }
+    config.services.forEach((svc, i) => {
+      if (!svc || typeof svc !== "object") {
+        throw new Error(`services[${i}]: must be an object`);
+      }
+      if (typeof svc.name !== "string" || !svc.name) {
+        throw new Error(`services[${i}].name: required non-empty string`);
+      }
+      if (typeof svc.path !== "string" || !svc.path) {
+        throw new Error(`services[${i}].path: required non-empty string`);
+      }
+    });
+  }
+
+  // manual_events is required for analytics mode (existing behavior). Producer
+  // mode discovers events from code via patterns + paths/services — manual_events
+  // becomes optional.
+  const mode = config.mode ?? "analytics";
+  const hasDiscoverableSource =
+    (config.services?.length ?? 0) > 0 ||
+    (config.repo?.paths?.length ?? 0) > 0;
+  const requiresManualEvents = mode === "analytics" && !hasDiscoverableSource;
+  if (requiresManualEvents && !config.manual_events?.length) {
     throw new Error(
       "Config must include manual_events\n" +
         "  Run `emit init` or add manual_events to your config."
     );
+  }
+  // Even when manual_events is optional, analytics mode without one is unusual
+  // — surface a hint but don't fail.
+  if (mode === "analytics" && !config.manual_events?.length) {
+    // Permissive — scanner will use broad search. No-op.
   }
 
   const provider = config.llm?.provider ?? "anthropic";

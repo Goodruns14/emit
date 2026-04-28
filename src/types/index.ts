@@ -100,6 +100,29 @@ export interface CatalogEvent {
   flags: string[];
   context_hash?: string;
   last_modified_by?: string;
+
+  // ─────────────────────────────────────────────
+  // Producer-mode fields (Phase 1)
+  // All optional and only populated when scan runs with mode: 'producer' or 'both'.
+  // For analytics-mode scans, these remain undefined (backwards compatible).
+  // ─────────────────────────────────────────────
+
+  /** Topic / channel / queue name the event is published to. May be `<unresolved>` when computed at runtime. */
+  topic?: string;
+  /** Explicit event version (e.g. 1, 2). Surfaced when event name carries `_V1`/`_V2` suffix or payload includes a version field. */
+  event_version?: number | string;
+  /** Delivery semantics declared or inferred from code. */
+  delivery?: "at-most-once" | "at-least-once" | "exactly-once" | "fire-and-forget";
+  /** Same-repo consumer locations discovered by scanner (Phase 1: scan-only, no extraction). Phase 2 adds expects/drift. */
+  consumers?: { service: string; file: string; line: number }[];
+  /** Envelope spec wrapping the event, e.g. "cloudevents/1.0", "asyncapi/3.0". */
+  envelope_spec?: string;
+  /** Path to schema file (`.avsc`, `.proto`, `.json`) that defines this event's payload, if found near the publish call site. */
+  schema_file_path?: string;
+  /** Property name used as the partition / routing key when publishing. */
+  partition_key_field?: string;
+  /** Service that publishes this event. Sourced from the `services` config block at init time, falling back to the repo name. */
+  producer_service?: string;
 }
 
 export interface CatalogStats {
@@ -230,7 +253,32 @@ export interface DestinationAdapter {
 // CONFIG TYPES
 // ─────────────────────────────────────────────
 
-export type SdkType = "segment" | "rudderstack" | "snowplow" | "custom";
+export type SdkType =
+  // Analytics SDKs
+  | "segment"
+  | "rudderstack"
+  | "snowplow"
+  // Pub/sub SDKs (Phase 1 producer-mode)
+  | "kafka"
+  | "sns"
+  | "sqs"
+  | "rabbitmq"
+  | "dapr"
+  | "google-pubsub"
+  | "redis-streams"
+  | "nats"
+  // Catch-all
+  | "custom";
+
+/**
+ * Operating mode for emit. Controls which patterns are detected and which
+ * extraction prompt is used.
+ *
+ * - `analytics` (default): tracks analytics events (Segment, PostHog, etc.)
+ * - `producer`: catalogs events published to message brokers (Kafka, SNS, RabbitMQ, etc.)
+ * - `both`: scan for both analytics and pub/sub patterns
+ */
+export type EmitMode = "analytics" | "producer" | "both";
 
 // ─────────────────────────────────────────────
 // LLM PROVIDER TYPES
@@ -549,9 +597,33 @@ export type DiscriminatorPropertyConfig = string | {
   values?: string[];
 };
 
+/**
+ * One service the user owns. In producer mode, scan paths derive from the
+ * services list and every event found under a service's path is tagged
+ * with `producer_service: <name>`.
+ */
+export interface ServiceConfig {
+  name: string;
+  path: string;
+}
+
 export interface EmitConfig {
+  /**
+   * Operating mode. Defaults to `analytics` for backwards compatibility.
+   * `producer` enables pub/sub patterns and the producer-mode extraction prompt.
+   * `both` runs both pattern sets in one scan.
+   */
+  mode?: EmitMode;
   manual_events?: string[];
   discriminator_properties?: Record<string, DiscriminatorPropertyConfig>;
+  /**
+   * Producer-mode services config. Each entry maps a service name to a path
+   * (relative to the repo root or absolute). Events found under a service's
+   * path get `producer_service: <name>` automatically. Optional — if not set,
+   * `repo.paths` is used directly and `producer_service` falls back to the
+   * directory name.
+   */
+  services?: ServiceConfig[];
   repo: {
     paths: string[];
     sdk: SdkType;

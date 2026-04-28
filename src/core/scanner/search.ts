@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { execa } from "execa";
 import type { SdkType } from "../../types/index.js";
+import { allPatterns as backendPatternsForSdk } from "./backend-patterns.js";
 
 export interface SearchMatch {
   file: string;
@@ -10,6 +11,7 @@ export interface SearchMatch {
 }
 
 export const SDK_PATTERNS: Record<SdkType, string[]> = {
+  // Analytics SDKs
   segment: [
     "analytics.track(",
     "analytics.identify(",
@@ -27,6 +29,17 @@ export const SDK_PATTERNS: Record<SdkType, string[]> = {
     "tracker.trackSelfDescribingEvent(",
     "snowplow('trackStructEvent'",
   ],
+  // Pub/sub SDKs (Phase 1 producer-mode). Patterns sourced from
+  // src/core/scanner/backend-patterns.ts which is the single source of truth.
+  kafka: backendPatternsForSdk("kafka"),
+  sns: backendPatternsForSdk("sns"),
+  sqs: backendPatternsForSdk("sqs"),
+  rabbitmq: backendPatternsForSdk("rabbitmq"),
+  dapr: backendPatternsForSdk("dapr"),
+  "google-pubsub": backendPatternsForSdk("google-pubsub"),
+  "redis-streams": backendPatternsForSdk("redis-streams"),
+  nats: backendPatternsForSdk("nats"),
+  // Catch-all
   custom: [],
 };
 

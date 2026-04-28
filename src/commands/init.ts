@@ -58,15 +58,56 @@ const PACKAGE_TO_PATTERN: Record<string, string> = {
   "@sentry/browser": "trackAnalytics(",
   "@sentry/react": "trackAnalytics(",
   "@snowplow/browser-tracker": "trackSelfDescribingEvent(",
+  // Pub/sub SDKs (Phase 1 producer-mode)
+  // The pattern below is the most common publish call site for each SDK;
+  // the full pattern set lives in src/core/scanner/backend-patterns.ts.
+  "kafkajs": "producer.send(",
+  "@confluentinc/kafka-javascript": "producer.send(",
+  "confluent-kafka": "producer.produce(",
+  "@aws-sdk/client-sns": "snsClient.send(new PublishCommand",
+  "@aws-sdk/client-sqs": "sqsClient.send(new SendMessageCommand",
+  "aws-sdk": "sns.publish(",
+  "@golevelup/nestjs-rabbitmq": "amqpConnection.publish(",
+  "amqplib": "channel.publish(",
+  "@dapr/dapr": "daprClient.pubsub.publish(",
+  "@google-cloud/pubsub": ".publishMessage({",
+  "ioredis": "redis.xadd(",
+  "nats": "nc.publish(",
 };
 
 // Maps npm package names to SDK types for config generation
 const PACKAGE_TO_SDK: Record<string, string> = {
+  // Analytics
   "@segment/analytics-next": "segment",
   "analytics-node": "segment",
   "@rudderstack/analytics-js": "rudderstack",
   "@snowplow/browser-tracker": "snowplow",
+  // Pub/sub (Phase 1)
+  "kafkajs": "kafka",
+  "@confluentinc/kafka-javascript": "kafka",
+  "confluent-kafka": "kafka",
+  "@aws-sdk/client-sns": "sns",
+  "@aws-sdk/client-sqs": "sqs",
+  "@golevelup/nestjs-rabbitmq": "rabbitmq",
+  "amqplib": "rabbitmq",
+  "@dapr/dapr": "dapr",
+  "@google-cloud/pubsub": "google-pubsub",
+  "ioredis": "redis-streams",
+  "nats": "nats",
 };
+
+// Set of SDK types that should trigger producer mode when detected.
+// Used by init to choose `mode: 'producer'` (or 'both' if analytics SDKs are also present).
+const PUBSUB_SDK_TYPES = new Set([
+  "kafka",
+  "sns",
+  "sqs",
+  "rabbitmq",
+  "dapr",
+  "google-pubsub",
+  "redis-streams",
+  "nats",
+]);
 
 const LLM_DISPLAY_LABELS: Record<string, string> = {
   "claude-code": "Claude Code (local CLI)",

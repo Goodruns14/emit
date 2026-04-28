@@ -95,6 +95,41 @@ export function isPathExcluded(filePath: string): boolean {
   );
 }
 
+/**
+ * Pure version of the exclude-path matcher. Used by `emit fix` for
+ * pre-flight safety checks: given a file path and a list of proposed
+ * exclude_paths entries, would the scanner skip this file?
+ *
+ * Mirrors the three-way classification in setExcludePaths + the
+ * downstream grep/post-filter semantics, without mutating module state.
+ */
+export function wouldExclude(filePath: string, paths: string[]): boolean {
+  if (paths.length === 0) return false;
+  const normalized = filePath.replace(/^\.\//, "");
+  const segments = normalized.split("/");
+  const basename = segments[segments.length - 1];
+
+  for (const entry of paths) {
+    if (entry.includes("/")) {
+      // Path prefix
+      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
+      if (!prefix) continue;
+      if (normalized === prefix || normalized.startsWith(prefix + "/")) return true;
+    } else if (entry.includes("*")) {
+      // Basename glob — strip leading **/ then convert to regex
+      const glob = entry.replace(/^\*\*\//, "");
+      const regex = new RegExp(
+        "^" + glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
+      );
+      if (regex.test(basename)) return true;
+    } else {
+      // Plain directory name anywhere in path
+      if (segments.slice(0, -1).includes(entry)) return true;
+    }
+  }
+  return false;
+}
+
 export function buildExcludeArgs(): string[] {
   return [
     ...[...EXCLUDE_DIRS, ...extraExcludeDirs].flatMap((d) => ["--exclude-dir", d]),
@@ -172,7 +207,6 @@ export function parseCallSites(output: string): SearchMatch[] {
   return output
     .split("\n")
     .filter(Boolean)
-    .slice(0, 10)
     .map((line) => {
       const colonIdx = line.indexOf(":");
       const colonIdx2 = line.indexOf(":", colonIdx + 1);
@@ -183,7 +217,8 @@ export function parseCallSites(output: string): SearchMatch[] {
       if (isNaN(lineNum)) return null;
       return { file, line: lineNum, rawLine };
     })
-    .filter((m): m is SearchMatch => m !== null && !isPathExcluded(m.file));
+    .filter((m): m is SearchMatch => m !== null && !isPathExcluded(m.file))
+    .slice(0, 10);
 }
 
 /**

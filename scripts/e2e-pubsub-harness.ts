@@ -163,8 +163,8 @@ const MANIFEST: FixtureManifestEntry[] = [
     sdk: "sqs",
     scan_subpath: "packages/fxa-event-broker",
     expected_events: [
-      // Real production: sqs-consumer + Google Pub/Sub + dynamic topics. Just need to find the queueworker.
-      { name: "queueworker", min_confidence: "medium" },
+      // QueueworkerService is the SQS consumer + Google PubSub fan-out class.
+      { name: "QueueworkerService", min_confidence: "medium" },
     ],
     notes: "Real production scale: sqs-consumer + Google Pub/Sub + dynamic topics + cross-platform fan-out.",
   },
@@ -174,7 +174,8 @@ const MANIFEST: FixtureManifestEntry[] = [
     sdk: "redis-streams",
     scan_subpath: "backend/nodejs/apps/src/libs/services",
     expected_events: [
-      { name: "redis-streams", min_confidence: "medium" },
+      // BaseRedisStreamsProducerConnection is the wrapper class around xadd/xreadgroup.
+      { name: "BaseRedisStreamsProducerConnection", min_confidence: "medium" },
     ],
     notes: "Redis Streams with custom BaseRedisStreamsProducerConnection wrapper class.",
   },

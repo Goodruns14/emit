@@ -81,20 +81,24 @@ export function setExcludePaths(paths: string[]): void {
   extraExcludeFiles = [];
   extraExcludePathPrefixes = [];
   for (const entry of paths) {
-    if (entry.includes("/")) {
+    // Strip leading `**/` first — it's a "match in any directory" marker, not
+    // a path component. e.g. `**/*.test.ts` is conceptually a basename glob,
+    // not a path-based pattern.
+    const cleaned = entry.replace(/^\*\*\//, "");
+    if (cleaned.includes("/")) {
       // Path-based pattern — grep --exclude/--exclude-dir can't handle paths,
       // so store as a prefix for post-filtering of grep results.
       // Strip trailing wildcards and slashes: "backend/foo/**" → "backend/foo"
       // Also strip leading "./" so it matches normalized file paths from grep output.
-      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
+      const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
       if (prefix) extraExcludePathPrefixes.push(prefix);
-    } else if (entry.includes("*")) {
-      // Pure filename glob (no path separator) — strip leading **/ since
-      // grep --exclude matches basename only. e.g. "**/*.module.css" → "*.module.css"
-      extraExcludeFiles.push(entry.replace(/^\*\*\//, ""));
+    } else if (cleaned.includes("*")) {
+      // Pure filename glob (no path separator) — passed as --exclude.
+      // Already had the leading **/ stripped above.
+      extraExcludeFiles.push(cleaned);
     } else {
       // Plain directory name — pass as --exclude-dir
-      extraExcludeDirs.push(entry);
+      extraExcludeDirs.push(cleaned);
     }
   }
 }
@@ -123,21 +127,23 @@ export function wouldExclude(filePath: string, paths: string[]): boolean {
   const basename = segments[segments.length - 1];
 
   for (const entry of paths) {
-    if (entry.includes("/")) {
+    // Mirror the same `**/` strip used by setExcludePaths so wouldExclude and
+    // setExcludePaths agree on classification.
+    const cleaned = entry.replace(/^\*\*\//, "");
+    if (cleaned.includes("/")) {
       // Path prefix
-      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
+      const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
       if (!prefix) continue;
       if (normalized === prefix || normalized.startsWith(prefix + "/")) return true;
-    } else if (entry.includes("*")) {
-      // Basename glob — strip leading **/ then convert to regex
-      const glob = entry.replace(/^\*\*\//, "");
+    } else if (cleaned.includes("*")) {
+      // Basename glob
       const regex = new RegExp(
-        "^" + glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
+        "^" + cleaned.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
       );
       if (regex.test(basename)) return true;
     } else {
       // Plain directory name anywhere in path
-      if (segments.slice(0, -1).includes(entry)) return true;
+      if (segments.slice(0, -1).includes(cleaned)) return true;
     }
   }
   return false;

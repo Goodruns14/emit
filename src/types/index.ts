@@ -59,6 +59,16 @@ export interface ExtractedMetadata {
     }
   >;
   flags: string[];
+
+  // ─────────────────────────────────────────────
+  // Producer-mode fields (Phase 1)
+  // Populated by buildProducerExtractionPrompt; absent for analytics scans.
+  // ─────────────────────────────────────────────
+  topic?: string;
+  event_version?: number | string | null;
+  envelope_spec?: string | null;
+  partition_key_field?: string | null;
+  delivery?: "at-most-once" | "at-least-once" | "exactly-once" | "fire-and-forget" | null;
 }
 
 // ─────────────────────────────────────────────

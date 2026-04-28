@@ -294,7 +294,10 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     ...(opts.provider ? { provider: opts.provider } : {}),
     ...(opts.model ? { model: opts.model } : {}),
   };
-  const extractor = new MetadataExtractor(llmCfg);
+  // Mode dispatch — config.mode (default "analytics") drives which extraction
+  // prompt the LLM sees. Producer mode triggers buildProducerExtractionPrompt
+  // and the dynamic-topic fallback in extractor/index.ts.
+  const extractor = new MetadataExtractor(llmCfg, config.mode ?? "analytics");
 
   if (!json) {
     const providerLabel = llmCfg.provider === "claude-code"
@@ -394,6 +397,14 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       all_call_sites: ctx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
       properties: mergedProperties,
       flags: eventFlags,
+      // Producer-mode fields — only populated when extractor returns them,
+      // i.e. when scan ran in producer (or both) mode. Analytics scans leave
+      // these undefined so the YAML output stays byte-identical.
+      ...(meta.topic !== undefined && { topic: meta.topic }),
+      ...(meta.event_version !== undefined && meta.event_version !== null && { event_version: meta.event_version }),
+      ...(meta.envelope_spec !== undefined && meta.envelope_spec !== null && { envelope_spec: meta.envelope_spec }),
+      ...(meta.partition_key_field !== undefined && meta.partition_key_field !== null && { partition_key_field: meta.partition_key_field }),
+      ...(meta.delivery !== undefined && meta.delivery !== null && { delivery: meta.delivery }),
     };
     reconciled.context_hash = contextHash;
     const modifier = getLastModifier(ctx.file_path, ctx.line_number);

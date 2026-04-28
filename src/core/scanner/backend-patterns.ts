@@ -30,22 +30,27 @@ export interface BackendPatternDef {
 
 export const DEFAULT_BACKEND_PATTERNS: BackendPatternDef[] = [
   // ─── Kafka ────────────────────────────────────────
+  // Patterns are intentionally broad enough to catch real-world variations
+  // (e.g. `producer.send(record)` where record is a variable, not an inline
+  // `new ProducerRecord(...)`). Disambiguation from noise happens in extraction.
   { pattern: "kafkaTemplate.send(",            kind: "producer", sdk: "kafka",          description: "Spring KafkaTemplate publisher" },
-  { pattern: "producer.send(new ProducerRecord", kind: "producer", sdk: "kafka",        description: "Raw Java Kafka producer" },
-  { pattern: "producer.send({",                kind: "producer", sdk: "kafka",          description: "kafkajs producer (object form)" },
-  { pattern: "producer.send([",                kind: "producer", sdk: "kafka",          description: "kafkajs producer (array form)" },
+  { pattern: "producer.send(",                 kind: "producer", sdk: "kafka",          description: "Kafka producer publish (Java SDK + kafkajs)" },
   { pattern: "producer.produce(",              kind: "producer", sdk: "kafka",          description: "confluent-kafka-python / node producer" },
+  { pattern: "new ProducerRecord",             kind: "producer", sdk: "kafka",          description: "Java Kafka ProducerRecord construction (often near producer.send)" },
   { pattern: "@KafkaListener",                 kind: "consumer", sdk: "kafka",          description: "Spring Kafka consumer annotation" },
+  { pattern: "consumer.subscribe(",            kind: "consumer", sdk: "kafka",          description: "Kafka consumer subscribe (Java SDK + kafkajs)" },
   { pattern: "consumer.run({",                 kind: "consumer", sdk: "kafka",          description: "kafkajs consumer.run handler" },
+  { pattern: "consumer.poll(",                 kind: "consumer", sdk: "kafka",          description: "Raw Java Kafka consumer poll" },
 
   // ─── AWS SNS / SQS ────────────────────────────────
   { pattern: "sns.publish(",                   kind: "producer", sdk: "sns",            description: "AWS SDK v2 SNS publish" },
-  { pattern: "snsClient.send(new PublishCommand", kind: "producer", sdk: "sns",         description: "AWS SDK v3 SNS publish" },
+  { pattern: "snsClient.send(",                kind: "producer", sdk: "sns",            description: "AWS SDK v3 SNS send (used with PublishCommand)" },
   { pattern: "new PublishCommand(",            kind: "producer", sdk: "sns",            description: "AWS SDK v3 SNS PublishCommand construction" },
   { pattern: "sqs.sendMessage(",               kind: "producer", sdk: "sqs",            description: "AWS SDK v2 SQS send" },
-  { pattern: "sqsClient.send(new SendMessageCommand", kind: "producer", sdk: "sqs",     description: "AWS SDK v3 SQS send" },
+  { pattern: "sqsClient.send(",                kind: "producer", sdk: "sqs",            description: "AWS SDK v3 SQS send (used with SendMessageCommand)" },
   { pattern: "new SendMessageCommand(",        kind: "producer", sdk: "sqs",            description: "AWS SDK v3 SQS SendMessageCommand construction" },
   { pattern: "sqs.receiveMessage(",            kind: "consumer", sdk: "sqs",            description: "AWS SDK v2 SQS receive" },
+  { pattern: "new ReceiveMessageCommand(",     kind: "consumer", sdk: "sqs",            description: "AWS SDK v3 SQS ReceiveMessageCommand" },
   { pattern: "@SqsMessageHandler",             kind: "consumer", sdk: "sqs",            description: "NestJS SQS handler decorator" },
   { pattern: "Consumer.create({",              kind: "consumer", sdk: "sqs",            description: "sqs-consumer library" },
 
@@ -60,7 +65,7 @@ export const DEFAULT_BACKEND_PATTERNS: BackendPatternDef[] = [
 
   // ─── Dapr ─────────────────────────────────────────
   { pattern: "daprClient.pubsub.publish(",     kind: "producer", sdk: "dapr",           description: "Dapr pub/sub publish (TS/JS)" },
-  { pattern: "DaprClient().publishEvent(",     kind: "producer", sdk: "dapr",           description: "Dapr Java/Python publishEvent" },
+  { pattern: ".publishEvent(",                 kind: "producer", sdk: "dapr",           description: "Dapr Java/Python publishEvent" },
   { pattern: "@Topic(",                        kind: "consumer", sdk: "dapr",           description: "Dapr subscribe annotation" },
 
   // ─── Google Pub/Sub ───────────────────────────────

@@ -6,9 +6,10 @@ import type {
   CatalogEvent,
   LlmCallConfig,
   ResolvedEvent,
+  EmitMode,
 } from "../../types/index.js";
 import type { DiagnosticSignal } from "../catalog/diagnostic.js";
-import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt, buildDiagnosticPrompt } from "./prompts.js";
+import { buildExtractionPrompt, buildProducerExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt, buildDiagnosticPrompt } from "./prompts.js";
 import { callLLM, parseJsonResponse } from "./claude.js";
 import { getCached, setCached } from "./cache.js";
 import { searchBroad } from "../scanner/search.js";
@@ -22,6 +23,46 @@ const EXTRACTION_FALLBACK: ExtractedMetadata = {
   properties: {},
   flags: ["Extraction failed — manual review required"],
 };
+
+/**
+ * Markers that indicate a topic argument is computed at runtime and can't
+ * be statically resolved. When the LLM hands back a topic that looks like
+ * one of these, we surface it as <unresolved> with a topic_dynamic flag
+ * so the catalog is honest about the limit of static analysis.
+ */
+const DYNAMIC_TOPIC_MARKERS = [
+  "process.env.",
+  "${",
+  "config.get(",
+  "configService.get(",
+  "this.config",
+  "<unresolved>",
+];
+
+function isDynamicTopic(topic: string | undefined | null): boolean {
+  if (!topic) return false;
+  return DYNAMIC_TOPIC_MARKERS.some((marker) => topic.includes(marker));
+}
+
+/**
+ * Normalize dynamic topics post-extraction.
+ *
+ * The producer prompt instructs the LLM to set `topic: '<unresolved>'` when
+ * the topic is computed at runtime, but LLMs occasionally hand back the raw
+ * expression instead (e.g. `topic: 'process.env.snsTopicArn'`). This
+ * post-processor catches those cases and ensures the catalog reflects the
+ * limit of static analysis honestly: topic becomes `<unresolved>` and the
+ * `topic_dynamic` flag is added so users know to declare an alias in
+ * emit.config.yml.
+ *
+ * No-op for analytics-mode extractions (topic field absent).
+ */
+function applyDynamicTopicFallback(m: ExtractedMetadata): ExtractedMetadata {
+  if (!isDynamicTopic(m.topic)) return m;
+  const flags = Array.isArray(m.flags) ? [...m.flags] : [];
+  if (!flags.includes("topic_dynamic")) flags.push("topic_dynamic");
+  return { ...m, topic: "<unresolved>", flags };
+}
 
 /**
  * Strip scanner/LLM artifacts that aren't real event properties.
@@ -39,9 +80,11 @@ function sanitizeExtraction(m: ExtractedMetadata): ExtractedMetadata {
 
 export class MetadataExtractor {
   private cfg: LlmCallConfig;
+  private mode: EmitMode;
 
-  constructor(cfg: LlmCallConfig) {
+  constructor(cfg: LlmCallConfig, mode: EmitMode = "analytics") {
     this.cfg = cfg;
+    this.mode = mode;
   }
 
   async extractMetadata(
@@ -59,20 +102,28 @@ export class MetadataExtractor {
             .map((f) => `${f.path}::${f.content.length}::${f.content.slice(0, 64)}`)
             .join("|")
         : "";
-    const cacheKey = codeContext.context + (extraKey ? `||extras:${extraKey}` : "");
+    // Mode is part of the cache key so analytics and producer extractions
+    // for the same code context don't collide.
+    const cacheKey =
+      codeContext.context +
+      (this.mode === "analytics" ? "" : `||mode:${this.mode}`) +
+      (extraKey ? `||extras:${extraKey}` : "");
     const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
-    if (cached) return sanitizeExtraction(cached);
+    if (cached) return applyDynamicTopicFallback(sanitizeExtraction(cached));
 
-    const prompt = buildExtractionPrompt(
-      eventName,
-      codeContext,
-      literalValues,
-    );
+    // Mode dispatch: producer mode uses the pub/sub-aware prompt; analytics
+    // and 'both' fall through to the existing prompt for the analytics path.
+    // (For mode='both', this method is invoked twice — once per pattern set —
+    // by the scan command; the dispatch happens at the call-site level there.)
+    const prompt =
+      this.mode === "producer"
+        ? buildProducerExtractionPrompt(eventName, codeContext, literalValues)
+        : buildExtractionPrompt(eventName, codeContext, literalValues);
 
     const text = await callLLM(prompt, this.cfg);
     const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
 
-    const sanitized = sanitizeExtraction(result);
+    const sanitized = applyDynamicTopicFallback(sanitizeExtraction(result));
     setCached(eventName, cacheKey, sanitized);
     return sanitized;
   }

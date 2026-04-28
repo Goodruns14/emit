@@ -92,7 +92,7 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
   };
 }
 
-const VALID_MODES = new Set<string>(["analytics", "producer", "both"]);
+const VALID_MODES = new Set<string>(["analytics", "producer"]);
 
 const VALID_PROVIDERS = new Set<string>([
   "claude-code",
@@ -107,7 +107,7 @@ function validate(config: EmitConfig): void {
   if (config.mode !== undefined && !VALID_MODES.has(config.mode)) {
     throw new Error(
       `Unknown mode: "${config.mode}"\n` +
-        `  Valid options: analytics, producer, both`
+        `  Valid options: analytics, producer`
     );
   }
 
@@ -129,24 +129,16 @@ function validate(config: EmitConfig): void {
     });
   }
 
-  // manual_events is required for analytics mode (existing behavior). Producer
-  // mode discovers events from code via patterns + paths/services — manual_events
-  // becomes optional.
+  // manual_events is required for analytics mode (existing behavior).
+  // Producer mode discovers events from publish patterns — manual_events is
+  // optional. When provided in producer mode, it scopes the scan to those
+  // specific event names instead of running broad discovery.
   const mode = config.mode ?? "analytics";
-  const hasDiscoverableSource =
-    (config.services?.length ?? 0) > 0 ||
-    (config.repo?.paths?.length ?? 0) > 0;
-  const requiresManualEvents = mode === "analytics" && !hasDiscoverableSource;
-  if (requiresManualEvents && !config.manual_events?.length) {
+  if (mode === "analytics" && !config.manual_events?.length) {
     throw new Error(
-      "Config must include manual_events\n" +
+      "Config must include manual_events for mode: analytics\n" +
         "  Run `emit init` or add manual_events to your config."
     );
-  }
-  // Even when manual_events is optional, analytics mode without one is unusual
-  // — surface a hint but don't fail.
-  if (mode === "analytics" && !config.manual_events?.length) {
-    // Permissive — scanner will use broad search. No-op.
   }
 
   const provider = config.llm?.provider ?? "anthropic";

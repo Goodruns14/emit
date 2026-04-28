@@ -94,9 +94,23 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     return 1;
   }
 
-  // ── Build events list from manual_events ────────────────────────────
+  // ── Build events list ───────────────────────────────────────────────
+  // Three valid paths:
+  //   1. manual_events list (existing analytics + scoped producer flow)
+  //   2. producer-mode discovery (new in Day 2.5): scan publish patterns,
+  //      synthesize one placeholder event per discovered call site. The
+  //      LLM-extracted `topic` becomes the real catalog key after extraction.
+  //   3. analytics mode without manual_events (rejected above by validate)
   type EventEntry = { name: string };
   let events: EventEntry[];
+
+  // Discovery mode: producer mode + no manual_events + no --event/--events.
+  // We compute this once and use it as a fork point in a few places below.
+  const isProducerDiscovery =
+    config.mode === "producer" &&
+    (config.manual_events?.length ?? 0) === 0 &&
+    !opts.event &&
+    !opts.events;
 
   if ((config.manual_events?.length ?? 0) > 0) {
     if (!json) logger.info(`Using ${config.manual_events!.length} manually specified events`);
@@ -104,6 +118,11 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       const name = typeof nameOrObj === "string" ? nameOrObj : String(nameOrObj?.name ?? nameOrObj);
       return { name };
     });
+  } else if (isProducerDiscovery) {
+    // Defer events list construction until after the scanner exists. The
+    // discovery branch below populates `events` (and codeContextMap and
+    // located) directly from findAllProducerCallSites().
+    events = [];
   } else {
     logger.error("No events configured. Run `emit init` or add manual_events to config.");
     return 1;
@@ -225,43 +244,77 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     backendPatterns: config.repo.backend_patterns,
   });
 
-  if (!json) {
-    logger.blank();
-    logger.line(`  Searching for ${events.length} event${events.length === 1 ? "" : "s"} in your codebase...`);
-    logger.blank();
-  }
-
   const located: EventEntry[] = [];
   const notFound: string[] = [];
   const codeContextMap = new Map<string, Awaited<ReturnType<RepoScanner["findEvent"]>>>();
 
-  // Run grep searches concurrently, capped to avoid spawning too many
-  // child processes at once (each findEvent can spawn multiple greps).
-  const SCAN_CONCURRENCY = 20;
-  const scanResults: { event: EventEntry; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
-  let scanIdx = 0;
-  let scanCompleted = 0;
-  async function scanWorker() {
-    while (scanIdx < events.length) {
-      const i = scanIdx++;
-      const event = events[i];
-      const subInfo = subEventMap.get(event.name);
-      const ctx = subInfo
-        ? await scanner.findDiscriminatorValue(subInfo.value)
-        : await scanner.findEvent(event.name);
-      scanResults[i] = { event, ctx };
-      scanCompleted++;
-      if (!json) logger.progress(scanCompleted, events.length);
+  if (isProducerDiscovery) {
+    // ── Producer-mode discovery branch ────────────────────────────────
+    // Enumerate all publish call sites for the configured SDK (via patterns
+    // from backend-patterns.ts), then synthesize one placeholder event per
+    // call site. The LLM-extracted `topic` will become the real catalog key
+    // after the extraction loop.
+    if (!json) {
+      logger.blank();
+      logger.line(`  Discovering publish call sites (mode: producer, sdk: ${config.repo.sdk})...`);
+      logger.blank();
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, events.length) }, scanWorker));
+    const callSites = await scanner.findAllProducerCallSites();
+    if (callSites.length === 0) {
+      if (!json) {
+        logger.warn(
+          `No publish call sites found for sdk: ${config.repo.sdk} in ${config.repo.paths.join(", ")}.`,
+        );
+        logger.line("  Check repo.sdk and repo.paths in your emit.config.yml.");
+      }
+      // Continue — catalog will be empty, but that's a signal not a crash.
+    }
+    for (const ctx of callSites) {
+      const placeholder = `<discovered:${ctx.file_path}:${ctx.line_number}>`;
+      const entry: EventEntry = { name: placeholder };
+      events.push(entry);
+      codeContextMap.set(placeholder, ctx);
+      located.push(entry);
+    }
+    if (!json) {
+      logger.info(`Discovered ${callSites.length} publish call site${callSites.length === 1 ? "" : "s"}`);
+    }
+  } else {
+    // ── Existing manual-events scan loop ──────────────────────────────
+    if (!json) {
+      logger.blank();
+      logger.line(`  Searching for ${events.length} event${events.length === 1 ? "" : "s"} in your codebase...`);
+      logger.blank();
+    }
 
-  for (const { event, ctx } of scanResults) {
-    codeContextMap.set(event.name, ctx);
-    if (ctx.match_type === "not_found") {
-      notFound.push(event.name);
-    } else {
-      located.push(event);
+    // Run grep searches concurrently, capped to avoid spawning too many
+    // child processes at once (each findEvent can spawn multiple greps).
+    const SCAN_CONCURRENCY = 20;
+    const scanResults: { event: EventEntry; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
+    let scanIdx = 0;
+    let scanCompleted = 0;
+    async function scanWorker() {
+      while (scanIdx < events.length) {
+        const i = scanIdx++;
+        const event = events[i];
+        const subInfo = subEventMap.get(event.name);
+        const ctx = subInfo
+          ? await scanner.findDiscriminatorValue(subInfo.value)
+          : await scanner.findEvent(event.name);
+        scanResults[i] = { event, ctx };
+        scanCompleted++;
+        if (!json) logger.progress(scanCompleted, events.length);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, events.length) }, scanWorker));
+
+    for (const { event, ctx } of scanResults) {
+      codeContextMap.set(event.name, ctx);
+      if (ctx.match_type === "not_found") {
+        notFound.push(event.name);
+      } else {
+        located.push(event);
+      }
     }
   }
 
@@ -426,6 +479,58 @@ export async function runScan(opts: ScanOptions): Promise<number> {
   if (!json) {
     logger.blank();
     logger.succeed("Extraction complete");
+  }
+
+  // ── Producer-discovery re-keying ──────────────────────────────────
+  // The discovery branch entered the extraction loop with placeholder names
+  // like `<discovered:file:line>`. Now that extraction has handed back a
+  // real topic per entry, replace the placeholder keys with topic names.
+  // When two call sites publish to the same topic, merge them (union the
+  // call sites) instead of having one overwrite the other — that's the
+  // honest representation: "this event has N publish locations."
+  if (isProducerDiscovery) {
+    const rekeyed: Record<string, CatalogEvent> = {};
+    let topicCollisions = 0;
+    for (const [placeholder, entry] of Object.entries(catalog)) {
+      // If the LLM didn't extract a topic, fall back to the placeholder so
+      // the entry isn't silently lost. The user sees `<discovered:...>` in
+      // the catalog as a signal that emit couldn't pin down the topic.
+      const topicKey = entry.topic && entry.topic !== "<unresolved>"
+        ? entry.topic
+        : placeholder;
+      const existing = rekeyed[topicKey];
+      if (existing) {
+        // Merge call_sites (dedupe by file:line)
+        const seen = new Set(existing.all_call_sites.map((cs) => `${cs.file}:${cs.line}`));
+        for (const cs of entry.all_call_sites) {
+          const k = `${cs.file}:${cs.line}`;
+          if (!seen.has(k)) {
+            existing.all_call_sites.push(cs);
+            seen.add(k);
+          }
+        }
+        // Keep the higher-confidence entry's metadata; otherwise first wins
+        const rank = (c: CatalogEvent["confidence"]) => (c === "high" ? 2 : c === "medium" ? 1 : 0);
+        if (rank(entry.confidence) > rank(existing.confidence)) {
+          existing.description = entry.description;
+          existing.fires_when = entry.fires_when;
+          existing.confidence = entry.confidence;
+          existing.confidence_reason = entry.confidence_reason;
+          existing.properties = entry.properties;
+        }
+        topicCollisions++;
+      } else {
+        rekeyed[topicKey] = entry;
+      }
+    }
+    // Replace the placeholder-keyed catalog with the topic-keyed one.
+    for (const k of Object.keys(catalog)) delete catalog[k];
+    Object.assign(catalog, rekeyed);
+    if (!json && topicCollisions > 0) {
+      logger.info(
+        `Merged ${topicCollisions} call site${topicCollisions === 1 ? "" : "s"} into existing topic entries`,
+      );
+    }
   }
 
   // ── Guard: refuse to write an empty catalog when events were configured ──

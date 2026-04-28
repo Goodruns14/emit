@@ -286,9 +286,12 @@ export type SdkType =
  *
  * - `analytics` (default): tracks analytics events (Segment, PostHog, etc.)
  * - `producer`: catalogs events published to message brokers (Kafka, SNS, RabbitMQ, etc.)
- * - `both`: scan for both analytics and pub/sub patterns
+ *
+ * Phase 1 is single-mode-per-scan. A monorepo with both event types runs two
+ * scans with two configs. Multi-mode aggregation across services lives in the
+ * paid hosted reconciler (Phase 3+), not the OSS layer.
  */
-export type EmitMode = "analytics" | "producer" | "both";
+export type EmitMode = "analytics" | "producer";
 
 // ─────────────────────────────────────────────
 // LLM PROVIDER TYPES
@@ -621,7 +624,6 @@ export interface EmitConfig {
   /**
    * Operating mode. Defaults to `analytics` for backwards compatibility.
    * `producer` enables pub/sub patterns and the producer-mode extraction prompt.
-   * `both` runs both pattern sets in one scan.
    */
   mode?: EmitMode;
   manual_events?: string[];

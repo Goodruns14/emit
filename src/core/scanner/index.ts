@@ -1,6 +1,8 @@
 import * as fs from "fs";
+import { execa } from "execa";
 import type { BackendPatternConfig, CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, SDK_PATTERNS } from "./search.js";
+import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, parseCallSites, buildExcludeArgs, SDK_PATTERNS } from "./search.js";
+import { producerPatterns } from "./backend-patterns.js";
 import { extractContext, resolveEnumStringValue } from "./context.js";
 
 /** Cap per reference-file body so the LLM prompt never explodes. */
@@ -238,6 +240,112 @@ export class RepoScanner {
       match_type: "not_found",
       all_call_sites: [],
     };
+  }
+
+  /**
+   * Producer-mode discovery: enumerate all publish call sites in scope by
+   * grepping for each producer-kind pattern from backend-patterns.ts (filtered
+   * by the configured SDK), then extracting a context window around each
+   * match.
+   *
+   * Returns one CodeContext per call site. The caller (scan command) then
+   * runs producer-mode extraction on each context — the LLM derives the topic
+   * name and payload schema from the surrounding code.
+   *
+   * Unlike findEvent, this method does NOT require an event name upfront —
+   * it's the entry point for the "discover what events this service publishes"
+   * UX. findEvent stays the manual-loop entry point.
+   *
+   * Custom track patterns (from config.repo.track_pattern) and user-declared
+   * backend_patterns are also scanned, treated as producer patterns. This
+   * lets a user with a custom EventBus wrapper class declare the wrapper
+   * name in track_pattern and have it discovered alongside Kafka/SNS/etc.
+   */
+  async findAllProducerCallSites(): Promise<CodeContext[]> {
+    // Pull producer-kind patterns for this SDK from backend-patterns.ts.
+    // Custom and user-declared patterns are also included — when a user
+    // declares track_pattern: "eventBus.fire(", that wrapper gets discovered.
+    const sdkPatterns = this.sdk === "custom" ? [] : producerPatterns(this.sdk);
+    const allPatterns = Array.from(
+      new Set([...sdkPatterns, ...this.customPatterns, ...this.backendPatterns]),
+    ).filter(Boolean);
+
+    if (allPatterns.length === 0) {
+      // Misconfigured: producer mode with sdk=custom and no patterns. Caller
+      // should surface a clearer error; we return empty to keep the scanner
+      // pure.
+      return [];
+    }
+
+    // Run one grep per pattern, in parallel across paths. Aggregate matches.
+    const matchTasks: Promise<{ file: string; line: number; rawLine: string; matchedPattern: string }[]>[] = [];
+    for (const pattern of allPatterns) {
+      for (const searchPath of this.paths) {
+        matchTasks.push(
+          execa(
+            "grep",
+            [
+              "-rn",
+              "--fixed-strings",
+              pattern,
+              searchPath,
+              ...buildExcludeArgs(),
+            ],
+            { reject: false },
+          )
+            .then(({ stdout }) => {
+              if (!stdout.trim()) return [];
+              return parseCallSites(stdout).map((m) => ({
+                ...m,
+                matchedPattern: pattern,
+              }));
+            })
+            .catch(() => []),
+        );
+      }
+    }
+
+    const allHits = (await Promise.all(matchTasks)).flat();
+    if (allHits.length === 0) return [];
+
+    // Dedupe by file:line — a line containing two patterns (e.g. a generic
+    // wrapper that calls into a specific SDK) shouldn't produce two contexts.
+    // First pattern wins for the matched_pattern label.
+    const byFileLine = new Map<string, { file: string; line: number; rawLine: string; matchedPattern: string }>();
+    for (const hit of allHits) {
+      const key = `${hit.file}:${hit.line}`;
+      if (!byFileLine.has(key)) byFileLine.set(key, hit);
+    }
+
+    // Build a CodeContext per unique call site. Each context becomes the
+    // input to one extraction LLM call.
+    const contexts: CodeContext[] = [];
+    for (const hit of byFileLine.values()) {
+      contexts.push({
+        file_path: hit.file,
+        line_number: hit.line,
+        context: extractContext(hit.file, hit.line, 50),
+        match_type: "direct",
+        track_pattern: hit.matchedPattern,
+        all_call_sites: [
+          {
+            file_path: hit.file,
+            line_number: hit.line,
+            context: extractContext(hit.file, hit.line, 15),
+          },
+        ],
+        extra_context_files: this.loadContextFilesFor(hit.matchedPattern, hit.file, hit.line),
+      });
+    }
+
+    // Sort for stable output: file path then line number. Keeps the harness
+    // and downstream catalogs deterministic across runs.
+    contexts.sort((a, b) => {
+      if (a.file_path !== b.file_path) return a.file_path.localeCompare(b.file_path);
+      return a.line_number - b.line_number;
+    });
+
+    return contexts;
   }
 
   async findDiscriminatorValue(value: string): Promise<CodeContext> {

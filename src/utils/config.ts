@@ -129,6 +129,30 @@ function validate(config: EmitConfig): void {
     });
   }
 
+  // Producer-mode topic_aliases validation: must be a flat string→string map.
+  if (config.topic_aliases !== undefined) {
+    if (typeof config.topic_aliases !== "object" || Array.isArray(config.topic_aliases)) {
+      throw new Error("topic_aliases: must be a string-to-string map (placeholder → catalog name)");
+    }
+    for (const [k, v] of Object.entries(config.topic_aliases)) {
+      if (typeof v !== "string") {
+        throw new Error(`topic_aliases.${k}: value must be a string`);
+      }
+    }
+  }
+
+  // Producer-mode rpc_exchanges validation: must be string[].
+  if (config.rpc_exchanges !== undefined) {
+    if (!Array.isArray(config.rpc_exchanges)) {
+      throw new Error("rpc_exchanges: must be an array of strings");
+    }
+    config.rpc_exchanges.forEach((entry, i) => {
+      if (typeof entry !== "string") {
+        throw new Error(`rpc_exchanges[${i}]: must be a string`);
+      }
+    });
+  }
+
   // manual_events is required for analytics mode (existing behavior).
   // Producer mode discovers events from publish patterns — manual_events is
   // optional. When provided in producer mode, it scopes the scan to those

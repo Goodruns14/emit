@@ -17,7 +17,7 @@ import { diffCatalogs } from "../core/diff/index.js";
 import { formatTerminalDiff } from "../core/diff/format.js";
 import { getCatalogHealth } from "../core/catalog/health.js";
 import { renderHealthSection } from "../utils/health-render.js";
-import { collectDiagnosticSignal, shouldRunDiagnostic, getFlaggedEvents } from "../core/catalog/diagnostic.js";
+import { collectDiagnosticSignal, shouldRunDiagnostic, getFlaggedEvents, shortNameHint } from "../core/catalog/diagnostic.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
   CatalogEvent,
@@ -497,13 +497,35 @@ export async function runScan(opts: ScanOptions): Promise<number> {
   if (isProducerDiscovery) {
     const rekeyed: Record<string, CatalogEvent> = {};
     let topicCollisions = 0;
+    let aliasResolutions = 0;
     for (const [placeholder, entry] of Object.entries(catalog)) {
-      // If the LLM didn't extract a topic, fall back to the placeholder so
-      // the entry isn't silently lost. The user sees `<discovered:...>` in
-      // the catalog as a signal that emit couldn't pin down the topic.
-      const topicKey = entry.topic && entry.topic !== "<unresolved>"
-        ? entry.topic
-        : placeholder;
+      // Resolution priority for the catalog entry's key:
+      //   1. user-declared topic_aliases (the most explicit signal — emit fix
+      //      writes these here when topic_dynamic was flagged)
+      //   2. LLM-extracted topic (when it's not <unresolved>)
+      //   3. placeholder (extraction ceiling — preserved as honest signal)
+      const aliasKey = shortNameHint(placeholder);
+      const userAlias = config.topic_aliases?.[aliasKey];
+      let topicKey: string;
+      if (userAlias) {
+        topicKey = userAlias;
+        aliasResolutions++;
+        // Also normalize the entry's topic field — if the LLM left it as
+        // <unresolved>, replace with the user-declared alias so downstream
+        // tools (MCP, push adapters) see a stable name.
+        if (!entry.topic || entry.topic === "<unresolved>") {
+          entry.topic = userAlias;
+        }
+        // Drop the topic_dynamic flag once an alias resolves it — it's
+        // no longer dynamic from the catalog's perspective.
+        if (Array.isArray(entry.flags)) {
+          entry.flags = entry.flags.filter((f) => f !== "topic_dynamic");
+        }
+      } else if (entry.topic && entry.topic !== "<unresolved>") {
+        topicKey = entry.topic;
+      } else {
+        topicKey = placeholder;
+      }
       const existing = rekeyed[topicKey];
       if (existing) {
         // Merge call_sites (dedupe by file:line)
@@ -536,6 +558,32 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       logger.info(
         `Merged ${topicCollisions} call site${topicCollisions === 1 ? "" : "s"} into existing topic entries`,
       );
+    }
+    if (!json && aliasResolutions > 0) {
+      logger.info(
+        `Resolved ${aliasResolutions} placeholder${aliasResolutions === 1 ? "" : "s"} via topic_aliases config`,
+      );
+    }
+
+    // ── RPC-exchange filter ────────────────────────────────────────────
+    // Drop entries the user has marked as AMQP RPC infrastructure (golevelup
+    // amqpConnection.request() exchange names etc.) — these are routing
+    // primitives, not domain events meaningful to consumers.
+    if (config.rpc_exchanges?.length) {
+      const rpcSet = new Set(config.rpc_exchanges);
+      let filtered = 0;
+      for (const name of Object.keys(catalog)) {
+        const entry = catalog[name];
+        if (rpcSet.has(name) || (entry.topic && rpcSet.has(entry.topic))) {
+          delete catalog[name];
+          filtered++;
+        }
+      }
+      if (!json && filtered > 0) {
+        logger.info(
+          `Filtered ${filtered} RPC infrastructure ${filtered === 1 ? "entry" : "entries"} (rpc_exchanges config)`,
+        );
+      }
     }
 
     // ── Discovery-mode discriminator expansion ─────────────────────────

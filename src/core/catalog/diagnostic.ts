@@ -488,8 +488,12 @@ function detectProducerFixSuggestions(catalog: EmitCatalog): ProducerFixSuggesti
  * For dynamic-topic events with placeholder names like
  * '<discovered:./path/file.ts:123>', generate a short readable hint key
  * that the user can rename to a real alias name in the YAML.
+ *
+ * Exported so the scan command can compute the same key when looking up
+ * topic_aliases — both sides MUST agree on the key shape, otherwise an
+ * alias declared in config will never match a discovered placeholder.
  */
-function shortNameHint(eventName: string): string {
+export function shortNameHint(eventName: string): string {
   const m = eventName.match(/<discovered:[^>]*\/([^/>]+):(\d+)>/);
   if (m) return `${m[1].replace(/\.[a-z]+$/, "")}_${m[2]}`;
   return eventName.replace(/[^a-zA-Z0-9_]/g, "_");

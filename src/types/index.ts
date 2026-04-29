@@ -652,6 +652,34 @@ export interface EmitConfig {
    * directory name.
    */
   services?: ServiceConfig[];
+
+  /**
+   * Producer-mode topic aliases. Maps a placeholder key (derived from the
+   * source file basename + line number, e.g. `index_27`) to a stable
+   * catalog name (e.g. `invoices`). Used when discovery surfaces a publish
+   * call site whose topic resolves at runtime (process.env, Spring @Value,
+   * config service, string concatenation) — without an alias the entry
+   * would be keyed by the placeholder `<discovered:./path/file.ts:27>`,
+   * which is correct but not useful for queries.
+   *
+   * `emit fix` proposes entries here when it detects `topic_dynamic` flags
+   * in the catalog. Users edit the alias values to choose the canonical
+   * name they want in the catalog.
+   */
+  topic_aliases?: Record<string, string>;
+
+  /**
+   * Producer-mode RPC exchange filter. Entries listed here are treated as
+   * AMQP routing infrastructure (e.g. golevelup `@RabbitRPC` exchange names)
+   * rather than domain events meaningful to consumers. Catalog entries whose
+   * resolved name matches an entry in this list are excluded from the
+   * written catalog — keeping the catalog focused on events the data team
+   * cares about.
+   *
+   * `emit fix` proposes entries here when it detects 2+ events that look
+   * like exchange names alongside RPC patterns.
+   */
+  rpc_exchanges?: string[];
   repo: {
     paths: string[];
     /**

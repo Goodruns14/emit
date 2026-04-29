@@ -256,14 +256,14 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     // after the extraction loop.
     if (!json) {
       logger.blank();
-      logger.line(`  Discovering publish call sites (mode: producer, sdk: ${config.repo.sdk})...`);
+      logger.line(`  Discovering publish call sites (mode: producer, sdk: ${Array.isArray(config.repo.sdk) ? config.repo.sdk.join(" + ") : config.repo.sdk})...`);
       logger.blank();
     }
     const callSites = await scanner.findAllProducerCallSites();
     if (callSites.length === 0) {
       if (!json) {
         logger.warn(
-          `No publish call sites found for sdk: ${config.repo.sdk} in ${config.repo.paths.join(", ")}.`,
+          `No publish call sites found for sdk: ${Array.isArray(config.repo.sdk) ? config.repo.sdk.join(" + ") : config.repo.sdk} in ${config.repo.paths.join(", ")}.`,
         );
         logger.line("  Check repo.sdk and repo.paths in your emit.config.yml.");
       }
@@ -436,6 +436,12 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         );
       }
     }
+    // Deterministic outbox flag: set by the scanner when the source file
+    // matches the outbox-pattern heuristic (write + delivery markers in the
+    // same file). Independent of whether the LLM noticed.
+    if (ctx.outbox_detected && !eventFlags.includes("outbox_pattern")) {
+      eventFlags.push("outbox_pattern");
+    }
 
     const reconciled: CatalogEvent = {
       description: meta.event_description,
@@ -530,6 +536,75 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       logger.info(
         `Merged ${topicCollisions} call site${topicCollisions === 1 ? "" : "s"} into existing topic entries`,
       );
+    }
+
+    // ── Discovery-mode discriminator expansion ─────────────────────────
+    // When a discovered topic matches a discriminator_properties config key,
+    // expand it into sub-events. Reuses the existing scanner.findDiscriminatorValue
+    // and extractor.extractDiscriminatorMetadata machinery — same as what
+    // manual_events mode does at line ~158, just triggered post-discovery
+    // because we don't know the topics until extraction returns them.
+    //
+    // Example: aleks-cqrs-eventsourcing publishes to bank-account-event-store
+    // which carries 4 event types (BANK_ACCOUNT_CREATED_V1, EMAIL_CHANGED_V1,
+    // ADDRESS_UPDATED_V1, BALANCE_DEPOSITED_V1) discriminated by getEventType().
+    // Without expansion: 1 catalog entry. With expansion: 1 parent + 4 children.
+    if (config.discriminator_properties) {
+      const expansionsForDiscovered: { topic: string; property: string; values: string[] }[] = [];
+      for (const exp of await expandDiscriminators(config)) {
+        // Only fire expansion for topics actually discovered. Discriminator
+        // configs that don't match any discovered topic are ignored — the
+        // user may have stale config entries; don't surface them as errors.
+        if (catalog[exp.parentEvent]) {
+          expansionsForDiscovered.push({
+            topic: exp.parentEvent,
+            property: exp.property,
+            values: exp.values,
+          });
+        }
+      }
+      if (expansionsForDiscovered.length > 0 && !json) {
+        const totalSubs = expansionsForDiscovered.reduce((sum, e) => sum + e.values.length, 0);
+        logger.info(
+          `Expanding ${expansionsForDiscovered.length} discriminator${expansionsForDiscovered.length === 1 ? "" : "s"} → ${totalSubs} sub-events...`,
+        );
+      }
+      for (const exp of expansionsForDiscovered) {
+        const parentEntry = catalog[exp.topic];
+        for (const value of exp.values) {
+          const subKey = `${exp.topic}.${value}`;
+          if (catalog[subKey]) continue; // already expanded (incremental scan)
+          const subCtx = await scanner.findDiscriminatorValue(value);
+          if (subCtx.match_type === "not_found") continue;
+          const subMeta = await extractor.extractDiscriminatorMetadata(
+            exp.topic,
+            exp.property,
+            value,
+            subCtx,
+            parentEntry.description,
+          );
+          catalog[subKey] = {
+            description: subMeta.event_description,
+            fires_when: subMeta.fires_when,
+            confidence: subMeta.confidence,
+            confidence_reason: subMeta.confidence_reason,
+            review_required: subMeta.confidence === "low",
+            source_file: subCtx.file_path,
+            source_line: subCtx.line_number,
+            all_call_sites: subCtx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
+            properties: {},
+            flags: subMeta.flags ?? [],
+            parent_event: exp.topic,
+            discriminator_property: exp.property,
+            discriminator_value: value,
+            // Inherit producer-mode envelope/topic from parent so the sub-event
+            // carries the right routing metadata even though it's keyed by value.
+            ...(parentEntry.topic !== undefined && { topic: parentEntry.topic }),
+            ...(parentEntry.envelope_spec !== undefined && { envelope_spec: parentEntry.envelope_spec }),
+          };
+          stats[subMeta.confidence]++;
+        }
+      }
     }
   }
 

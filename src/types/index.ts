@@ -24,6 +24,15 @@ export interface CodeContext {
    * builders). Empty/absent when no pattern matched or no files configured.
    */
   extra_context_files?: { path: string; content: string }[];
+
+  /**
+   * True when the source file matches the outbox-pattern heuristic — i.e.
+   * the file contains both an outbox-table-write marker AND a publish or
+   * @Scheduled marker. The scanner sets this so the scan command can
+   * surface a `outbox_pattern` flag on the resulting catalog entry without
+   * relying on the LLM to detect it from prose.
+   */
+  outbox_detected?: boolean;
 }
 
 /**
@@ -277,6 +286,13 @@ export type SdkType =
   | "google-pubsub"
   | "redis-streams"
   | "nats"
+  // Outbox-write family — for outbox+CDC architectures where the
+  // application writes to a database outbox table and an external CDC
+  // process (Debezium, etc.) publishes to the broker. The publish call
+  // doesn't appear in app code; the outbox write IS the producer signal.
+  // Typically composed with another SDK in multi-SDK configs:
+  // sdk: ["kafka", "outbox"]
+  | "outbox"
   // Catch-all
   | "custom";
 
@@ -638,7 +654,13 @@ export interface EmitConfig {
   services?: ServiceConfig[];
   repo: {
     paths: string[];
-    sdk: SdkType;
+    /**
+     * SDK family (or families). Single value for the common case; an array
+     * is supported for multi-broker services like a transformer that consumes
+     * from SQS and republishes to Google Pub/Sub. emit unions the patterns
+     * from each SDK at scan time.
+     */
+    sdk: SdkType | SdkType[];
     track_pattern?: string | string[];
     /**
      * Additional patterns for backend tracking (e.g. Java audit helpers,

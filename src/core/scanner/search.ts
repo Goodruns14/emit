@@ -39,6 +39,7 @@ export const SDK_PATTERNS: Record<SdkType, string[]> = {
   "google-pubsub": backendPatternsForSdk("google-pubsub"),
   "redis-streams": backendPatternsForSdk("redis-streams"),
   nats: backendPatternsForSdk("nats"),
+  outbox: backendPatternsForSdk("outbox"),
   // Catch-all
   custom: [],
 };
@@ -286,17 +287,36 @@ export function filterExactEventMatches(
   return filtered.length > 0 ? filtered : matches;
 }
 
+/**
+ * Resolve a single SDK or array of SDKs to its pattern set, unioning
+ * across the input. `custom` always contributes the user-provided
+ * customPatterns; other SDKs contribute their `SDK_PATTERNS` entry.
+ */
+function resolvePatterns(
+  sdk: SdkType | SdkType[],
+  customPatterns?: string[]
+): string[] {
+  const sdks = Array.isArray(sdk) ? sdk : [sdk];
+  const collected: string[] = [];
+  for (const s of sdks) {
+    if (s === "custom") {
+      collected.push(...(customPatterns ?? []));
+    } else {
+      collected.push(...(SDK_PATTERNS[s] ?? []));
+    }
+  }
+  // Dedupe — multi-SDK can produce overlap (rare but possible).
+  return Array.from(new Set(collected));
+}
+
 export async function searchDirect(
   eventName: string,
   paths: string[],
-  sdk: SdkType,
+  sdk: SdkType | SdkType[],
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
-  const patterns = sdk === "custom"
-    ? customPatterns ?? []
-    : SDK_PATTERNS[sdk] ?? [];
-
+  const patterns = resolvePatterns(sdk, customPatterns);
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 
   for (const searchPath of paths) {
@@ -513,13 +533,11 @@ export async function searchDiscriminatorValue(
 export async function searchConstant(
   constantName: string,
   paths: string[],
-  sdk: SdkType,
+  sdk: SdkType | SdkType[],
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
-  const patterns = sdk === "custom"
-    ? customPatterns ?? []
-    : SDK_PATTERNS[sdk] ?? [];
+  const patterns = resolvePatterns(sdk, customPatterns);
 
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 

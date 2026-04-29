@@ -3,14 +3,20 @@ import { execa } from "execa";
 import type { BackendPatternConfig, CodeContext, CallSite, SdkType } from "../../types/index.js";
 import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, parseCallSites, buildExcludeArgs, SDK_PATTERNS } from "./search.js";
 import { producerPatterns } from "./backend-patterns.js";
-import { extractContext, resolveEnumStringValue } from "./context.js";
+import { extractContext, resolveEnumStringValue, isOutboxFile, findEventClassDefinitions } from "./context.js";
 
 /** Cap per reference-file body so the LLM prompt never explodes. */
 const CONTEXT_FILE_MAX_BYTES = 8 * 1024;
 
 export class RepoScanner {
   private paths: string[];
-  private sdk: SdkType;
+  /**
+   * SDK families this scanner is configured for. Stored as an array so
+   * multi-broker services (e.g. SQS-in / Google-Pub/Sub-out transformers)
+   * can union patterns from multiple SDKs in one scan. Single-SDK callers
+   * still pass a string — the constructor normalizes.
+   */
+  private sdks: SdkType[];
   private customPatterns: string[];
   private backendPatterns: string[];
   /** pattern → list of reference-file paths to attach when it matches. */
@@ -18,14 +24,24 @@ export class RepoScanner {
   /** Per-scan cache of loaded file contents (path → content, trimmed). */
   private contextFileCache: Map<string, string>;
 
+  /**
+   * Primary SDK — used by call sites that still expect a single value
+   * (legacy paths, log messages). For multi-SDK configs this is the first
+   * entry; the full set is used internally for pattern enumeration.
+   */
+  get sdk(): SdkType {
+    return this.sdks[0] ?? "custom";
+  }
+
   constructor(opts: {
     paths: string[];
-    sdk: SdkType;
+    sdk: SdkType | SdkType[];
     trackPattern?: string | string[];
     backendPatterns?: BackendPatternConfig[];
   }) {
     this.paths = opts.paths;
-    this.sdk = opts.sdk;
+    this.sdks = Array.isArray(opts.sdk) ? opts.sdk : [opts.sdk];
+    if (this.sdks.length === 0) this.sdks = ["custom"];
     if (!opts.trackPattern) {
       this.customPatterns = [];
     } else if (Array.isArray(opts.trackPattern)) {
@@ -126,7 +142,7 @@ export class RepoScanner {
     const directMatches = await searchDirect(
       eventName,
       this.paths,
-      this.sdk,
+      this.sdks,
       this.customPatterns,
       this.backendPatterns
     );
@@ -164,7 +180,7 @@ export class RepoScanner {
       const constantMatches = await searchConstant(
         variant,
         this.paths,
-        this.sdk,
+        this.sdks,
         this.customPatterns,
         this.backendPatterns
       );
@@ -202,10 +218,15 @@ export class RepoScanner {
     // least one match to sit near a real tracking call; otherwise treat as
     // not_found rather than saddling the catalog with a phantom event.
     const broadMatchesRaw = await searchBroad(eventName, this.paths);
-    const sdkPatterns = this.sdk === "custom"
-      ? this.customPatterns
-      : SDK_PATTERNS[this.sdk] ?? [];
-    const allTrackingPatterns = [...sdkPatterns, ...this.customPatterns, ...this.backendPatterns];
+    // Multi-SDK aware — collect patterns from each configured SDK and union.
+    const sdkPatterns = this.sdks.flatMap((s) =>
+      s === "custom" ? this.customPatterns : (SDK_PATTERNS[s] ?? [])
+    );
+    const allTrackingPatterns = Array.from(new Set([
+      ...sdkPatterns,
+      ...this.customPatterns,
+      ...this.backendPatterns,
+    ]));
     const broadMatches = allTrackingPatterns.length > 0
       ? broadMatchesRaw.filter((m) => hasNearbyTrackingCall(m.file, m.line, allTrackingPatterns))
       : broadMatchesRaw;
@@ -262,10 +283,15 @@ export class RepoScanner {
    * name in track_pattern and have it discovered alongside Kafka/SNS/etc.
    */
   async findAllProducerCallSites(): Promise<CodeContext[]> {
-    // Pull producer-kind patterns for this SDK from backend-patterns.ts.
-    // Custom and user-declared patterns are also included — when a user
-    // declares track_pattern: "eventBus.fire(", that wrapper gets discovered.
-    const sdkPatterns = this.sdk === "custom" ? [] : producerPatterns(this.sdk);
+    // Pull producer-kind patterns for each configured SDK from
+    // backend-patterns.ts and union them. Multi-SDK configs (e.g. a service
+    // that both consumes from SQS and publishes to Google Pub/Sub) get all
+    // patterns from each SDK in one scan. Custom and user-declared patterns
+    // are also included — when a user declares
+    // track_pattern: "eventBus.fire(", that wrapper gets discovered.
+    const sdkPatterns = this.sdks.flatMap((s) =>
+      s === "custom" ? [] : producerPatterns(s),
+    );
     const allPatterns = Array.from(
       new Set([...sdkPatterns, ...this.customPatterns, ...this.backendPatterns]),
     ).filter(Boolean);
@@ -321,10 +347,34 @@ export class RepoScanner {
     // input to one extraction LLM call.
     const contexts: CodeContext[] = [];
     for (const hit of byFileLine.values()) {
+      // Outbox detection happens inside extractContext (it widens the
+      // window to whole-file when both halves of the pattern are present).
+      // We also flag it on the CodeContext so the catalog reconciler can
+      // add a deterministic outbox_pattern flag to the entry — independent
+      // of whether the LLM noticed.
+      let isOutbox = false;
+      try {
+        const fileContent = fs.readFileSync(hit.file, "utf8");
+        isOutbox = isOutboxFile(fileContent);
+      } catch {
+        // file unreadable — leave as false
+      }
+
+      const contextSrc = extractContext(hit.file, hit.line, 50);
+
+      // Event-class follow-through (Day 4.5): when the publish call references
+      // typed event classes (CQRS, DDD-style), find their definitions and
+      // attach them so the LLM can extract proper payload schema. This is
+      // what unlocks high-confidence extraction on event-class fixtures
+      // like aleks-cqrs-eventsourcing.
+      const declaredExtras = this.loadContextFilesFor(hit.matchedPattern, hit.file, hit.line) ?? [];
+      const discoveredEventClasses = findEventClassDefinitions(contextSrc, this.paths);
+      const extraContextFiles = [...declaredExtras, ...discoveredEventClasses];
+
       contexts.push({
         file_path: hit.file,
         line_number: hit.line,
-        context: extractContext(hit.file, hit.line, 50),
+        context: contextSrc,
         match_type: "direct",
         track_pattern: hit.matchedPattern,
         all_call_sites: [
@@ -334,7 +384,8 @@ export class RepoScanner {
             context: extractContext(hit.file, hit.line, 15),
           },
         ],
-        extra_context_files: this.loadContextFilesFor(hit.matchedPattern, hit.file, hit.line),
+        extra_context_files: extraContextFiles.length > 0 ? extraContextFiles : undefined,
+        outbox_detected: isOutbox,
       });
     }
 

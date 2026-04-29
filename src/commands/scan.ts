@@ -516,10 +516,17 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         if (!entry.topic || entry.topic === "<unresolved>") {
           entry.topic = userAlias;
         }
-        // Drop the topic_dynamic flag once an alias resolves it — it's
-        // no longer dynamic from the catalog's perspective.
+        // Drop topic_dynamic flags once an alias resolves the case — the
+        // catalog now has a stable name. Use the same substring predicate
+        // as detectProducerFixSuggestions() so verbose flags like
+        // "topic_dynamic: dynamically resolved at runtime via Spring @Value"
+        // also get stripped. Without this the diagnostic re-fires the same
+        // suggestion on every subsequent run, even though the alias is
+        // already in config.
         if (Array.isArray(entry.flags)) {
-          entry.flags = entry.flags.filter((f) => f !== "topic_dynamic");
+          entry.flags = entry.flags.filter(
+            (f) => !f.toLowerCase().includes("topic_dynamic"),
+          );
         }
       } else if (entry.topic && entry.topic !== "<unresolved>") {
         topicKey = entry.topic;

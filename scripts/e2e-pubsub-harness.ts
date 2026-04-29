@@ -179,7 +179,7 @@ function readSnapshot(fp: string): ScanSnapshot {
   return snapshot;
 }
 
-function runFix(fp: string): { ok: boolean; detail: string } {
+function runFix(fp: string): { ok: boolean; detail: string; rejected?: boolean } {
   // 480s = 8 min budget. Claude Code does deep codebase investigation when
   // picking topic aliases (reading application.properties, choosing semantic
   // names, writing comments) — pipeshub's wrapper-class case takes longest
@@ -197,15 +197,23 @@ function runFix(fp: string): { ok: boolean; detail: string } {
   // the harness report says "timed out" instead of an opaque "exit null".
   const timedOut = result.status === null && result.signal === "SIGTERM";
   const ok = result.status === 0;
+  // Pre-flight rejection: emit fix exits 1 when its safety check refuses a
+  // proposal that would hide currently-cataloged events. The artifact is
+  // .emit/rejected-fix.yml. This is a safety feature, not an error — the
+  // harness should distinguish it from a real failure so the report tells
+  // the user "pre-flight rejected; review and re-run with --force if intent."
+  const rejected = !ok && fs.existsSync(path.join(fp, ".emit/rejected-fix.yml"));
   let detail: string;
   if (ok) {
     detail = "applied";
   } else if (timedOut) {
     detail = "timed out (480s) — Claude Code likely still investigating; check the config to see if changes landed";
+  } else if (rejected) {
+    detail = "pre-flight rejected (proposal would hide currently-cataloged events; review .emit/rejected-fix.yml)";
   } else {
     detail = `exit ${result.status}${result.signal ? ` (signal ${result.signal})` : ""}: ${(result.stderr || result.stdout || "").slice(0, 150).replace(/\n/g, " ")}`;
   }
-  return { ok, detail };
+  return { ok, detail, rejected };
 }
 
 async function runFixture(entry: FixtureManifestEntry, opts: { fix: boolean }): Promise<FixtureResult> {
@@ -267,7 +275,11 @@ function printReport(results: FixtureResult[], opts: { fix: boolean }): void {
       if (r.status === "skipped") return `  — ${r.name.padEnd(34)} skipped — ${r.notes ?? "out of scope"}`;
       const icon = r.status === "pass" ? "✓" : "✗";
       const fixCol = r.fix_applied
-        ? r.fix_applied.ok ? "  ⚙ fix applied" : `  ⚠ fix failed (${r.fix_applied.detail})`
+        ? r.fix_applied.ok
+          ? "  ⚙ fix applied"
+          : r.fix_applied.rejected
+            ? `  ⊘ fix rejected by pre-flight (${r.fix_applied.detail})`
+            : `  ⚠ fix failed (${r.fix_applied.detail})`
         : "";
       return `  ${icon} ${r.name.padEnd(34)} ${fmtSnap(r.initial)}${fixCol}${fmtDelta(r.initial, r.post_fix)}`;
     }).join("\n");

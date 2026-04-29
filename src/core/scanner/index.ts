@@ -4,6 +4,7 @@ import type { BackendPatternConfig, CodeContext, CallSite, SdkType } from "../..
 import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, parseCallSites, buildExcludeArgs, SDK_PATTERNS } from "./search.js";
 import { producerPatterns } from "./backend-patterns.js";
 import { extractContext, resolveEnumStringValue, isOutboxFile, findEventClassDefinitions } from "./context.js";
+import { findSchemaFiles } from "./schema-files.js";
 
 /** Cap per reference-file body so the LLM prompt never explodes. */
 const CONTEXT_FILE_MAX_BYTES = 8 * 1024;
@@ -369,7 +370,15 @@ export class RepoScanner {
       // like aleks-cqrs-eventsourcing.
       const declaredExtras = this.loadContextFilesFor(hit.matchedPattern, hit.file, hit.line) ?? [];
       const discoveredEventClasses = findEventClassDefinitions(contextSrc, this.paths);
-      const extraContextFiles = [...declaredExtras, ...discoveredEventClasses];
+
+      // Schema-file ingestion (Day 3): locate .avsc / .proto / .json schema
+      // files near the call site (explicit paths in code, schemas/ directory,
+      // or .proto files declaring referenced message types) and attach them
+      // as authoritative payload schema. Tier 1 — no user config required
+      // for the standard layouts (schemas/, src/main/protobuf/, etc.).
+      const discoveredSchemas = findSchemaFiles(contextSrc, this.paths);
+
+      const extraContextFiles = [...declaredExtras, ...discoveredEventClasses, ...discoveredSchemas];
 
       contexts.push({
         file_path: hit.file,

@@ -160,7 +160,7 @@ export function buildProducerExtractionPrompt(
 
   const extraContextSection =
     codeContext.extra_context_files && codeContext.extra_context_files.length > 0
-      ? `\nReference helper sources — schema files (.avsc / .proto / JSON Schema) or event class definitions referenced by the publish call. Treat the fields/types declared here as the event's payload schema:\n\n${codeContext.extra_context_files
+      ? `\nReference helper sources — schema files (.avsc Avro / .proto Protobuf / JSON Schema) and event class definitions located near the publish call. These are AUTHORITATIVE for payload structure: when a schema file is present, prefer its field names and types over what's inferable from the call site code. Use it to populate the properties{} block precisely.\n\n${codeContext.extra_context_files
           .map((f) => `Reference file (${f.path}):\n\`\`\`\n${f.content}\n\`\`\``)
           .join("\n\n")}\n`
       : "";

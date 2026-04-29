@@ -180,16 +180,31 @@ function readSnapshot(fp: string): ScanSnapshot {
 }
 
 function runFix(fp: string): { ok: boolean; detail: string } {
+  // 480s = 8 min budget. Claude Code does deep codebase investigation when
+  // picking topic aliases (reading application.properties, choosing semantic
+  // names, writing comments) — pipeshub's wrapper-class case takes longest
+  // because it has to figure out what the wrapper actually publishes. 240s
+  // proved too tight in Day 5.2; 480s gives meaningful slack without making
+  // the harness sit forever on a hung run.
   const result = spawnSync("node", [CLI_PATH, "fix", "--yes"], {
     cwd: fp,
     encoding: "utf8",
-    timeout: 240_000,
+    timeout: 480_000,
     env: process.env,
   });
+  // spawnSync returns status: null when the process was killed by signal
+  // (e.g. SIGTERM from our timeout). Distinguish that from non-zero exit so
+  // the harness report says "timed out" instead of an opaque "exit null".
+  const timedOut = result.status === null && result.signal === "SIGTERM";
   const ok = result.status === 0;
-  const detail = ok
-    ? "applied"
-    : `exit ${result.status}: ${(result.stderr || result.stdout || "").slice(0, 150).replace(/\n/g, " ")}`;
+  let detail: string;
+  if (ok) {
+    detail = "applied";
+  } else if (timedOut) {
+    detail = "timed out (480s) — Claude Code likely still investigating; check the config to see if changes landed";
+  } else {
+    detail = `exit ${result.status}${result.signal ? ` (signal ${result.signal})` : ""}: ${(result.stderr || result.stdout || "").slice(0, 150).replace(/\n/g, " ")}`;
+  }
   return { ok, detail };
 }
 

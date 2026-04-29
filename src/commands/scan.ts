@@ -498,6 +498,21 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     const rekeyed: Record<string, CatalogEvent> = {};
     let topicCollisions = 0;
     let aliasResolutions = 0;
+    // Set of resolved topic names the user has declared in topic_aliases
+    // (values, not keys). If the LLM extracts one of these, the user has
+    // acknowledged the dynamic-resolution case and the topic_dynamic flag
+    // should be cleared even though the discovery placeholder didn't match
+    // any alias key directly.
+    const declaredTopicValues = new Set(
+      Object.values(config.topic_aliases ?? {}),
+    );
+    const stripDynamicFlags = (entry: CatalogEvent) => {
+      if (Array.isArray(entry.flags)) {
+        entry.flags = entry.flags.filter(
+          (f) => !f.toLowerCase().includes("topic_dynamic"),
+        );
+      }
+    };
     for (const [placeholder, entry] of Object.entries(catalog)) {
       // Resolution priority for the catalog entry's key:
       //   1. user-declared topic_aliases (the most explicit signal — emit fix
@@ -523,13 +538,17 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         // also get stripped. Without this the diagnostic re-fires the same
         // suggestion on every subsequent run, even though the alias is
         // already in config.
-        if (Array.isArray(entry.flags)) {
-          entry.flags = entry.flags.filter(
-            (f) => !f.toLowerCase().includes("topic_dynamic"),
-          );
-        }
+        stripDynamicFlags(entry);
       } else if (entry.topic && entry.topic !== "<unresolved>") {
         topicKey = entry.topic;
+        // The LLM extracted a stable topic name. If the user has separately
+        // declared that same topic in topic_aliases (e.g. they aliased the
+        // shortNameHint of the extracted topic to itself), they've
+        // acknowledged the dynamic resolution — strip the flag so the
+        // diagnostic doesn't re-fire on every subsequent run.
+        if (declaredTopicValues.has(entry.topic)) {
+          stripDynamicFlags(entry);
+        }
       } else {
         topicKey = placeholder;
       }

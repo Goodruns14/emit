@@ -130,10 +130,19 @@ export function wouldExclude(filePath: string, paths: string[]): boolean {
   return false;
 }
 
-export function buildExcludeArgs(): string[] {
+/**
+ * Build grep --exclude args. With `ignoreUserExcludes`, the hard-coded
+ * EXCLUDE_DIRS (node_modules, .git, dist, etc.) still apply, but user-
+ * configured `repo.exclude_paths` entries are bypassed. Used by
+ * `--resolve-missing` and the diagnostic prober so a too-narrow user
+ * exclude list doesn't hide events from the recovery path.
+ */
+export function buildExcludeArgs(opts?: { ignoreUserExcludes?: boolean }): string[] {
+  const userDirs = opts?.ignoreUserExcludes ? [] : extraExcludeDirs;
+  const userFiles = opts?.ignoreUserExcludes ? [] : extraExcludeFiles;
   return [
-    ...[...EXCLUDE_DIRS, ...extraExcludeDirs].flatMap((d) => ["--exclude-dir", d]),
-    ...extraExcludeFiles.flatMap((f) => ["--exclude", f]),
+    ...[...EXCLUDE_DIRS, ...userDirs].flatMap((d) => ["--exclude-dir", d]),
+    ...userFiles.flatMap((f) => ["--exclude", f]),
   ];
 }
 
@@ -203,7 +212,8 @@ export function hasNearbyTrackingCall(
   }
 }
 
-export function parseCallSites(output: string): SearchMatch[] {
+export function parseCallSites(output: string, opts?: { ignoreUserExcludes?: boolean }): SearchMatch[] {
+  const skipPathFilter = opts?.ignoreUserExcludes ?? false;
   return output
     .split("\n")
     .filter(Boolean)
@@ -217,7 +227,7 @@ export function parseCallSites(output: string): SearchMatch[] {
       if (isNaN(lineNum)) return null;
       return { file, line: lineNum, rawLine };
     })
-    .filter((m): m is SearchMatch => m !== null && !isPathExcluded(m.file))
+    .filter((m): m is SearchMatch => m !== null && (skipPathFilter || !isPathExcluded(m.file)))
     .slice(0, 10);
 }
 
@@ -335,7 +345,8 @@ export async function searchDirect(
  */
 export async function searchBroad(
   eventName: string,
-  paths: string[]
+  paths: string[],
+  opts?: { ignoreUserExcludes?: boolean }
 ): Promise<SearchMatch[]> {
   // Generate casing variants: snake_case, camelCase, Title Case, UPPER_CASE
   const variants = generateCasingVariants(eventName);
@@ -352,14 +363,14 @@ export async function searchBroad(
             variant,
             searchPath,
             ...FILE_EXTENSIONS.flatMap((e) => ["--include", e]),
-            ...buildExcludeArgs(),
+            ...buildExcludeArgs(opts),
           ],
           { reject: false }
         );
 
         if (!stdout.trim()) continue;
 
-        const parsed = parseCallSites(stdout);
+        const parsed = parseCallSites(stdout, opts);
         for (const match of parsed) {
           match.matchedPattern = extractPatternFromLine(match.rawLine);
           // Deduplicate by file:line

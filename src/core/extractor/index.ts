@@ -117,7 +117,10 @@ export class MetadataExtractor {
     eventName: string,
     repoPaths: string[]
   ): Promise<ResolvedEvent | null> {
-    const broadMatches = await searchBroad(eventName, repoPaths);
+    // Bypass user-configured exclude_paths when resolving — the whole point is
+    // to find events the regular scan couldn't find, and excludes are often
+    // what's blocking discovery in the first place.
+    const broadMatches = await searchBroad(eventName, repoPaths, { ignoreUserExcludes: true });
 
     if (broadMatches.length === 0) return null;
 

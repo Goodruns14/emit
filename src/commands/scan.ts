@@ -630,6 +630,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         findings: diagnosis.findings,
         fixInstruction: diagnosis.fixInstruction || null,
         flaggedEvents: flaggedEventDetails,
+        notFoundEvents: signal.notFoundEvents,
       };
     }
     process.stdout.write(JSON.stringify(jsonOutput, null, 2) + "\n");
@@ -742,6 +743,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
           skippedCount: choice === "1" ? dirtyCount : 0,
           findings: diagnosis.findings,
           flaggedEvents: flaggedEventDetails,
+          notFoundEvents: signal.notFoundEvents,
         };
         fs.writeFileSync(path.join(emitDir, "last-fix.json"), JSON.stringify(lastFixData, null, 2));
         const gitignorePath = path.join(emitDir, ".gitignore");

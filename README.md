@@ -60,10 +60,7 @@ emit scan
 
 Scans your repo for event tracking calls, uses an LLM to extract metadata (descriptions, trigger conditions, properties), and writes `emit.catalog.yml`.
 
-Useful flags:
-- `--confirm` preview results and prompt before saving
-- `--event <name>` scan a single event
-- `--format json` JSON output
+Common flags: `--event <name>`, `--events <names>`, `--dry-run`, `--confirm`, `--fresh`, `--resolve-missing`, `--format json`. See the [Flags](#flags) section for the full reference.
 
 > **Caching is on by default.** Emit caches LLM extractions by SHA-256 of the surrounding code context. Re-running a scan after no source changes is free and instant — only events whose code actually moved are re-extracted. Pass `--fresh` to force a full re-extraction.
 
@@ -132,7 +129,105 @@ Today only the event-level score gates `review_required` and the high/medium/low
 | `emit revert` | Restore an event definition from git history |
 | `emit mcp` | Start a local MCP server exposing the catalog to AI agents |
 
-Run `emit <command> --help` for detailed options on each command.
+Run `emit <command> --help` for a quick reminder inline.
+
+## Flags
+
+### `emit init`
+
+| Flag | Description |
+|------|-------------|
+| `-y, --yes` | Non-interactive mode — requires at least one of `--config-file`, `--llm-provider`, `--events`, or `--skip-events` |
+| `--config-file <path>` | Validate and copy a pre-written `emit.config.yml`. Conflicts with `--llm-provider`, `--events`, and `--skip-events` |
+| `--llm-provider <name>` | LLM provider: `claude-code` \| `anthropic` \| `openai` \| `openai-compatible` |
+| `--events <csv>` | Comma-separated event names to seed `manual_events` |
+| `--skip-events` | Create the config with no events seeded |
+| `--force` | Overwrite an existing `emit.config.yml` without confirming |
+
+### `emit scan`
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview output without writing the catalog file |
+| `--confirm` | Prompt whether to save after showing results |
+| `--fresh` | Force full re-extraction, ignoring cached results |
+| `--yes` | Non-interactive: auto-save without prompting (useful for CI) |
+| `--event <name>` | Scan a single specific event |
+| `--events <names>` | Scan multiple events (comma-separated) |
+| `--top-n <number>` | Override config `top_n` — number of events to scan |
+| `--resolve-missing [events]` | Use the LLM to locate renamed or missing events. Pass comma-separated names to target specific ones, or omit to target all not-found events |
+| `--provider <name>` | Override LLM provider for this run: `claude-code` \| `anthropic` \| `openai` \| `openai-compatible` |
+| `--model <name>` | Override LLM model for this run (e.g. `claude-opus-4-6`, `gpt-4o`) |
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+### `emit fix`
+
+| Flag | Description |
+|------|-------------|
+| `--yes` | Run headlessly (no interactive session); auto-run rescan after the fix |
+| `--force` | Skip the pre-flight check that rejects fixes which would hide already-cataloged events |
+
+### `emit import <file>`
+
+| Flag | Description |
+|------|-------------|
+| `--column <name>` | Column header containing event names (for multi-column CSVs) |
+| `--dry-run` | Show what would be imported without writing |
+| `--replace` | Replace existing `manual_events` instead of merging |
+
+### `emit push`
+
+| Flag | Description |
+|------|-------------|
+| `--destination <name>` | Push to a single destination only (match by `type` or custom `name` field) |
+| `--dry-run` | Preview what would be pushed without making API calls |
+| `--event <name>` | Push a single specific event only |
+| `--verbose` | Dump every HTTP request/response (for debugging custom adapters) |
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+### `emit status`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | Show full flag details for a specific event |
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+### `emit revert`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | **(required)** Event name to restore |
+| `--commit <sha>` | Commit SHA to restore from (prompted if omitted) |
+| `-y, --yes` | Skip the confirmation prompt; `--commit` is required in non-interactive mode |
+| `--expect-description <substr>` | Safety guard: refuse the revert unless the historical description contains this substring (case-insensitive) |
+
+### `emit mcp`
+
+| Flag | Description |
+|------|-------------|
+| `--catalog <path>` | Explicit path to `emit.catalog.yml`; overrides the path resolved from `emit.config.yml` |
+
+### `emit destination add [name]`
+
+| Flag | Description |
+|------|-------------|
+| `--auth <style>` | Auth style: `custom-header` \| `bearer` \| `basic` \| `none` |
+| `--env-var <name>` | Env var holding the credential |
+| `--header-name <name>` | HTTP header name (required when `--auth=custom-header`) |
+| `--docs-url <url>` | API docs URL — rendered as a TODO comment in the scaffolded adapter |
+| `-y, --yes` | Non-interactive: error instead of prompting for missing info |
+
+### `emit destination list`
+
+| Flag | Description |
+|------|-------------|
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+### `emit destination test <name>`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | Override the catalog event used for the test (defaults to the first event in the catalog) |
 
 ## Agentic / headless use
 

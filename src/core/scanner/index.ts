@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import type { BackendPatternConfig, CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, SDK_PATTERNS } from "./search.js";
+import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall } from "./search.js";
 import { extractContext, resolveEnumStringValue } from "./context.js";
 
 /** Cap per reference-file body so the LLM prompt never explodes. */
@@ -200,10 +200,10 @@ export class RepoScanner {
     // least one match to sit near a real tracking call; otherwise treat as
     // not_found rather than saddling the catalog with a phantom event.
     const broadMatchesRaw = await searchBroad(eventName, this.paths);
-    const sdkPatterns = this.sdk === "custom"
-      ? this.customPatterns
-      : SDK_PATTERNS[this.sdk] ?? [];
-    const allTrackingPatterns = [...sdkPatterns, ...this.customPatterns, ...this.backendPatterns];
+    // Patterns come from explicit config only — no SDK default inheritance.
+    // When the user hasn't configured patterns, broad search returns hits
+    // unfiltered so events from unfamiliar tracking shapes still surface.
+    const allTrackingPatterns = [...this.customPatterns, ...this.backendPatterns];
     const broadMatches = allTrackingPatterns.length > 0
       ? broadMatchesRaw.filter((m) => hasNearbyTrackingCall(m.file, m.line, allTrackingPatterns))
       : broadMatchesRaw;

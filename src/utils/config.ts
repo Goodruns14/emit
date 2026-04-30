@@ -72,7 +72,11 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
     ...(discriminator ? { discriminator_properties: discriminator } : {}),
     repo: {
       paths: ["./"],
-      sdk: "segment" as SdkType,
+      // Default to "custom" so configs without an explicit `sdk:` line don't
+      // silently inherit Segment-style tracking patterns at scan time. The
+      // `sdk` field is metadata only — runtime patterns come from explicit
+      // `track_pattern` / `backend_patterns` config.
+      sdk: "custom" as SdkType,
       ...raw.repo,
     },
     output: {

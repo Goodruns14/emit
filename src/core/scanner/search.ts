@@ -284,9 +284,13 @@ export async function searchDirect(
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
-  const patterns = sdk === "custom"
-    ? customPatterns ?? []
-    : SDK_PATTERNS[sdk] ?? [];
+  // Patterns come from explicit config only. The `sdk` field is metadata —
+  // we don't inherit defaults from SDK_PATTERNS at runtime, since that
+  // silently filters out events from unfamiliar tracking shapes (backend
+  // helpers, custom wrappers). When patterns are empty, isTrackingCallLine
+  // falls through to its built-in regex covering common tracking verbs.
+  void sdk;
+  const patterns = customPatterns ?? [];
 
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 
@@ -509,9 +513,10 @@ export async function searchConstant(
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
-  const patterns = sdk === "custom"
-    ? customPatterns ?? []
-    : SDK_PATTERNS[sdk] ?? [];
+  // See searchDirect: `sdk` is metadata only; patterns come from explicit
+  // config. Empty patterns → isTrackingCallLine regex fallback applies.
+  void sdk;
+  const patterns = customPatterns ?? [];
 
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 

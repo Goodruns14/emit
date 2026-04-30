@@ -126,6 +126,52 @@ Exemplar call sites (learn the idiom from these)
 ${renderExemplars(ctx)}${renderFeatureFiles(ctx)}
 
 ─────────────────────────────────────────────
+Naming + governance rules (apply to every event you propose)
+─────────────────────────────────────────────
+
+These rules take precedence over copying patterns from existing events. If
+an existing event in the catalog violates one of these rules, treat it as
+legacy debt — do NOT propagate the bad pattern into your new proposals.
+
+EVENT NAMES
+- Use object-action format: <Object> <PastTenseVerb>.
+    Good:  "Document Uploaded", "Subscription Cancelled", "Survey Completed"
+    Bad:   "Upload Document", "Cancel Sub", "User Did Thing"
+- Use past tense for completed actions. Never imperative or present-progressive.
+    Good:  "Survey Completed"
+    Bad:   "Survey Complete", "Submit Survey", "Submitting Survey"
+- Match the granularity of existing events. Don't mix high-level (e.g.
+  "Document Added") with low-level (e.g. "Save Button Clicked") in the same
+  catalog unless the existing repo already does this intentionally.
+- No system or version prefixes ("frontend_*", "v2_*", "new_*"). Events
+  should describe what happened, not where in the stack they fired.
+
+PROPERTY NAMES
+- Use nouns, not verbs: "documentId" not "did_upload_document".
+- Match the casing of existing property names in property_definitions
+  (camelCase / snake_case / etc.).
+- No abbreviations unless industry-idiomatic (id, url, ts, ip, sso).
+- Avoid PII in property names or values when an ID will do. Prefer
+  "userId" over "userEmail"; if you must capture an email, flag it
+  in the rationale and mention the privacy implication.
+- Avoid redundant state: if the event is "Document Uploaded", do NOT
+  add a property like "event_type: 'upload'". The event name carries that.
+- One concept per property. If a value is "linkedin|twitter|email", use
+  one prop "platform"; don't split into "is_linkedin", "is_twitter", etc.
+
+VERBS to prefer (clear, common, machine-friendly):
+   Viewed, Clicked, Submitted, Created, Updated, Deleted, Cancelled,
+   Started, Completed, Failed, Dismissed, Loaded, Opened, Closed,
+   Enabled, Disabled, Shared, Sent, Received, Uploaded, Downloaded.
+
+VERBS to avoid (vague):
+   Did, Got, Used, Triggered, Ran, Performed, Handled, Processed.
+
+If you propose an event that bends one of these rules (e.g. the existing
+repo's naming style genuinely conflicts with object+past-verb format),
+explain the choice in the rationale rather than ignoring the rule silently.
+
+─────────────────────────────────────────────
 Your workflow
 ─────────────────────────────────────────────
 

@@ -286,6 +286,64 @@ describe("buildAgentBrief", () => {
     expect(brief).toMatch(/NOT[\n\r ]+"props"/);
   });
 
+  it("includes governance rules: object + past-tense verb format", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/object-action format/i);
+    expect(brief).toMatch(/<PastTenseVerb>/);
+    // Concrete examples for both good and bad patterns.
+    expect(brief).toContain("Document Uploaded");
+    expect(brief).toContain("Subscription Cancelled");
+    expect(brief).toContain("User Did Thing");
+  });
+
+  it("includes governance rules: past tense, no system prefixes, granularity match", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/past tense for completed actions/i);
+    expect(brief).toMatch(/No system or version prefixes/i);
+    expect(brief).toMatch(/Match the granularity/i);
+  });
+
+  it("includes governance rules: property naming (nouns, no PII, no redundant state)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/Use nouns, not verbs/i);
+    expect(brief).toMatch(/Avoid PII/i);
+    expect(brief).toMatch(/Avoid redundant state/i);
+    expect(brief).toMatch(/One concept per property/i);
+  });
+
+  it("provides preferred and avoided verb lists for governance", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/VERBS to prefer/i);
+    expect(brief).toMatch(/VERBS to avoid/i);
+    // Spot-check membership of each list.
+    expect(brief).toContain("Viewed");
+    expect(brief).toContain("Completed");
+    expect(brief).toContain("Did");
+    expect(brief).toContain("Triggered");
+  });
+
+  it("tells the agent governance rules override legacy patterns in the catalog", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/take precedence/i);
+    expect(brief).toMatch(/legacy debt/i);
+    expect(brief).toMatch(/do NOT propagate the bad pattern/i);
+  });
+
   it("instructs the agent to split Shared vs Unique properties in the proposal display", () => {
     const brief = buildAgentBrief({
       ctx: makeCtx(),

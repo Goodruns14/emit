@@ -236,8 +236,7 @@ Your workflow
    - For "global_prop": prefer editing the tracking wrapper / helper if one
      exists, rather than touching every call site.
 
-6. PACKAGE the work. Follow this checklist IN ORDER. You MUST complete every
-   box before running \`git commit\`:
+6. PACKAGE the work. Just two file-writes, then stop:
 
    [  ] A. **CHECK \`emit.config.yml\` for a \`manual_events:\` list.** If it
           exists AND you're adding any brand-new event names, APPEND the new
@@ -255,35 +254,32 @@ Your workflow
           · For each instrumented event: the file + line + why you placed it there
           · Any edge cases flagged for the reviewer
 
-   [  ] C. Stage EVERYTHING in a single \`git add\`:
-          · The modified source files (code changes)
-          · \`emit.config.yml\` if you updated it in box A
-          · \`.emit/suggestions/\` (the reasoning doc directory)
+   [  ] C. **STOP.** Your job ends here. Do NOT run any of these commands:
+          · \`git add\`
+          · \`git commit\`
+          · \`git checkout\` (no branch creation or switching)
+          · \`git stash\`
+          · \`git push\`
+          · \`gh pr create\`
+          The user owns git workflow entirely — staging, committing, branching,
+          pushing, PR-opening — all of it. Your job is to leave the modified
+          files in the working tree and let the user decide what to do with them.
 
-   [  ] D. Make ONE commit with a message like
-          \`emit suggest: add <event names...>\`. Do NOT split into multiple
-          commits — one commit keeps the change easy to review and revert.
-
-   [  ] E. Do NOT create a new branch. Commit on whatever branch the user
-          is currently on — branch management is the user's decision, not
-          yours. Do NOT push. Do NOT open a PR. The user handles publication
-          on their own workflow.
-
-   If you realize mid-commit that you forgot a box (especially A), stop,
-   amend or redo the staging, and re-commit. It is always easier to get
-   this right the first time than to ship a half-finished commit.
-
-7. REPORT briefly to the user what you did, and tell them to \`/exit\`:
-   - Number of files changed (and which ones)
+7. REPORT briefly:
+   - Files modified (list them, no extra commentary)
    - Events instrumented (just the names)
-   - The commit was made on the user's current branch — do NOT print git
-     push or PR commands; the user owns their own publication workflow.
-   - End with a line that says explicitly:
-     "Type \`/exit\` to return to emit, which will then verify the new events
-     with \`emit scan --fresh\`."
-   Putting the \`/exit\` reminder at the END of your final message is critical
-   — emit showed this instruction at session start but it has long since
-   scrolled off-screen for the user.
+   - Add this exact line: "These changes are in your working tree, uncommitted.
+     Use git however you normally would — review with \`git diff\`, commit when
+     ready, or discard with \`git checkout -- .\` to start over."
+   - End with: "Type \`/exit\` to return to emit."
+
+   Keep it short. Do NOT enumerate git steps beyond the line above. Do NOT
+   suggest pushing, opening a PR, or any other workflow detail — that's the
+   user's call.
+
+   Putting the \`/exit\` reminder at the END of your message is critical — emit
+   showed this instruction at session start but it has long since scrolled
+   off-screen for the user.
 
 ─────────────────────────────────────────────
 Guardrails

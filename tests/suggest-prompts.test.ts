@@ -166,16 +166,19 @@ describe("buildAgentBrief", () => {
     expect(brief).not.toContain("Feature code the user pointed at");
   });
 
-  it("explicitly tells the agent NOT to create a new branch", () => {
+  it("explicitly tells the agent NOT to run any git commands", () => {
     const brief = buildAgentBrief({
       ctx: makeCtx(),
       branchSlug: "survey-dropoff",
     });
-    // We removed branch creation from the workflow — branch management is
-    // the user's responsibility, not the agent's.
-    expect(brief).toMatch(/Do NOT create a new branch/i);
-    expect(brief).toMatch(/branch management is the user's decision/i);
-    // And the brief should NOT contain instructions to checkout a new branch.
+    // The agent's job ends when files are on disk. NO git commands —
+    // not add, not commit, not checkout, not stash, not push.
+    expect(brief).toContain("`git add`");
+    expect(brief).toContain("`git commit`");
+    expect(brief).toContain("`git checkout`");
+    expect(brief).toContain("`git stash`");
+    expect(brief).toContain("`git push`");
+    // The brief should NOT contain instructions to checkout a new branch.
     expect(brief).not.toContain("git checkout -b");
     expect(brief).not.toContain("emit/suggest-survey-dropoff");
   });
@@ -209,13 +212,27 @@ describe("buildAgentBrief", () => {
     }
   });
 
-  it("tells the agent NOT to push or open a PR", () => {
+  it("frames git workflow as entirely the user's responsibility", () => {
     const brief = buildAgentBrief({
       ctx: makeCtx(),
       branchSlug: "x",
     });
-    expect(brief).toMatch(/Do NOT push/i);
-    expect(brief).toMatch(/Do NOT open a PR/i);
+    // Agent's job ends at "files on disk". User owns staging, committing,
+    // branching, pushing, PR-opening — all of it. [\s\S] handles line wrap.
+    expect(brief).toMatch(/user owns git workflow entirely/i);
+    expect(brief).toMatch(/staging,[\s\S]+committing,[\s\S]+branching,[\s\S]+pushing/i);
+  });
+
+  it("instructs the agent to point user toward `git diff` / `git checkout --` / `/exit` in the report", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    // The REPORT step should point to a small, neutral set of git options
+    // (review / discard) without prescribing commit/push/branch workflow.
+    expect(brief).toContain("`git diff`");
+    expect(brief).toContain("`git checkout -- .`");
+    expect(brief).toContain("Type `/exit` to return to emit");
   });
 
   it("tells the agent NOT to touch emit.catalog.yml", () => {
@@ -369,6 +386,8 @@ describe("buildAgentBrief", () => {
     });
     // The reminder should appear as part of step 7's reporting instructions.
     expect(brief).toMatch(/Type.+\/exit.+return to emit/s);
-    expect(brief).toContain("scrolled off-screen");
+    // The brief should justify why the reminder matters (startup banner has
+    // scrolled off by then). [\s\S] handles the line-wrap in the brief.
+    expect(brief).toMatch(/scrolled[\s\S]+off-screen/i);
   });
 });

@@ -113,6 +113,7 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   }
 
   const branchSlug = slugifyAsk(ask);
+  const currentBranch = await getCurrentBranch(repoRoot);
 
   // ── 4. Print header ──
   logger.blank();
@@ -136,6 +137,12 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
           : "")
     )
   );
+  // Show the current branch — informative, not prescriptive. User decides
+  // whether they want to be where they are. Branch management isn't emit's
+  // call.
+  if (currentBranch) {
+    logger.line(chalk.gray(`  Current branch:   ${currentBranch}`));
+  }
   logger.blank();
 
   // ── 5. Find claude binary ──
@@ -243,16 +250,18 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   }
 
   // ── 8. Next steps ──
-  // Branch management is the user's call — we just made a commit on whatever
-  // branch they were on. Tell them how to inspect / undo it; let them figure
-  // out push/PR using their own workflow.
+  // The agent left the changes UNCOMMITTED in the working tree (per current
+  // brief). User decides everything from here — review, stage, commit, branch,
+  // push, discard. Emit doesn't prescribe.
   logger.blank();
-  logger.line(chalk.gray("  The new commit is on your current branch."));
   logger.line(
-    chalk.gray("    Review:  ") + chalk.cyan("git log -1 -p")
+    chalk.gray("  The new code is in your working tree, uncommitted.")
   );
   logger.line(
-    chalk.gray("    Undo:    ") + chalk.cyan("git reset --hard HEAD~1")
+    chalk.gray("    Review:   ") + chalk.cyan("git diff")
+  );
+  logger.line(
+    chalk.gray("    Discard:  ") + chalk.cyan("git checkout -- .")
   );
   logger.blank();
 
@@ -326,6 +335,27 @@ const EMIT_ARTIFACT_PATHS = [
   "emit.catalog.yml",
   "emit.config.yml",
 ];
+
+/**
+ * Return the current git branch name, or null if we can't determine it (not
+ * a repo, detached HEAD, etc.). Used by the main-branch pre-flight check.
+ *
+ * Exported for testing.
+ */
+export async function getCurrentBranch(repoRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await execa(
+      "git",
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      { cwd: repoRoot }
+    );
+    const branch = stdout.trim();
+    if (!branch || branch === "HEAD") return null; // detached HEAD
+    return branch;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Return `git status --porcelain` output filtered to only lines that represent

@@ -17,11 +17,31 @@ const explorer = cosmiconfig("emit", {
   ],
 });
 
-function resolveEnvVars(value: unknown): unknown {
+/**
+ * Resolve `${VAR}` references in a config value tree against `process.env`.
+ *
+ * @param opts.lenient — if true, leave unresolved references as the literal
+ *   `${VAR}` string instead of throwing. Used by `loadConfigLight` so commands
+ *   that don't actually need credentials (MCP server, `emit suggest`, etc.) can
+ *   load the config without forcing the user to set every env var referenced
+ *   in unrelated sections (warehouse tokens, destination credentials, etc.).
+ *   Strict mode is still used by `loadConfig`, so commands that DO need creds
+ *   still fail fast with a clear error.
+ */
+function resolveEnvVars(
+  value: unknown,
+  opts: { lenient?: boolean } = {}
+): unknown {
   if (typeof value === "string") {
-    return value.replace(/\$\{([^}]+)\}/g, (_, key) => {
+    return value.replace(/\$\{([^}]+)\}/g, (match, key) => {
       const resolved = process.env[key];
       if (!resolved) {
+        if (opts.lenient) {
+          // Leave the reference verbatim — downstream code that actually
+          // uses this value will fail at use-time with a clearer error,
+          // and code that never touches it just doesn't care.
+          return match;
+        }
         throw new Error(
           `Missing required environment variable: ${key}\n` +
             `  Set ${key} in your environment or .env file.`
@@ -31,13 +51,13 @@ function resolveEnvVars(value: unknown): unknown {
     });
   }
   if (Array.isArray(value)) {
-    return value.map(resolveEnvVars);
+    return value.map((v) => resolveEnvVars(v, opts));
   }
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([k, v]) => [
         k,
-        resolveEnvVars(v),
+        resolveEnvVars(v, opts),
       ])
     );
   }
@@ -160,7 +180,12 @@ export async function loadConfigLight(searchFrom?: string): Promise<EmitConfig> 
     );
   }
 
-  const resolved = resolveEnvVars(result.config) as Partial<EmitConfig>;
+  // Lenient mode: leave unresolved ${VAR} references as literals. Commands
+  // using loadConfigLight (MCP server, `emit suggest`) typically only need
+  // catalog path + a few non-credential fields. Forcing the user to set
+  // warehouse/destination env vars they don't need for this command would be
+  // user-hostile.
+  const resolved = resolveEnvVars(result.config, { lenient: true }) as Partial<EmitConfig>;
   return applyDefaults(resolved);
 }
 

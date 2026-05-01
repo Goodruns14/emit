@@ -34,7 +34,7 @@ export function registerSuggest(program: Command): void {
     )
     .option(
       "--ask <text>",
-      'Non-interactive: provide the ask up front (e.g. "measure survey drop-off per question")'
+      'Non-interactive: provide the ask up front (e.g. "measure where users drop off during signup")'
     )
     .option("--format <format>", "Output format: text (default) or json")
     .option(
@@ -270,10 +270,10 @@ async function promptForAsk(): Promise<string> {
   logger.line(chalk.gray("  What do you want to do?"));
   logger.blank();
   logger.line(chalk.gray("  Examples:"));
-  logger.line(chalk.gray('    • "measure survey drop-off per question"'));
-  logger.line(chalk.gray('    • "add chart_type to chart_created"'));
-  logger.line(chalk.gray('    • "add is_employee to every event"'));
-  logger.line(chalk.gray('    • "instrument this feature: apps/web/yir/"'));
+  logger.line(chalk.gray('    • "measure where users drop off during signup"'));
+  logger.line(chalk.gray('    • "add a status property to checkout_completed"'));
+  logger.line(chalk.gray('    • "add user_tier to every event"'));
+  logger.line(chalk.gray('    • "instrument this feature: components/checkout/"'));
   logger.blank();
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -405,7 +405,7 @@ async function runDebugContext(opts: SuggestOptions): Promise<number> {
   if (!opts.ask) {
     process.stderr.write(
       "--debug-context requires --ask <text>\n" +
-        '  Example: emit suggest --debug-context --ask "measure survey drop-off"\n'
+        '  Example: emit suggest --debug-context --ask "measure where users drop off during signup"\n'
     );
     return 1;
   }

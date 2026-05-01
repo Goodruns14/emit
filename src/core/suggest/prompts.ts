@@ -86,10 +86,12 @@ export function slugifyAsk(ask: string): string {
  */
 export function buildAgentBrief(args: {
   ctx: SuggestContext;
+  /** Slug used to name the reasoning doc file (e.g. "instrument-checkout").
+   *  Branch management is intentionally NOT part of this command — the user
+   *  decides what branch to be on; emit just commits there. */
   branchSlug: string;
 }): string {
   const { ctx, branchSlug } = args;
-  const branchName = `emit/suggest-${branchSlug}`;
   const reasoningDocPath = `.emit/suggestions/${branchSlug}.md`;
 
   return `
@@ -237,9 +239,7 @@ Your workflow
 6. PACKAGE the work. Follow this checklist IN ORDER. You MUST complete every
    box before running \`git commit\`:
 
-   [  ] A. Create the new branch: \`git checkout -b ${branchName}\`
-
-   [  ] B. **CHECK \`emit.config.yml\` for a \`manual_events:\` list.** If it
+   [  ] A. **CHECK \`emit.config.yml\` for a \`manual_events:\` list.** If it
           exists AND you're adding any brand-new event names, APPEND the new
           names to that list now. This is NOT optional — without it, the
           post-merge \`emit scan\` will NOT find your new events and the
@@ -248,34 +248,36 @@ Your workflow
           quote yours the same way). If the config has no \`manual_events:\`
           list (automatic discovery mode), skip this box.
 
-   [  ] C. Write the reasoning doc at \`${reasoningDocPath}\` containing:
+   [  ] B. Write the reasoning doc at \`${reasoningDocPath}\` containing:
           · The user's original ask (verbatim)
           · Any clarifying Q&A
           · The list of proposed + accepted events (with rationale + confidence)
           · For each instrumented event: the file + line + why you placed it there
           · Any edge cases flagged for the reviewer
 
-   [  ] D. Stage EVERYTHING in a single \`git add\`:
+   [  ] C. Stage EVERYTHING in a single \`git add\`:
           · The modified source files (code changes)
-          · \`emit.config.yml\` if you updated it in box B
+          · \`emit.config.yml\` if you updated it in box A
           · \`.emit/suggestions/\` (the reasoning doc directory)
 
-   [  ] E. Make ONE commit with a message like
+   [  ] D. Make ONE commit with a message like
           \`emit suggest: add <event names...>\`. Do NOT split into multiple
-          commits — one commit keeps the branch easy to review and revert.
+          commits — one commit keeps the change easy to review and revert.
 
-   [  ] F. Do NOT push. Do NOT open a PR. The user will handle that.
+   [  ] E. Do NOT create a new branch. Commit on whatever branch the user
+          is currently on — branch management is the user's decision, not
+          yours. Do NOT push. Do NOT open a PR. The user handles publication
+          on their own workflow.
 
-   If you realize mid-commit that you forgot a box (especially B), stop,
+   If you realize mid-commit that you forgot a box (especially A), stop,
    amend or redo the staging, and re-commit. It is always easier to get
    this right the first time than to ship a half-finished commit.
 
 7. REPORT briefly to the user what you did, and tell them to \`/exit\`:
-   - Branch name
-   - Number of files changed
-   - Events instrumented
-   - Next step (show this exact line so the user can copy it):
-     \`git push -u origin ${branchName} && gh pr create\`
+   - Number of files changed (and which ones)
+   - Events instrumented (just the names)
+   - The commit was made on the user's current branch — do NOT print git
+     push or PR commands; the user owns their own publication workflow.
    - End with a line that says explicitly:
      "Type \`/exit\` to return to emit, which will then verify the new events
      with \`emit scan --fresh\`."
@@ -290,13 +292,13 @@ Guardrails
 - Only modify files that directly relate to the accepted suggestions plus the
   reasoning doc. Don't refactor unrelated code.
 - Never touch \`emit.catalog.yml\` — the catalog is an output. It updates itself
-  on the next \`emit scan\` after merge. (See PACKAGE step box B for
+  on the next \`emit scan\` after merge. (See PACKAGE step box A for
   \`emit.config.yml\` — that's a different file and you DO update it.)
 - If you can't confidently place an event (e.g. the feature code doesn't show
   a clear trigger), stop and ask the user rather than guessing.
-- If the user's working tree has uncommitted changes when you start, stash or
-  ask them to stash before creating the branch — don't carry unrelated changes
-  into the commit.
+- If the user's working tree has unrelated uncommitted changes, only stage
+  the files YOU edited (the source files plus \`emit.config.yml\` and the
+  reasoning doc). Don't sweep everything into the commit with \`git add -A\`.
 - Keep suggestions scoped to the ask. A "measure survey drop-off" ask produces
   ~2–4 events, not a full instrumentation redesign.
 `.trim();

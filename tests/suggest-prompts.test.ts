@@ -166,12 +166,18 @@ describe("buildAgentBrief", () => {
     expect(brief).not.toContain("Feature code the user pointed at");
   });
 
-  it("instructs the agent to use the exact branch name passed in", () => {
+  it("explicitly tells the agent NOT to create a new branch", () => {
     const brief = buildAgentBrief({
       ctx: makeCtx(),
       branchSlug: "survey-dropoff",
     });
-    expect(brief).toContain("emit/suggest-survey-dropoff");
+    // We removed branch creation from the workflow — branch management is
+    // the user's responsibility, not the agent's.
+    expect(brief).toMatch(/Do NOT create a new branch/i);
+    expect(brief).toMatch(/branch management is the user's decision/i);
+    // And the brief should NOT contain instructions to checkout a new branch.
+    expect(brief).not.toContain("git checkout -b");
+    expect(brief).not.toContain("emit/suggest-survey-dropoff");
   });
 
   it("instructs the agent to write a reasoning doc at the expected path", () => {
@@ -226,7 +232,8 @@ describe("buildAgentBrief", () => {
       branchSlug: "x",
     });
     // Should be a checkbox item inside PACKAGE, not just a guardrail bullet.
-    expect(brief).toMatch(/\[\s*\]\s*B\..*manual_events/s);
+    // (Originally box B, now box A — branch creation was removed from PACKAGE.)
+    expect(brief).toMatch(/\[\s*\]\s*A\..*manual_events/s);
     expect(brief).toContain("NOT optional");
   });
 

@@ -113,7 +113,6 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   }
 
   const branchSlug = slugifyAsk(ask);
-  const branchName = `emit/suggest-${branchSlug}`;
 
   // ── 4. Print header ──
   logger.blank();
@@ -137,7 +136,6 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
           : "")
     )
   );
-  logger.line(chalk.gray(`  Target branch:    ${branchName}`));
   logger.blank();
 
   // ── 5. Find claude binary ──
@@ -245,18 +243,16 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   }
 
   // ── 8. Next steps ──
+  // Branch management is the user's call — we just made a commit on whatever
+  // branch they were on. Tell them how to inspect / undo it; let them figure
+  // out push/PR using their own workflow.
   logger.blank();
-  logger.line(chalk.gray("  Next steps:"));
+  logger.line(chalk.gray("  The new commit is on your current branch."));
   logger.line(
-    chalk.gray("    Review:  ") + chalk.cyan(`git diff main`)
+    chalk.gray("    Review:  ") + chalk.cyan("git log -1 -p")
   );
   logger.line(
-    chalk.gray("    Ship:    ") +
-      chalk.cyan(`git push -u origin ${branchName} && gh pr create`)
-  );
-  logger.line(
-    chalk.gray("    Discard: ") +
-      chalk.cyan(`git checkout main && git branch -D ${branchName}`)
+    chalk.gray("    Undo:    ") + chalk.cyan("git reset --hard HEAD~1")
   );
   logger.blank();
 

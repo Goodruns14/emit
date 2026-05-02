@@ -90,17 +90,114 @@ export function buildAgentBrief(args: {
    *  Branch management is intentionally NOT part of this command — the user
    *  decides what branch to be on; emit just commits there. */
   branchSlug: string;
+  /** When true, the brief drops every step that requires user interaction
+   *  (CLARIFY questions, CONFIRM-before-implement, the `/exit` reminder).
+   *  Used when emit launches Claude Code via `-p` / `--permission-mode
+   *  acceptEdits` (i.e. `emit suggest --yes`). The agent must instead make
+   *  best-judgment defaults and surface uncertainty in the reasoning doc with
+   *  `confidence: low` rather than stalling for a human. */
+  headless?: boolean;
 }): string {
-  const { ctx, branchSlug } = args;
+  const { ctx, branchSlug, headless = false } = args;
   const reasoningDocPath = `.emit/suggestions/${branchSlug}.md`;
 
-  return `
-You are helping a developer instrument analytics events in their repository.
+  const intro = headless
+    ? `You are helping a developer instrument analytics events in their repository.
+The user has an existing event catalog (from \`emit scan\`), a tracking wrapper
+already in use throughout the code, and a free-text ask about what they want
+to change. You are running in HEADLESS mode — there is no human on the other
+end of this session. Interpret the ask, choose the events/edits yourself using
+best-judgment defaults, implement them in code, and leave the changes
+uncommitted in the working tree for the user to review later.`
+    : `You are helping a developer instrument analytics events in their repository.
 The user has an existing event catalog (from \`emit scan\`), a tracking wrapper
 already in use throughout the code, and a free-text ask about what they want
 to change. Your job is to interpret the ask, propose concrete events or edits,
 confirm with the user, implement the changes in code, and commit everything
-to a new branch.
+to a new branch.`;
+
+  const clarifyStep = headless
+    ? `2. PROCEED with best-judgment defaults. There is no user to ask. If the ask
+   is ambiguous, pick the simplest interpretation, mark every uncertain choice
+   \`confidence: low\` in the reasoning doc, and continue. Do NOT stall, do NOT
+   write a question and wait for an answer — there will be no answer.`
+    : `2. CLARIFY if (and only if) the ask is truly ambiguous AND you can't proceed
+   well from the context. Ask at most 2 event-design questions. NEVER ask about:
+   user identity, anonymous vs logged-in, session stitching, attribution,
+   timezone handling, or CDP destinations. Those are the user's analytics-infra
+   concern, not yours.`;
+
+  const confirmStep = headless
+    ? `4. SKIP confirmation — there is no user to confirm with. Implement every
+   event you proposed in step 3 directly. Mark any you'd normally hedge on as
+   \`confidence: low\` in the reasoning doc so the user can drop them on review.`
+    : `4. CONFIRM with the user which suggestions to accept. Let them drop any they
+   don't want. Iterate if they push back.`;
+
+  const implementStep = headless
+    ? `5. IMPLEMENT each proposed suggestion:
+   - Match the wrapper shown in the exemplars exactly (function name, arg shape,
+     prop casing, import style). If the catalog's track_patterns is empty, infer
+     the wrapper from the exemplar code above.
+   - Place the call at the user-intent moment (after a successful API response,
+     in a submit handler, etc.) — not in a render function.
+   - Use in-scope variables; don't invent ones. If you're not sure a variable
+     exists, pick the simplest grounded expression and record the uncertainty
+     in the reasoning doc with \`confidence: low\`. Do NOT ask — there is no
+     user to answer.
+   - For "add_property": locate the existing call site and insert one new prop.
+   - For "rename_event" / "rename_property": replace the old literal in place.
+   - For "global_prop": prefer editing the tracking wrapper / helper if one
+     exists, rather than touching every call site.`
+    : `5. IMPLEMENT each accepted suggestion:
+   - Match the wrapper shown in the exemplars exactly (function name, arg shape,
+     prop casing, import style). If the catalog's track_patterns is empty, infer
+     the wrapper from the exemplar code above.
+   - Place the call at the user-intent moment (after a successful API response,
+     in a submit handler, etc.) — not in a render function.
+   - Use in-scope variables; don't invent ones. If you're not sure a variable
+     exists, pick the simplest grounded expression or ask the user.
+   - For "add_property": locate the existing call site and insert one new prop.
+   - For "rename_event" / "rename_property": replace the old literal in place.
+   - For "global_prop": prefer editing the tracking wrapper / helper if one
+     exists, rather than touching every call site.`;
+
+  const reportStep = headless
+    ? `7. REPORT briefly:
+   - Files modified (list them, no extra commentary)
+   - Events instrumented (just the names)
+   - Add this exact line: "These changes are in the working tree, uncommitted.
+     The user will review them with \`git diff\` and decide whether to keep
+     each one."
+
+   Keep it short. Do NOT enumerate git steps. Do NOT suggest pushing or opening
+   a PR. The user owns git workflow entirely.`
+    : `7. REPORT briefly:
+   - Files modified (list them, no extra commentary)
+   - Events instrumented (just the names)
+   - Add this exact line: "These changes are in your working tree, uncommitted.
+     Use git however you normally would — review with \`git diff\`, commit when
+     ready, or discard with \`git checkout -- .\` to start over."
+   - End with: "Type \`/exit\` to return to emit."
+
+   Keep it short. Do NOT enumerate git steps beyond the line above. Do NOT
+   suggest pushing, opening a PR, or any other workflow detail — that's the
+   user's call.
+
+   Putting the \`/exit\` reminder at the END of your message is critical — emit
+   showed this instruction at session start but it has long since scrolled
+   off-screen for the user.`;
+
+  const placementGuardrail = headless
+    ? `- If you can't confidently place an event (e.g. the feature code doesn't show
+  a clear trigger), record the uncertainty in the reasoning doc with
+  \`confidence: low\` and place your best guess. Do NOT stop and ask — there
+  is no user to answer.`
+    : `- If you can't confidently place an event (e.g. the feature code doesn't show
+  a clear trigger), stop and ask the user rather than guessing.`;
+
+  return `
+${intro}
 
 ─────────────────────────────────────────────
 User's ask
@@ -184,11 +281,7 @@ Your workflow
    - "feature_launch"  — user pointed at feature code; propose events for value moments
    - "other"           — generic edit
 
-2. CLARIFY if (and only if) the ask is truly ambiguous AND you can't proceed
-   well from the context. Ask at most 2 event-design questions. NEVER ask about:
-   user identity, anonymous vs logged-in, session stitching, attribution,
-   timezone handling, or CDP destinations. Those are the user's analytics-infra
-   concern, not yours.
+${clarifyStep}
 
 3. PROPOSE events or edits. For each, tell the user:
    - The event name (in the repo's naming style)
@@ -220,21 +313,9 @@ Your workflow
    Show shared properties once at the top of the group, unique props per event
    below each. Confidence should be explicit (high/medium/low).
 
-4. CONFIRM with the user which suggestions to accept. Let them drop any they
-   don't want. Iterate if they push back.
+${confirmStep}
 
-5. IMPLEMENT each accepted suggestion:
-   - Match the wrapper shown in the exemplars exactly (function name, arg shape,
-     prop casing, import style). If the catalog's track_patterns is empty, infer
-     the wrapper from the exemplar code above.
-   - Place the call at the user-intent moment (after a successful API response,
-     in a submit handler, etc.) — not in a render function.
-   - Use in-scope variables; don't invent ones. If you're not sure a variable
-     exists, pick the simplest grounded expression or ask the user.
-   - For "add_property": locate the existing call site and insert one new prop.
-   - For "rename_event" / "rename_property": replace the old literal in place.
-   - For "global_prop": prefer editing the tracking wrapper / helper if one
-     exists, rather than touching every call site.
+${implementStep}
 
 6. PACKAGE the work. Just two file-writes, then stop:
 
@@ -265,21 +346,7 @@ Your workflow
           pushing, PR-opening — all of it. Your job is to leave the modified
           files in the working tree and let the user decide what to do with them.
 
-7. REPORT briefly:
-   - Files modified (list them, no extra commentary)
-   - Events instrumented (just the names)
-   - Add this exact line: "These changes are in your working tree, uncommitted.
-     Use git however you normally would — review with \`git diff\`, commit when
-     ready, or discard with \`git checkout -- .\` to start over."
-   - End with: "Type \`/exit\` to return to emit."
-
-   Keep it short. Do NOT enumerate git steps beyond the line above. Do NOT
-   suggest pushing, opening a PR, or any other workflow detail — that's the
-   user's call.
-
-   Putting the \`/exit\` reminder at the END of your message is critical — emit
-   showed this instruction at session start but it has long since scrolled
-   off-screen for the user.
+${reportStep}
 
 ─────────────────────────────────────────────
 Guardrails
@@ -290,8 +357,7 @@ Guardrails
 - Never touch \`emit.catalog.yml\` — the catalog is an output. It updates itself
   on the next \`emit scan\` after merge. (See PACKAGE step box A for
   \`emit.config.yml\` — that's a different file and you DO update it.)
-- If you can't confidently place an event (e.g. the feature code doesn't show
-  a clear trigger), stop and ask the user rather than guessing.
+${placementGuardrail}
 - If the user's working tree has unrelated uncommitted changes, only stage
   the files YOU edited (the source files plus \`emit.config.yml\` and the
   reasoning doc). Don't sweep everything into the commit with \`git add -A\`.

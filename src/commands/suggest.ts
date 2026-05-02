@@ -20,6 +20,10 @@ interface SuggestOptions {
   ask?: string;
   /** Output format (reserved for future use). */
   format?: string;
+  /** Headless mode — launch Claude Code via `-p --permission-mode acceptEdits`,
+   *  skip every interactive prompt, and auto-run the post-exit verification
+   *  scan with --yes. Requires --ask <text>. Mirrors `emit fix --yes`. */
+  yes?: boolean;
   /** Developer affordance: print the LLM context bundle and exit. No LLM call. */
   debugContext?: boolean;
   /** Developer affordance: print the agent brief and exit. No LLM call. */
@@ -35,6 +39,10 @@ export function registerSuggest(program: Command): void {
     .option(
       "--ask <text>",
       'Non-interactive: provide the ask up front (e.g. "measure where users drop off during signup")'
+    )
+    .option(
+      "-y, --yes",
+      "Run Claude Code headlessly (no interactive session); auto-run rescan after. Requires --ask."
     )
     .option("--format <format>", "Output format: text (default) or json")
     .option(
@@ -60,7 +68,18 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   if (opts.debugContext) return runDebugContext(opts);
   if (opts.debugPrompt) return runDebugPrompt(opts);
 
+  const headless = opts.yes ?? false;
+
   // ── 1. Collect the ask ──
+  // Headless mode requires --ask up front; there is no stdin to prompt on.
+  if (headless && !opts.ask) {
+    process.stderr.write(
+      "--yes requires --ask <text>\n" +
+        '  Example: emit suggest --yes --ask "measure where users drop off during signup"\n'
+    );
+    return 1;
+  }
+
   let ask = opts.ask;
   if (!ask) {
     ask = await promptForAsk();
@@ -160,7 +179,9 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   // ── 5b. Pre-flight clean-tree check ──
   // If the working tree has uncommitted changes, Claude Code can't reliably
   // distinguish "user's in-progress work" from "existing instrumentation".
-  // Warn before handing over and let the user decide.
+  // Interactive: warn + ask. Headless: warn to stderr only — match `emit fix
+  // --yes`'s "trust the operator" stance. The reasoning doc the agent writes
+  // will list every file it touched, so the recovery path stays reviewable.
   const dirtyStatus = await getDirtyStatus(repoRoot);
   if (dirtyStatus.length > 0) {
     logger.line(chalk.yellow("  ⚠ Working tree has uncommitted changes:"));
@@ -175,22 +196,31 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
         "  Claude Code will see these as existing tracking and may propose edits instead of new events."
       )
     );
-    logger.line(
-      chalk.gray("  Recommended: ") +
-        chalk.cyan("git stash") +
-        chalk.gray(" first, then re-run emit suggest.")
-    );
-    logger.blank();
-    const proceed = await promptYesNo(
-      "  Proceed anyway with the dirty tree? [y/N]: ",
-      false
-    );
-    if (!proceed) {
+    if (headless) {
+      logger.line(
+        chalk.gray("  Headless mode (--yes): proceeding anyway. Review with ") +
+          chalk.cyan("git diff") +
+          chalk.gray(" after.")
+      );
       logger.blank();
-      logger.line(chalk.gray("  Aborted. Nothing changed."));
-      return 0;
+    } else {
+      logger.line(
+        chalk.gray("  Recommended: ") +
+          chalk.cyan("git stash") +
+          chalk.gray(" first, then re-run emit suggest.")
+      );
+      logger.blank();
+      const proceed = await promptYesNo(
+        "  Proceed anyway with the dirty tree? [y/N]: ",
+        false
+      );
+      if (!proceed) {
+        logger.blank();
+        logger.line(chalk.gray("  Aborted. Nothing changed."));
+        return 0;
+      }
+      logger.blank();
     }
-    logger.blank();
   }
 
   // ── 6. Write the brief to disk and shell out to Claude Code ──
@@ -203,22 +233,39 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   // Instead: write the brief to a tempfile and pass Claude Code a tiny pointer.
   // Claude Code reads the file via its Read tool (same context flows through)
   // and the visible conversation stays short enough to fit in-viewport.
-  const brief = buildAgentBrief({ ctx, branchSlug });
+  const brief = buildAgentBrief({ ctx, branchSlug, headless });
   const briefPath = writeBriefFile(brief, branchSlug);
 
   logger.line(chalk.gray(`  Brief written to: ${briefPath}`));
-  logger.line(
-    chalk.gray("  Claude Code will open. Review each edit, then type") +
-      chalk.cyan(" /exit") +
-      chalk.gray(" when done.")
-  );
+  if (headless) {
+    logger.line(
+      chalk.gray("  Running Claude Code headlessly (--yes). No prompts.")
+    );
+  } else {
+    logger.line(
+      chalk.gray("  Claude Code will open. Review each edit, then type") +
+        chalk.cyan(" /exit") +
+        chalk.gray(" when done.")
+    );
+  }
   logger.blank();
 
   const pointerPrompt = buildPointerPrompt(briefPath);
 
   let claudeRan = false;
   try {
-    await execa(claudeBin, [pointerPrompt], { stdio: "inherit" });
+    if (headless) {
+      // -p prints to stdout/stderr instead of opening the TUI; acceptEdits
+      // lets the agent write files without per-edit prompts. Same pattern as
+      // `emit fix --yes` (see src/commands/fix.ts:invokeClaude).
+      await execa(
+        claudeBin,
+        ["-p", "--permission-mode", "acceptEdits", pointerPrompt],
+        { stdio: ["ignore", "inherit", "inherit"] }
+      );
+    } else {
+      await execa(claudeBin, [pointerPrompt], { stdio: "inherit" });
+    }
     claudeRan = true;
   } catch (err: any) {
     if (err.exitCode !== undefined) {
@@ -233,14 +280,26 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   if (!claudeRan) return 1;
 
   // ── 7. Post-exit verification via emit scan --fresh ──
+  // Headless: auto-run with --yes (the inner scan would otherwise prompt to
+  // save and hang). Interactive: ask first.
   logger.blank();
-  const runScan = await promptYesNo(
-    "  Run emit scan --fresh to verify the new events are discoverable? [Y/n]: ",
-    true
-  );
+  let runScan: boolean;
+  if (headless) {
+    runScan = true;
+    logger.line(
+      chalk.gray("  Running emit scan --fresh --yes to verify discoverability...")
+    );
+  } else {
+    runScan = await promptYesNo(
+      "  Run emit scan --fresh to verify the new events are discoverable? [Y/n]: ",
+      true
+    );
+  }
   if (runScan) {
     try {
-      await execa("node", [process.argv[1], "scan", "--fresh"], {
+      const scanArgs = ["scan", "--fresh"];
+      if (headless) scanArgs.push("--yes");
+      await execa("node", [process.argv[1], ...scanArgs], {
         stdio: "inherit",
       });
     } catch (err: any) {

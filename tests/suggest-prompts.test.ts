@@ -391,3 +391,148 @@ describe("buildAgentBrief", () => {
     expect(brief).toMatch(/scrolled[\s\S]+off-screen/i);
   });
 });
+
+// ──────────────────────────────────────────────
+// buildAgentBrief — headless mode (emit suggest --yes)
+// ──────────────────────────────────────────────
+//
+// In headless mode, the agent runs under `claude -p --permission-mode
+// acceptEdits` — there's no user to answer clarifying questions, no
+// confirm-before-implement step, no /exit reminder (no TUI). Uncertainty
+// must surface in the reasoning doc with `confidence: low` instead of
+// stalling for a human. Governance + naming rules and the PACKAGE/git
+// guardrails stay intact — those don't depend on interactivity.
+
+describe("buildAgentBrief — headless mode", () => {
+  it("declares HEADLESS mode in the intro so the agent knows there's no user", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).toMatch(/HEADLESS mode/);
+    expect(brief).toMatch(/no human on the other[\s\S]+end/i);
+  });
+
+  it("strips the CLARIFY step and replaces it with PROCEED defaults", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    // Headless brief must NOT keep the interactive CLARIFY language — the
+    // agent would otherwise stall waiting for an answer that never comes.
+    expect(brief).not.toMatch(/CLARIFY if \(and only if\)/);
+    expect(brief).not.toMatch(/Ask at most 2 event-design questions/);
+    // Replacement step must explicitly forbid stalling.
+    expect(brief).toMatch(/PROCEED with best-judgment defaults/);
+    expect(brief).toMatch(/Do NOT stall/);
+    expect(brief).toMatch(/confidence: low/);
+  });
+
+  it("strips the CONFIRM-before-implement step", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).not.toMatch(/CONFIRM with the user which suggestions to accept/);
+    // Implement step must use "proposed" not "accepted" since there's no
+    // accept/reject round.
+    expect(brief).toMatch(/IMPLEMENT each proposed suggestion/);
+  });
+
+  it("removes the /exit reminder from the report step", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    // No TUI, no /exit. Removing this also removes the long justification
+    // about banner scrollback.
+    expect(brief).not.toMatch(/Type.+\/exit.+return to emit/s);
+    expect(brief).not.toMatch(/scrolled[\s\S]+off-screen/i);
+  });
+
+  it("removes the 'ask the user' fallback in the IMPLEMENT step", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    // Interactive brief said "or ask the user" for missing variables. Headless
+    // must instead record uncertainty and proceed.
+    expect(brief).not.toMatch(/pick the simplest grounded expression or ask the user/);
+    expect(brief).toMatch(/record the uncertainty in the reasoning doc/);
+  });
+
+  it("keeps governance/naming rules unchanged (those don't depend on interactivity)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).toMatch(/object-action format/i);
+    expect(brief).toMatch(/<PastTenseVerb>/);
+    expect(brief).toMatch(/Avoid PII/i);
+    expect(brief).toMatch(/VERBS to prefer/);
+    expect(brief).toMatch(/VERBS to avoid/);
+    expect(brief).toMatch(/take precedence/i);
+  });
+
+  it("keeps the no-git-commands guardrail (still the user's call, even headless)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    // The agent's job ends at file writes regardless of mode — emit doesn't
+    // commit/push for the user even when running headless.
+    expect(brief).toContain("`git add`");
+    expect(brief).toContain("`git commit`");
+    expect(brief).toContain("`git push`");
+  });
+
+  it("keeps the manual_events update box (PACKAGE box A)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).toMatch(/\[\s*\]\s*A\..*manual_events/s);
+    expect(brief).toContain("NOT optional");
+  });
+
+  it("keeps the reasoning doc requirement at the expected path", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "survey-dropoff",
+      headless: true,
+    });
+    expect(brief).toContain(".emit/suggestions/survey-dropoff.md");
+  });
+
+  it("rewrites the placement guardrail to record uncertainty instead of stopping", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).not.toMatch(/stop and ask the user rather than guessing/);
+    expect(brief).toMatch(/place your best guess/);
+  });
+
+  it("interactive brief still contains every interactive marker (regression check)", () => {
+    // Default (non-headless) brief must keep everything headless mode strips.
+    const brief = buildAgentBrief({
+      ctx: makeCtx(),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/CLARIFY if \(and only if\)/);
+    expect(brief).toMatch(/CONFIRM with the user/);
+    expect(brief).toMatch(/Type.+\/exit.+return to emit/s);
+    expect(brief).toMatch(/IMPLEMENT each accepted suggestion/);
+    expect(brief).toMatch(/stop and ask the user rather than guessing/);
+    expect(brief).not.toMatch(/HEADLESS mode/);
+  });
+});

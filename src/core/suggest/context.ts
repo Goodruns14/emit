@@ -45,8 +45,12 @@ export async function buildSuggestContext(args: {
   catalog: EmitCatalog;
   repoRoot: string;
   featurePaths?: string[];
+  /** Optional `wrapper_purposes` map from `emit.config.yml`. Filtered to only
+   *  the wrappers actually present in the catalog before rendering — a tag
+   *  for a wrapper that doesn't appear anywhere is noise. */
+  wrapperPurposes?: Record<string, string>;
 }): Promise<SuggestContext> {
-  const { userAsk, catalog, repoRoot, featurePaths } = args;
+  const { userAsk, catalog, repoRoot, featurePaths, wrapperPurposes } = args;
 
   const eventEntries = Object.entries(catalog.events);
 
@@ -56,6 +60,10 @@ export async function buildSuggestContext(args: {
   const property_definitions = mapPropertyDefs(catalog.property_definitions);
   const exemplars = pickExemplars(eventEntries, repoRoot);
   const stack_locality = computeStackLocality(eventEntries);
+  const wrapper_purposes = filterWrapperPurposesToCatalog(
+    wrapperPurposes,
+    track_patterns
+  );
   const feature_files = featurePaths?.length
     ? loadFeatureFiles(featurePaths, repoRoot)
     : undefined;
@@ -68,8 +76,30 @@ export async function buildSuggestContext(args: {
     property_definitions,
     exemplars,
     stack_locality,
+    wrapper_purposes,
     feature_files,
   };
+}
+
+/**
+ * Trim the user's `wrapper_purposes` config to just the wrappers actually
+ * appearing in the catalog. A purpose tag for a wrapper not in use today is
+ * clutter — and worse, it can confuse the agent if the user's project has
+ * multiple emit configs and the tag here doesn't apply to this catalog.
+ *
+ * Exported for testing.
+ */
+export function filterWrapperPurposesToCatalog(
+  raw: Record<string, string> | undefined,
+  trackPatterns: string[]
+): Record<string, string> {
+  if (!raw || Object.keys(raw).length === 0) return {};
+  const inUse = new Set(trackPatterns);
+  const out: Record<string, string> = {};
+  for (const [pattern, purpose] of Object.entries(raw)) {
+    if (inUse.has(pattern)) out[pattern] = purpose;
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────

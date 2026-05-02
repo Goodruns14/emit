@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as yaml from "js-yaml";
 import type { EmitCatalog, CatalogEvent } from "../types/index.js";
@@ -12,7 +12,7 @@ export interface CommitEntry {
 
 export function getCurrentCommit(): string {
   try {
-    return execSync("git rev-parse --short HEAD", {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
@@ -28,8 +28,9 @@ export function getCatalogHistory(filePath: string): CommitEntry[] {
       ? `${filePath}/_index.yml`
       : filePath;
 
-    const output = execSync(
-      `git log --follow --format="%H|%ai|%s" -- "${trackPath}"`,
+    const output = execFileSync(
+      "git",
+      ["log", "--follow", "--format=%H|%ai|%s", "--", trackPath],
       { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
     ).trim();
 
@@ -74,7 +75,7 @@ function getEventAtCommitFile(
   sha: string
 ): CatalogEvent | null {
   try {
-    const content = execSync(`git show "${sha}:${catalogFile}"`, {
+    const content = execFileSync("git", ["show", `${sha}:${catalogFile}`], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -95,7 +96,7 @@ function getEventAtCommitDirectory(
     // Try the direct slug path first
     const slug = slugifyEventName(eventName);
     const eventPath = `${catalogDir}/events/${slug}.yml`;
-    const content = execSync(`git show "${sha}:${eventPath}"`, {
+    const content = execFileSync("git", ["show", `${sha}:${eventPath}`], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -118,17 +119,18 @@ function scanEventFilesAtCommit(
   sha: string
 ): CatalogEvent | null {
   try {
-    const listing = execSync(`git ls-tree --name-only "${sha}" "${catalogDir}/events/"`, {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const listing = execFileSync(
+      "git",
+      ["ls-tree", "--name-only", sha, `${catalogDir}/events/`],
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
 
     if (!listing) return null;
 
     for (const filePath of listing.split("\n").filter(Boolean)) {
       if (!filePath.endsWith(".yml") && !filePath.endsWith(".yaml")) continue;
       try {
-        const content = execSync(`git show "${sha}:${filePath}"`, {
+        const content = execFileSync("git", ["show", `${sha}:${filePath}`], {
           encoding: "utf8",
           stdio: ["pipe", "pipe", "pipe"],
         });
@@ -146,7 +148,7 @@ function scanEventFilesAtCommit(
 
 export function isGitRepo(cwd?: string): boolean {
   try {
-    execSync("git rev-parse --git-dir", {
+    execFileSync("git", ["rev-parse", "--git-dir"], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
       cwd: cwd ?? process.cwd(),
@@ -166,7 +168,7 @@ export function getCatalogAtRef(ref: string, catalogPath: string): EmitCatalog |
 
 function getCatalogAtRefFile(ref: string, catalogPath: string): EmitCatalog | null {
   try {
-    const content = execSync(`git show "${ref}:${catalogPath}"`, {
+    const content = execFileSync("git", ["show", `${ref}:${catalogPath}`], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -180,25 +182,27 @@ function getCatalogAtRefFile(ref: string, catalogPath: string): EmitCatalog | nu
 function getCatalogAtRefDirectory(ref: string, catalogDir: string): EmitCatalog | null {
   try {
     // Read _index.yml at ref
-    const indexContent = execSync(`git show "${ref}:${catalogDir}/_index.yml"`, {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const indexContent = execFileSync(
+      "git",
+      ["show", `${ref}:${catalogDir}/_index.yml`],
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    );
     const index = yaml.load(indexContent) as any;
     if (!index || typeof index !== "object") return null;
 
     // Enumerate event files at ref
-    const listing = execSync(`git ls-tree --name-only "${ref}" "${catalogDir}/events/"`, {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const listing = execFileSync(
+      "git",
+      ["ls-tree", "--name-only", ref, `${catalogDir}/events/`],
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
 
     const events: Record<string, CatalogEvent> = {};
     if (listing) {
       for (const filePath of listing.split("\n").filter(Boolean)) {
         if (!filePath.endsWith(".yml") && !filePath.endsWith(".yaml")) continue;
         try {
-          const content = execSync(`git show "${ref}:${filePath}"`, {
+          const content = execFileSync("git", ["show", `${ref}:${filePath}`], {
             encoding: "utf8",
             stdio: ["pipe", "pipe", "pipe"],
           });
@@ -232,10 +236,11 @@ function getCatalogAtRefDirectory(ref: string, catalogDir: string): EmitCatalog 
 
 export function getChangedFiles(baseRef: string): string[] {
   try {
-    const output = execSync(`git diff --name-only "${baseRef}...HEAD"`, {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const output = execFileSync(
+      "git",
+      ["diff", "--name-only", `${baseRef}...HEAD`],
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    ).trim();
     if (!output) return [];
     return output.split("\n").filter(Boolean);
   } catch {
@@ -244,9 +249,11 @@ export function getChangedFiles(baseRef: string): string[] {
 }
 
 export function getLastModifier(filePath: string, lineNumber: number): string | null {
+  if (!Number.isInteger(lineNumber) || lineNumber < 1) return null;
   try {
-    const output = execSync(
-      `git log -1 --format="%an" -L ${lineNumber},${lineNumber}:"${filePath}"`,
+    const output = execFileSync(
+      "git",
+      ["log", "-1", "--format=%an", `-L${lineNumber},${lineNumber}:${filePath}`],
       { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
     ).trim();
     return output.split("\n")[0] || null;
@@ -257,7 +264,7 @@ export function getLastModifier(filePath: string, lineNumber: number): string | 
 
 export function getRelativeCatalogPath(absolutePath: string): string {
   try {
-    const root = execSync("git rev-parse --show-toplevel", {
+    const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();

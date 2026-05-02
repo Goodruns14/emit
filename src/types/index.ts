@@ -552,6 +552,28 @@ export type DiscriminatorPropertyConfig = string | {
 export interface EmitConfig {
   manual_events?: string[];
   discriminator_properties?: Record<string, DiscriminatorPropertyConfig>;
+  /** Optional purpose tag per tracking wrapper. Used by `emit suggest` to
+   *  disambiguate which wrapper to use when multiple wrappers coexist (often
+   *  in the same files) — e.g. `posthog.capture(` for product analytics vs
+   *  `trackEvent(` for system telemetry. The agent classifies the user's ask
+   *  against these purposes and reaches for the matching wrapper.
+   *
+   *  Keys are the exact wrapper-call prefixes that appear in your code (same
+   *  shape as `repo.track_pattern`). Values are free-form purpose strings;
+   *  conventional values are `product_analytics` and `system_telemetry`, but
+   *  any string the user wants is fine — the agent reads the literal tag.
+   *
+   *  Untagged wrappers fall back to per-file mimicry (the brief tells the
+   *  agent to use whatever wrapper is already in scope in the target file).
+   *  When this field is absent, the wrapper-purposes section of the brief is
+   *  omitted entirely — fully back-compatible.
+   *
+   *  Example:
+   *    wrapper_purposes:
+   *      "posthog.capture(": product_analytics
+   *      "trackEvent(":      system_telemetry
+   */
+  wrapper_purposes?: Record<string, string>;
   repo: {
     paths: string[];
     sdk: SdkType;
@@ -655,6 +677,12 @@ export interface SuggestContext {
     /** How many of the directory's events use this pattern (for transparency). */
     event_count: number;
   }[];
+  /** Per-wrapper purpose tags from `emit.config.yml` `wrapper_purposes:`. Lets
+   *  the agent disambiguate intent in mixed-purpose files (product analytics
+   *  vs system telemetry) where structural cues alone aren't enough. Empty
+   *  object when the user hasn't tagged any wrappers — the brief renderer
+   *  omits the section entirely. */
+  wrapper_purposes: Record<string, string>;
   /** Feature code snippets when the user pointed at file paths. */
   feature_files?: {
     file: string;

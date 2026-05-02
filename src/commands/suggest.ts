@@ -108,6 +108,7 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
     catalog,
     repoRoot,
     featurePaths: featurePaths.length > 0 ? featurePaths : undefined,
+    wrapperPurposes: config.wrapper_purposes,
   });
 
   // ── 3b. Empty-catalog guard ──
@@ -514,6 +515,7 @@ async function runDebugContext(opts: SuggestOptions): Promise<number> {
     catalog,
     repoRoot,
     featurePaths: featurePaths.length > 0 ? featurePaths : undefined,
+    wrapperPurposes: config.wrapper_purposes,
   });
 
   process.stderr.write(chalk.bold("\n── Context bundle (debug) ──\n"));
@@ -589,6 +591,7 @@ async function runDebugPrompt(opts: SuggestOptions): Promise<number> {
     catalog,
     repoRoot,
     featurePaths: featurePaths.length > 0 ? featurePaths : undefined,
+    wrapperPurposes: config.wrapper_purposes,
   });
 
   const brief = buildAgentBrief({ ctx, branchSlug: slugifyAsk(opts.ask) });

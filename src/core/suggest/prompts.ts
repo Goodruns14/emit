@@ -64,6 +64,44 @@ function renderStackLocality(ctx: SuggestContext): string {
 }
 
 /**
+ * Render the per-wrapper purpose tags, or an empty string when the user
+ * hasn't tagged any. Resolves the mixed-by-FILE case that locality can't
+ * (locality is per-directory; this is per-wrapper, by intent). The agent
+ * is instructed to classify the user's ask against these purposes and
+ * pick the wrapper whose purpose matches.
+ *
+ * Suppression: empty map → empty string. We render even with a single
+ * tagged wrapper because it's still useful guidance (the agent knows what
+ * that wrapper is FOR), but the section's value compounds with multiple.
+ */
+function renderWrapperPurposes(ctx: SuggestContext): string {
+  const entries = Object.entries(ctx.wrapper_purposes ?? {});
+  if (entries.length === 0) return "";
+  // Stable sort by pattern so the rendered block is deterministic for tests.
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  const rows = entries
+    .map(([pattern, purpose]) => `  - ${pattern}  → ${purpose}`)
+    .join("\n");
+  return [
+    "",
+    "",
+    "Wrapper purposes (each wrapper has a tagged intent; pick the one matching the ask):",
+    rows,
+    "",
+    "  Classify the user's ask against these purposes BEFORE writing any code:",
+    "    - product_analytics: user behavior, funnels, retention, experimentation",
+    "    - system_telemetry:  latency, errors, retries, ops alerting, infra health",
+    "    - other tags:        treat the literal tag as the intent description",
+    "",
+    "  Use the wrapper whose purpose matches. If a target file already imports both",
+    "  wrappers (mixed-purpose file), the purpose tag — not file proximity — drives",
+    "  the choice. If the ask is genuinely cross-cutting (e.g. \"track payment failures\"",
+    "  meaning both UX drop-off AND API error), pick the dominant intent and flag the",
+    "  ambiguity in the reasoning doc with `confidence: low`.",
+  ].join("\n");
+}
+
+/**
  * Slug-ify a free-text ask for use in a git branch name / reasoning doc filename.
  * Keeps [a-z0-9-], collapses other runs to "-", truncates to 40 chars.
  */
@@ -224,7 +262,7 @@ ${ctx.user_ask}
 Repo conventions (YOUR OUTPUT MUST MATCH THESE)
 ─────────────────────────────────────────────
   Naming style:   ${ctx.naming_style}
-  Track patterns: ${renderTrackPatterns(ctx)}${renderStackLocality(ctx)}
+  Track patterns: ${renderTrackPatterns(ctx)}${renderStackLocality(ctx)}${renderWrapperPurposes(ctx)}
 
 Existing events (${ctx.existing_events.length} total):
 ${renderExistingEvents(ctx)}

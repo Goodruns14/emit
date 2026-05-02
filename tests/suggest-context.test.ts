@@ -8,6 +8,7 @@ import {
   collectTrackPatterns,
   computeStackLocality,
   extractFeaturePaths,
+  filterWrapperPurposesToCatalog,
   inferNamingStyle,
   loadFeatureFiles,
   mapPropertyDefs,
@@ -711,5 +712,113 @@ describe("computeStackLocality", () => {
     ];
     const hints = computeStackLocality(entries);
     expect(hints.map((h) => h.directory)).toEqual(["aaa", "zzz"]);
+  });
+});
+
+// ──────────────────────────────────────────────
+// filterWrapperPurposesToCatalog
+// ──────────────────────────────────────────────
+//
+// The user's wrapper_purposes config is filtered to only the wrappers that
+// actually appear as track_patterns in the catalog. Tags for unused wrappers
+// are clutter and can mislead the agent (esp. if multiple emit configs exist
+// in adjacent projects and the tag here doesn't apply to this catalog).
+
+describe("filterWrapperPurposesToCatalog", () => {
+  it("returns empty object when raw is undefined", () => {
+    expect(filterWrapperPurposesToCatalog(undefined, ["posthog.capture("])).toEqual({});
+  });
+
+  it("returns empty object when raw is empty", () => {
+    expect(filterWrapperPurposesToCatalog({}, ["posthog.capture("])).toEqual({});
+  });
+
+  it("keeps tags whose pattern is in the catalog", () => {
+    const out = filterWrapperPurposesToCatalog(
+      {
+        "posthog.capture(": "product_analytics",
+        "trackEvent(": "system_telemetry",
+      },
+      ["posthog.capture(", "trackEvent("]
+    );
+    expect(out).toEqual({
+      "posthog.capture(": "product_analytics",
+      "trackEvent(": "system_telemetry",
+    });
+  });
+
+  it("drops tags whose pattern is NOT in the catalog (stale config defense)", () => {
+    // The user might have configured a tag for a wrapper that's no longer
+    // used (legacy tracking removed). Keeping the tag in the brief would
+    // mislead the agent into proposing the dead wrapper.
+    const out = filterWrapperPurposesToCatalog(
+      {
+        "posthog.capture(": "product_analytics",
+        "deadWrapper(": "system_telemetry",
+      },
+      ["posthog.capture("]
+    );
+    expect(out).toEqual({ "posthog.capture(": "product_analytics" });
+  });
+
+  it("returns empty when no tags match the catalog", () => {
+    const out = filterWrapperPurposesToCatalog(
+      { "deadWrapper(": "system_telemetry" },
+      ["posthog.capture("]
+    );
+    expect(out).toEqual({});
+  });
+});
+
+// ──────────────────────────────────────────────
+// buildSuggestContext + wrapper_purposes plumbing
+// ──────────────────────────────────────────────
+
+describe("buildSuggestContext — wrapper_purposes plumbing", () => {
+  it("populates ctx.wrapper_purposes from the wrapperPurposes arg", async () => {
+    const catalog = makeCatalog({
+      survey_published: makeEvent({ track_pattern: "capturePostHogEvent(" }),
+    });
+    const ctx = await buildSuggestContext({
+      userAsk: "x",
+      catalog,
+      repoRoot: tmpRepo,
+      wrapperPurposes: {
+        "capturePostHogEvent(": "product_analytics",
+      },
+    });
+    expect(ctx.wrapper_purposes).toEqual({
+      "capturePostHogEvent(": "product_analytics",
+    });
+  });
+
+  it("returns an empty object when no wrapperPurposes provided (back-compat)", async () => {
+    const catalog = makeCatalog({
+      survey_published: makeEvent({ track_pattern: "capturePostHogEvent(" }),
+    });
+    const ctx = await buildSuggestContext({
+      userAsk: "x",
+      catalog,
+      repoRoot: tmpRepo,
+    });
+    expect(ctx.wrapper_purposes).toEqual({});
+  });
+
+  it("filters tags to wrappers actually in the catalog", async () => {
+    const catalog = makeCatalog({
+      survey_published: makeEvent({ track_pattern: "capturePostHogEvent(" }),
+    });
+    const ctx = await buildSuggestContext({
+      userAsk: "x",
+      catalog,
+      repoRoot: tmpRepo,
+      wrapperPurposes: {
+        "capturePostHogEvent(": "product_analytics",
+        "deadWrapper(": "system_telemetry",
+      },
+    });
+    expect(ctx.wrapper_purposes).toEqual({
+      "capturePostHogEvent(": "product_analytics",
+    });
   });
 });

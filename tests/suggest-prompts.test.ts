@@ -35,6 +35,7 @@ function makeCtx(overrides: Partial<SuggestContext> = {}): SuggestContext {
       },
     ],
     stack_locality: [],
+    wrapper_purposes: {},
     ...overrides,
   };
 }
@@ -605,5 +606,170 @@ describe("buildAgentBrief — stack-locality rendering", () => {
     });
     expect(brief).toMatch(/Stack locality/);
     expect(brief).toMatch(/apps\/api\/ → trackEvent\(/);
+  });
+});
+
+// ──────────────────────────────────────────────
+// buildAgentBrief — wrapper-purposes rendering
+// ──────────────────────────────────────────────
+//
+// Wrapper purposes resolve the mixed-by-FILE case that locality can't:
+// when posthog.capture( and trackEvent( both live in the same file,
+// directory-level dominance is undefined and the agent has to choose
+// from semantic intent alone. The brief block surfaces user-provided
+// purpose tags and instructs the agent to classify the ask before
+// writing code.
+
+describe("buildAgentBrief — wrapper-purposes rendering", () => {
+  it("renders one line per tagged wrapper with pattern → purpose", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+          "trackEvent(": "system_telemetry",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/Wrapper purposes/);
+    expect(brief).toMatch(/posthog\.capture\(\s+→ product_analytics/);
+    expect(brief).toMatch(/trackEvent\(\s+→ system_telemetry/);
+  });
+
+  it("includes the ask-classification instruction (not just data)", () => {
+    // The block must tell the agent what to DO, not just what the tags are.
+    // Otherwise it becomes inert metadata.
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+          "trackEvent(": "system_telemetry",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/Classify the user's ask against these purposes/i);
+    expect(brief).toMatch(/BEFORE writing any code/i);
+  });
+
+  it("includes the mixed-purpose file precedence rule", () => {
+    // The whole reason this feature exists: when a file has both wrappers
+    // imported, purpose tag wins over file-proximity. Brief must say so.
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+          "trackEvent(": "system_telemetry",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/mixed-purpose file/i);
+    expect(brief).toMatch(/purpose tag.*not file proximity/i);
+  });
+
+  it("documents the cross-cutting fallback (flag with confidence: low)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+          "trackEvent(": "system_telemetry",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/cross-cutting/i);
+    expect(brief).toMatch(/confidence: low/);
+  });
+
+  it("describes the conventional purposes (product_analytics, system_telemetry)", () => {
+    // Without descriptions, the agent has to guess what these mean. The
+    // brief should ground them so classification is reliable.
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+          "trackEvent(": "system_telemetry",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/product_analytics:.*funnels/i);
+    expect(brief).toMatch(/system_telemetry:.*latency/i);
+  });
+
+  it("supports user-defined purposes (treats the tag as its own description)", () => {
+    // Users aren't restricted to the conventional pair. Custom purposes
+    // ("marketing_attribution", etc.) must render verbatim.
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "marketing.track(": "marketing_attribution",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/marketing\.track\(\s+→ marketing_attribution/);
+    // Brief should still acknowledge custom tags exist.
+    expect(brief).toMatch(/other tags:.*literal tag/i);
+  });
+
+  it("renders a single tag (still useful — knows that wrapper's intent)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+        },
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/Wrapper purposes/);
+    expect(brief).toMatch(/posthog\.capture\(\s+→ product_analytics/);
+  });
+
+  it("omits the section entirely when wrapper_purposes is empty (back-compat)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({ wrapper_purposes: {} }),
+      branchSlug: "x",
+    });
+    // No "Wrapper purposes" header — the section is gone, not rendered with
+    // empty rows. Otherwise existing users without the config get a confusing
+    // blank block.
+    expect(brief).not.toMatch(/Wrapper purposes/);
+    expect(brief).not.toMatch(/Classify the user's ask against these purposes/i);
+  });
+
+  it("renders deterministically (alphabetical by pattern)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "zzz_track(": "z_purpose",
+          "aaa_track(": "a_purpose",
+          "mmm_track(": "m_purpose",
+        },
+      }),
+      branchSlug: "x",
+    });
+    const aIdx = brief.indexOf("aaa_track(");
+    const mIdx = brief.indexOf("mmm_track(");
+    const zIdx = brief.indexOf("zzz_track(");
+    expect(aIdx).toBeGreaterThan(0);
+    expect(mIdx).toBeGreaterThan(aIdx);
+    expect(zIdx).toBeGreaterThan(mIdx);
+  });
+
+  it("renders in headless brief as well (purpose classification is mode-agnostic)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        wrapper_purposes: {
+          "posthog.capture(": "product_analytics",
+          "trackEvent(": "system_telemetry",
+        },
+      }),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).toMatch(/Wrapper purposes/);
+    expect(brief).toMatch(/Classify the user's ask/i);
   });
 });

@@ -49,9 +49,14 @@ async function callClaudeCode(prompt: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     // Pipe prompt via stdin instead of as a CLI argument to avoid
     // arg-length limits and the "no stdin data" warning.
+    // Timeout is 120s by default; long-running calls (complex prompts, large
+    // outputs) can exceed this. Opt-in override via EMIT_CLAUDE_CODE_TIMEOUT_MS
+    // for dev/debug use without changing the default for existing commands.
+    const timeoutMs =
+      Number(process.env.EMIT_CLAUDE_CODE_TIMEOUT_MS) || 120_000;
     const child = spawn(bin, ["-p", "-"], {
       stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120_000,
+      timeout: timeoutMs,
     });
 
     child.stdin!.end(prompt);

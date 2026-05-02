@@ -416,6 +416,21 @@ export interface SuggestContext {
     line: number;
     code: string; // windowed context
   }[];
+  /** Per-directory mapping of which `track_pattern` dominates which top-level
+   *  area of the repo. Only populated when the catalog has ≥2 distinct patterns
+   *  AND ≥2 directory groups each have a clear (≥70%) winner. Empty array
+   *  means "single-pattern repo, or no clear locality" — the renderer omits
+   *  the hint entirely in those cases. Helps the agent pick the right wrapper
+   *  in mixed-stack repos (frontend SDK + backend HTTP wrapper) without
+   *  having to grep the file first. */
+  stack_locality: {
+    /** Directory prefix, normalized to forward slashes (e.g. "apps/api"). */
+    directory: string;
+    /** The dominant `track_pattern` for events under this directory. */
+    pattern: string;
+    /** How many of the directory's events use this pattern (for transparency). */
+    event_count: number;
+  }[];
   /** Feature code snippets when the user pointed at file paths. */
   feature_files?: {
     file: string;

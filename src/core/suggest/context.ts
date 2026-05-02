@@ -55,6 +55,7 @@ export async function buildSuggestContext(args: {
   const existing_events = summarizeEvents(eventEntries);
   const property_definitions = mapPropertyDefs(catalog.property_definitions);
   const exemplars = pickExemplars(eventEntries, repoRoot);
+  const stack_locality = computeStackLocality(eventEntries);
   const feature_files = featurePaths?.length
     ? loadFeatureFiles(featurePaths, repoRoot)
     : undefined;
@@ -66,6 +67,7 @@ export async function buildSuggestContext(args: {
     existing_events,
     property_definitions,
     exemplars,
+    stack_locality,
     feature_files,
   };
 }
@@ -162,6 +164,19 @@ const CONFIDENCE_RANK: Record<CatalogEvent["confidence"], number> = {
  * Select up to MAX_EXEMPLARS call sites from the catalog, biased toward
  * high-confidence events and diverse source files. Reads the actual file
  * contents via extractContext() so the LLM sees real code, not just names.
+ *
+ * Selection order, in priority:
+ *   1. **Per-pattern coverage** — guarantee at least one exemplar per distinct
+ *      `track_pattern` in the catalog. In mixed-stack repos (e.g. frontend
+ *      `posthog.capture(` + backend `trackEvent(`), this prevents the agent
+ *      from seeing only one wrapper and applying it to the wrong stack.
+ *   2. **File diversity** — fill remaining slots one-per-unique-source-file,
+ *      so the agent sees varied placement patterns (handler, middleware, hook,
+ *      etc.) rather than five calls from the same file.
+ *   3. **Backfill** — allow file repeats if there's still room.
+ *
+ * Within each pass, events are sorted by confidence (high → low) then by
+ * property count (fewer → more) so simpler, cleaner call sites win ties.
  */
 export function pickExemplars(
   entries: [string, CatalogEvent][],
@@ -176,14 +191,14 @@ export function pickExemplars(
 
   const picked: SuggestContext["exemplars"] = [];
   const seenFiles = new Set<string>();
+  const seenEvents = new Set<string>();
 
-  // First pass: one per unique source file.
-  for (const [name, ev] of sorted) {
-    if (picked.length >= MAX_EXEMPLARS) break;
-    if (!ev.source_file || !ev.source_line) continue;
-    if (seenFiles.has(ev.source_file)) continue;
+  const tryPick = (name: string, ev: CatalogEvent): boolean => {
+    if (picked.length >= MAX_EXEMPLARS) return false;
+    if (seenEvents.has(name)) return false;
+    if (!ev.source_file || !ev.source_line) return false;
     const code = safeExtractContext(repoRoot, ev.source_file, ev.source_line);
-    if (!code) continue;
+    if (!code) return false;
     picked.push({
       event_name: name,
       file: ev.source_file,
@@ -191,22 +206,39 @@ export function pickExemplars(
       code,
     });
     seenFiles.add(ev.source_file);
+    seenEvents.add(name);
+    return true;
+  };
+
+  // ── Pass 1: per-pattern coverage ──
+  // For each distinct track_pattern, lock in the best (highest-confidence,
+  // simplest) event using that pattern. The naive file-diversity pass below
+  // skews toward whichever pattern dominates the high-confidence tier; in a
+  // 90%-frontend / 10%-backend split it can fill all 5 slots from frontend
+  // and leave the backend wrapper invisible to the agent.
+  const patternsCovered = new Set<string>();
+  for (const [name, ev] of sorted) {
+    if (picked.length >= MAX_EXEMPLARS) break;
+    if (!ev.track_pattern) continue;
+    if (patternsCovered.has(ev.track_pattern)) continue;
+    if (tryPick(name, ev)) {
+      patternsCovered.add(ev.track_pattern);
+    }
   }
 
-  // Second pass: fill remaining slots allowing file repeats if needed.
+  // ── Pass 2: one per unique source file ──
+  for (const [name, ev] of sorted) {
+    if (picked.length >= MAX_EXEMPLARS) break;
+    if (!ev.source_file) continue;
+    if (seenFiles.has(ev.source_file)) continue;
+    tryPick(name, ev);
+  }
+
+  // ── Pass 3: backfill, file repeats allowed ──
   if (picked.length < MAX_EXEMPLARS) {
     for (const [name, ev] of sorted) {
       if (picked.length >= MAX_EXEMPLARS) break;
-      if (!ev.source_file || !ev.source_line) continue;
-      if (picked.some((p) => p.event_name === name)) continue;
-      const code = safeExtractContext(repoRoot, ev.source_file, ev.source_line);
-      if (!code) continue;
-      picked.push({
-        event_name: name,
-        file: ev.source_file,
-        line: ev.source_line,
-        code,
-      });
+      tryPick(name, ev);
     }
   }
 
@@ -227,6 +259,101 @@ function safeExtractContext(
   } catch {
     return null;
   }
+}
+
+// ─────────────────────────────────────────────
+// stack locality
+// ─────────────────────────────────────────────
+
+/** Minimum share of a directory's events that must use one pattern before we
+ *  call it the "dominant" pattern for that directory. 0.7 = 70%. Below this,
+ *  the directory is too mixed to give the agent useful guidance. */
+const LOCALITY_DOMINANCE_THRESHOLD = 0.7;
+/** Minimum number of cataloged events under a directory before we'll claim a
+ *  locality rule for it. Avoids "1 of 1 = 100%" false positives. */
+const LOCALITY_MIN_EVENTS = 2;
+/** Number of leading path segments used to group events into "directories".
+ *  Two segments handles monorepo layouts like `apps/api`, `apps/web`,
+ *  `packages/server`. Single-segment trees (`src/foo.ts`) collapse to their
+ *  one segment naturally. */
+const LOCALITY_PATH_DEPTH = 2;
+
+/**
+ * Derive per-directory wrapper hints to render in the brief. Only useful for
+ * mixed-stack repos (frontend SDK + backend HTTP wrapper, multiple analytics
+ * providers, etc.) where the agent benefits from knowing which wrapper to
+ * reach for in which area of the tree.
+ *
+ * Returns `[]` (and the renderer omits the section) when:
+ *   - the catalog has <2 distinct track_patterns (single-pattern repo, no
+ *     locality to teach)
+ *   - <2 directory groups have a clear (≥70%) dominant pattern (too mixed
+ *     for a clean rule, the brief's exemplars carry the load)
+ *
+ * The threshold is intentional: a half-noisy rule is worse than no rule —
+ * the agent might trust it and apply the wrong wrapper. Better to fall back
+ * to the per-file mimicry the brief already prescribes.
+ *
+ * Exported for testing.
+ */
+export function computeStackLocality(
+  entries: [string, CatalogEvent][]
+): SuggestContext["stack_locality"] {
+  const distinctPatterns = new Set<string>();
+  for (const [, ev] of entries) {
+    if (ev.track_pattern) distinctPatterns.add(ev.track_pattern);
+  }
+  if (distinctPatterns.size < 2) return [];
+
+  // dir → pattern → count
+  const buckets = new Map<string, Map<string, number>>();
+  for (const [, ev] of entries) {
+    if (!ev.source_file || !ev.track_pattern) continue;
+    const dir = directoryPrefix(ev.source_file, LOCALITY_PATH_DEPTH);
+    if (!dir) continue;
+    if (!buckets.has(dir)) buckets.set(dir, new Map());
+    const inner = buckets.get(dir)!;
+    inner.set(ev.track_pattern, (inner.get(ev.track_pattern) ?? 0) + 1);
+  }
+
+  const hints: SuggestContext["stack_locality"] = [];
+  for (const [dir, patternCounts] of buckets) {
+    const total = [...patternCounts.values()].reduce((a, b) => a + b, 0);
+    if (total < LOCALITY_MIN_EVENTS) continue;
+    let topPattern: string | null = null;
+    let topCount = 0;
+    for (const [pattern, count] of patternCounts) {
+      if (count > topCount) {
+        topPattern = pattern;
+        topCount = count;
+      }
+    }
+    if (!topPattern) continue;
+    if (topCount / total < LOCALITY_DOMINANCE_THRESHOLD) continue;
+    hints.push({ directory: dir, pattern: topPattern, event_count: topCount });
+  }
+
+  if (hints.length < 2) return [];
+
+  // Stable sort: alphabetical by directory keeps test output deterministic
+  // and makes the rendered list easy to scan for users.
+  hints.sort((a, b) => a.directory.localeCompare(b.directory));
+  return hints;
+}
+
+/**
+ * Take the first `depth` path segments of a source file's directory.
+ * Normalizes to forward slashes and strips a leading "./".
+ *   "apps/api/orders/handler.ts" + 2 → "apps/api"
+ *   "src/foo.ts"                  + 2 → "src"
+ *   "index.ts"                    + 2 → ""        (renderer treats "" as skip)
+ */
+function directoryPrefix(sourceFile: string, depth: number): string {
+  const normalized = sourceFile.replace(/\\/g, "/").replace(/^\.\//, "");
+  const dir = path.posix.dirname(normalized);
+  if (dir === "." || dir === "") return "";
+  const segments = dir.split("/").filter((s) => s.length > 0);
+  return segments.slice(0, depth).join("/");
 }
 
 // ─────────────────────────────────────────────

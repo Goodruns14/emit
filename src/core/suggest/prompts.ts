@@ -50,6 +50,20 @@ function renderTrackPatterns(ctx: SuggestContext): string {
 }
 
 /**
+ * Render the per-directory wrapper hints, or an empty string when locality
+ * isn't useful (single-pattern repo, or no clear dominance — see
+ * computeStackLocality for the suppression rules). Designed to slot in just
+ * after the Repo conventions block so the agent reads it before the exemplars.
+ */
+function renderStackLocality(ctx: SuggestContext): string {
+  if (!ctx.stack_locality || ctx.stack_locality.length === 0) return "";
+  const rows = ctx.stack_locality
+    .map((h) => `  - ${h.directory}/ → ${h.pattern}  (${h.event_count} events)`)
+    .join("\n");
+  return `\n\nStack locality (use the matching wrapper when editing files under each directory):\n${rows}`;
+}
+
+/**
  * Slug-ify a free-text ask for use in a git branch name / reasoning doc filename.
  * Keeps [a-z0-9-], collapses other runs to "-", truncates to 40 chars.
  */
@@ -210,7 +224,7 @@ ${ctx.user_ask}
 Repo conventions (YOUR OUTPUT MUST MATCH THESE)
 ─────────────────────────────────────────────
   Naming style:   ${ctx.naming_style}
-  Track patterns: ${renderTrackPatterns(ctx)}
+  Track patterns: ${renderTrackPatterns(ctx)}${renderStackLocality(ctx)}
 
 Existing events (${ctx.existing_events.length} total):
 ${renderExistingEvents(ctx)}

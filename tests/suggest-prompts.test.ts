@@ -34,6 +34,7 @@ function makeCtx(overrides: Partial<SuggestContext> = {}): SuggestContext {
         code: "capturePostHogEvent('survey_response_received', {\n  survey_id: response.surveyId,\n  organization_id: org.id,\n});",
       },
     ],
+    stack_locality: [],
     ...overrides,
   };
 }
@@ -534,5 +535,75 @@ describe("buildAgentBrief — headless mode", () => {
     expect(brief).toMatch(/IMPLEMENT each accepted suggestion/);
     expect(brief).toMatch(/stop and ask the user rather than guessing/);
     expect(brief).not.toMatch(/HEADLESS mode/);
+  });
+});
+
+// ──────────────────────────────────────────────
+// buildAgentBrief — stack-locality rendering
+// ──────────────────────────────────────────────
+//
+// Stack-locality hints get rendered just after the track_patterns line.
+// Should appear when ctx.stack_locality has entries; should be entirely
+// absent when the array is empty (the suppression rules in
+// computeStackLocality already filter the bad cases out — the renderer
+// just needs to honor the empty array).
+
+describe("buildAgentBrief — stack-locality rendering", () => {
+  it("renders one line per directory hint with directory, pattern, and count", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        stack_locality: [
+          { directory: "apps/api", pattern: "trackEvent(", event_count: 12 },
+          { directory: "apps/web", pattern: "posthog.capture(", event_count: 35 },
+        ],
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/Stack locality/);
+    expect(brief).toMatch(/apps\/api\/ → trackEvent\(/);
+    expect(brief).toMatch(/apps\/web\/ → posthog\.capture\(/);
+    expect(brief).toMatch(/12 events/);
+    expect(brief).toMatch(/35 events/);
+  });
+
+  it("omits the section entirely when stack_locality is empty (single-stack repo)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({ stack_locality: [] }),
+      branchSlug: "x",
+    });
+    // No "Stack locality" header, no leftover divider — the section is
+    // gone, not just empty. Otherwise the brief gets a confusing blank
+    // header that suggests data is missing.
+    expect(brief).not.toMatch(/Stack locality/);
+  });
+
+  it("frames the hint as instruction, not just data ('use the matching wrapper')", () => {
+    // The hint exists to influence behavior — the framing must tell the
+    // agent what to DO with it, not just what it is.
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        stack_locality: [
+          { directory: "apps/api", pattern: "trackEvent(", event_count: 5 },
+          { directory: "apps/web", pattern: "posthog.capture(", event_count: 5 },
+        ],
+      }),
+      branchSlug: "x",
+    });
+    expect(brief).toMatch(/use the matching wrapper when editing files under each directory/i);
+  });
+
+  it("renders hints in the headless brief as well (locality is mode-agnostic)", () => {
+    const brief = buildAgentBrief({
+      ctx: makeCtx({
+        stack_locality: [
+          { directory: "apps/api", pattern: "trackEvent(", event_count: 5 },
+          { directory: "apps/web", pattern: "posthog.capture(", event_count: 5 },
+        ],
+      }),
+      branchSlug: "x",
+      headless: true,
+    });
+    expect(brief).toMatch(/Stack locality/);
+    expect(brief).toMatch(/apps\/api\/ → trackEvent\(/);
   });
 });

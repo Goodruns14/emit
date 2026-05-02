@@ -6,6 +6,7 @@ import {
   buildSuggestContext,
   classifyName,
   collectTrackPatterns,
+  computeStackLocality,
   extractFeaturePaths,
   inferNamingStyle,
   loadFeatureFiles,
@@ -509,5 +510,206 @@ describe("buildSuggestContext", () => {
     });
     expect(ctx.feature_files).toBeDefined();
     expect(ctx.feature_files!.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ──────────────────────────────────────────────
+// pickExemplars — per-pattern bucketing (mixed-stack repos)
+// ──────────────────────────────────────────────
+//
+// In repos with multiple track_patterns (e.g. frontend posthog.capture(
+// + backend trackEvent(), naive confidence-sorted selection can fill all
+// 5 exemplar slots from whichever pattern dominates the high-confidence
+// tier — leaving the agent blind to the other wrapper. Pass 1 must lock
+// in at least one exemplar per distinct pattern before file diversity
+// runs.
+
+describe("pickExemplars — per-pattern bucketing", () => {
+  it("guarantees at least one exemplar per distinct track_pattern", () => {
+    // Skewed catalog: 4 high-confidence frontend events + 1 medium-confidence
+    // backend event. Without bucketing, file-diversity would pick the 2
+    // frontend files first and never reach the backend exemplar.
+    const entries: [string, CatalogEvent][] = [
+      ["fe_a", makeEvent({
+        source_file: "src/survey/actions.ts", source_line: 4,
+        confidence: "high", track_pattern: "capturePostHogEvent(",
+      })],
+      ["fe_b", makeEvent({
+        source_file: "src/survey/actions.ts", source_line: 4,
+        confidence: "high", track_pattern: "capturePostHogEvent(",
+      })],
+      ["fe_c", makeEvent({
+        source_file: "src/survey/actions.ts", source_line: 4,
+        confidence: "high", track_pattern: "capturePostHogEvent(",
+      })],
+      ["fe_d", makeEvent({
+        source_file: "src/survey/actions.ts", source_line: 4,
+        confidence: "high", track_pattern: "capturePostHogEvent(",
+      })],
+      ["be_a", makeEvent({
+        source_file: "src/charts/createChart.ts", source_line: 2,
+        confidence: "medium", track_pattern: "analytics.track(",
+      })],
+    ];
+    const exemplars = pickExemplars(entries, tmpRepo);
+    const patternsCovered = new Set(
+      exemplars.map((e) =>
+        e.code.includes("capturePostHogEvent")
+          ? "capturePostHogEvent("
+          : e.code.includes("analytics.track")
+            ? "analytics.track("
+            : "?"
+      )
+    );
+    // Both wrappers must appear in the exemplar set, regardless of skew.
+    expect(patternsCovered.has("capturePostHogEvent(")).toBe(true);
+    expect(patternsCovered.has("analytics.track(")).toBe(true);
+  });
+
+  it("still respects MAX_EXEMPLARS when pattern count is large", () => {
+    // 6 distinct patterns but only 5 exemplar slots — pass 1 must stop at 5
+    // even though every pattern hasn't been covered.
+    const entries: [string, CatalogEvent][] = Array.from({ length: 6 }, (_, i) => [
+      `event_${i}`,
+      makeEvent({
+        source_file: "src/survey/actions.ts",
+        source_line: 4,
+        track_pattern: `wrapper_${i}(`,
+      }),
+    ]);
+    const exemplars = pickExemplars(entries, tmpRepo);
+    expect(exemplars.length).toBeLessThanOrEqual(5);
+  });
+
+  it("ignores events with no track_pattern in the bucketing pass", () => {
+    // Events without track_pattern shouldn't reserve a slot — they fall
+    // through to the file-diversity pass like before.
+    const entries: [string, CatalogEvent][] = [
+      ["no_pattern", makeEvent({
+        source_file: "src/survey/actions.ts", source_line: 4,
+        confidence: "high",
+      })],
+      ["with_pattern", makeEvent({
+        source_file: "src/charts/createChart.ts", source_line: 2,
+        confidence: "high", track_pattern: "analytics.track(",
+      })],
+    ];
+    const exemplars = pickExemplars(entries, tmpRepo);
+    expect(exemplars.length).toBe(2);
+    // Both still picked — bucketing didn't drop the no-pattern event.
+    expect(exemplars.map((e) => e.event_name).sort()).toEqual([
+      "no_pattern",
+      "with_pattern",
+    ]);
+  });
+});
+
+// ──────────────────────────────────────────────
+// computeStackLocality
+// ──────────────────────────────────────────────
+//
+// Per-directory wrapper hints. Should fire only when the repo has ≥2
+// distinct patterns AND ≥2 directory groups have a clear (≥70%) dominant
+// pattern. Below that bar the section stays empty so the brief doesn't
+// publish a misleading half-rule.
+
+describe("computeStackLocality", () => {
+  it("returns [] when only one track_pattern exists (single-stack repo)", () => {
+    const entries: [string, CatalogEvent][] = [
+      ["a", makeEvent({ source_file: "apps/web/foo.ts", track_pattern: "posthog.capture(" })],
+      ["b", makeEvent({ source_file: "apps/api/bar.ts", track_pattern: "posthog.capture(" })],
+    ];
+    expect(computeStackLocality(entries)).toEqual([]);
+  });
+
+  it("returns hints when ≥2 directories each have a dominant pattern", () => {
+    // 3/3 frontend events under apps/web → posthog.capture(
+    // 3/3 backend events under apps/api → trackEvent(
+    const entries: [string, CatalogEvent][] = [
+      ["fe1", makeEvent({ source_file: "apps/web/a.ts", track_pattern: "posthog.capture(" })],
+      ["fe2", makeEvent({ source_file: "apps/web/b.ts", track_pattern: "posthog.capture(" })],
+      ["fe3", makeEvent({ source_file: "apps/web/c.ts", track_pattern: "posthog.capture(" })],
+      ["be1", makeEvent({ source_file: "apps/api/x.ts", track_pattern: "trackEvent(" })],
+      ["be2", makeEvent({ source_file: "apps/api/y.ts", track_pattern: "trackEvent(" })],
+      ["be3", makeEvent({ source_file: "apps/api/z.ts", track_pattern: "trackEvent(" })],
+    ];
+    const hints = computeStackLocality(entries);
+    expect(hints).toHaveLength(2);
+    expect(hints).toContainEqual({
+      directory: "apps/api",
+      pattern: "trackEvent(",
+      event_count: 3,
+    });
+    expect(hints).toContainEqual({
+      directory: "apps/web",
+      pattern: "posthog.capture(",
+      event_count: 3,
+    });
+  });
+
+  it("groups by 2-segment directory prefix (apps/web vs apps/api)", () => {
+    // Events under apps/web/components and apps/web/pages both collapse to
+    // the same "apps/web" bucket, not split into sub-buckets.
+    const entries: [string, CatalogEvent][] = [
+      ["fe1", makeEvent({ source_file: "apps/web/components/x.ts", track_pattern: "posthog.capture(" })],
+      ["fe2", makeEvent({ source_file: "apps/web/pages/y.ts", track_pattern: "posthog.capture(" })],
+      ["be1", makeEvent({ source_file: "apps/api/handlers/z.ts", track_pattern: "trackEvent(" })],
+      ["be2", makeEvent({ source_file: "apps/api/handlers/w.ts", track_pattern: "trackEvent(" })],
+    ];
+    const hints = computeStackLocality(entries);
+    const dirs = hints.map((h) => h.directory).sort();
+    expect(dirs).toEqual(["apps/api", "apps/web"]);
+  });
+
+  it("suppresses a directory when no pattern reaches the 70% dominance threshold", () => {
+    // apps/web is 50/50 → suppressed. apps/api is 100% → still emitted, but
+    // only one hint passes — final length must be <2 → return [].
+    const entries: [string, CatalogEvent][] = [
+      ["fe1", makeEvent({ source_file: "apps/web/a.ts", track_pattern: "posthog.capture(" })],
+      ["fe2", makeEvent({ source_file: "apps/web/b.ts", track_pattern: "trackEvent(" })],
+      ["be1", makeEvent({ source_file: "apps/api/x.ts", track_pattern: "trackEvent(" })],
+      ["be2", makeEvent({ source_file: "apps/api/y.ts", track_pattern: "trackEvent(" })],
+    ];
+    expect(computeStackLocality(entries)).toEqual([]);
+  });
+
+  it("requires ≥2 events per directory before claiming a rule (no 1-of-1 = 100% trap)", () => {
+    // apps/api has 1 event total, apps/web has 3 → only one bucket survives
+    // the min-events filter, and the hints array drops below 2 → return [].
+    const entries: [string, CatalogEvent][] = [
+      ["fe1", makeEvent({ source_file: "apps/web/a.ts", track_pattern: "posthog.capture(" })],
+      ["fe2", makeEvent({ source_file: "apps/web/b.ts", track_pattern: "posthog.capture(" })],
+      ["fe3", makeEvent({ source_file: "apps/web/c.ts", track_pattern: "posthog.capture(" })],
+      ["be1", makeEvent({ source_file: "apps/api/x.ts", track_pattern: "trackEvent(" })],
+    ];
+    expect(computeStackLocality(entries)).toEqual([]);
+  });
+
+  it("ignores events without source_file or track_pattern", () => {
+    const entries: [string, CatalogEvent][] = [
+      ["fe1", makeEvent({ source_file: "apps/web/a.ts", track_pattern: "posthog.capture(" })],
+      ["fe2", makeEvent({ source_file: "apps/web/b.ts", track_pattern: "posthog.capture(" })],
+      ["be1", makeEvent({ source_file: "apps/api/x.ts", track_pattern: "trackEvent(" })],
+      ["be2", makeEvent({ source_file: "apps/api/y.ts", track_pattern: "trackEvent(" })],
+      // These should be skipped silently — no source, or no pattern.
+      ["skip1", makeEvent({ source_file: undefined as any, track_pattern: "trackEvent(" })],
+      ["skip2", makeEvent({ source_file: "apps/api/z.ts", track_pattern: undefined })],
+    ];
+    const hints = computeStackLocality(entries);
+    expect(hints).toHaveLength(2);
+    // Counts only include the events that actually contributed.
+    const api = hints.find((h) => h.directory === "apps/api")!;
+    expect(api.event_count).toBe(2);
+  });
+
+  it("returns hints sorted alphabetically by directory (deterministic output)", () => {
+    const entries: [string, CatalogEvent][] = [
+      ["z1", makeEvent({ source_file: "zzz/a.ts", track_pattern: "wrapZ(" })],
+      ["z2", makeEvent({ source_file: "zzz/b.ts", track_pattern: "wrapZ(" })],
+      ["a1", makeEvent({ source_file: "aaa/a.ts", track_pattern: "wrapA(" })],
+      ["a2", makeEvent({ source_file: "aaa/b.ts", track_pattern: "wrapA(" })],
+    ];
+    const hints = computeStackLocality(entries);
+    expect(hints.map((h) => h.directory)).toEqual(["aaa", "zzz"]);
   });
 });

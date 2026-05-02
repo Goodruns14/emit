@@ -38,11 +38,10 @@ describe("wouldExclude", () => {
       expect(wouldExclude("src/foo/bar.test.ts", ["*.test.ts"])).toBe(true);
     });
 
-    it("entries containing / fall into the prefix branch (scanner quirk)", () => {
-      // setExcludePaths classifies by `/` first. "**/*.module.css" contains /,
-      // so it's treated as a prefix, not a basename glob, and matches nothing.
-      // wouldExclude must mirror this — see search.ts:setExcludePaths.
-      expect(wouldExclude("a/b/c.module.css", ["**/*.module.css"])).toBe(false);
+    it("matches **/-prefixed basename globs against the file basename", () => {
+      // **/ is stripped, leaving "*.module.css" as a basename glob.
+      // wouldExclude mirrors setExcludePaths classification.
+      expect(wouldExclude("a/b/c.module.css", ["**/*.module.css"])).toBe(true);
     });
 
     it("does not match if extension differs", () => {

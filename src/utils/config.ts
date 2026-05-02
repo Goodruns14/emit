@@ -92,7 +92,11 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
     ...(discriminator ? { discriminator_properties: discriminator } : {}),
     repo: {
       paths: ["./"],
-      sdk: "segment" as SdkType,
+      // Default to "custom" so configs without an explicit `sdk:` line don't
+      // silently inherit Segment-style tracking patterns at scan time. The
+      // `sdk` field is metadata only — runtime patterns come from explicit
+      // `track_pattern` / `backend_patterns` config.
+      sdk: "custom" as SdkType,
       ...raw.repo,
     },
     output: {
@@ -154,6 +158,31 @@ function validate(config: EmitConfig): void {
     );
   }
 
+  if (config.repo?.backend_patterns) {
+    for (let i = 0; i < config.repo.backend_patterns.length; i++) {
+      const entry = config.repo.backend_patterns[i];
+      if (typeof entry === "string") continue;
+      if (!entry || typeof entry !== "object") {
+        throw new Error(
+          `repo.backend_patterns[${i}]: must be a string or { pattern, context_files: [...] }`
+        );
+      }
+      if (typeof entry.pattern !== "string" || !entry.pattern) {
+        throw new Error(
+          `repo.backend_patterns[${i}].pattern: required string (the grep substring)`
+        );
+      }
+      if (
+        !Array.isArray(entry.context_files) ||
+        entry.context_files.some((p) => typeof p !== "string")
+      ) {
+        throw new Error(
+          `repo.backend_patterns[${i}].context_files: required string[] — paths to helper files to load into the LLM prompt`
+        );
+      }
+    }
+  }
+
   if (config.discriminator_properties) {
     for (const [eventName, cfg] of Object.entries(config.discriminator_properties)) {
       const prop = typeof cfg === "string" ? cfg : cfg.property;
@@ -161,6 +190,72 @@ function validate(config: EmitConfig): void {
         throw new Error(
           `discriminator_properties.${eventName}: property name is required`
         );
+      }
+    }
+  }
+
+  // Validate multi_event destinations have the required fields. Fail fast at
+  // config load rather than at push time so users learn about misconfig early.
+  if (config.destinations) {
+    for (let i = 0; i < config.destinations.length; i++) {
+      const dest = config.destinations[i];
+      if (dest.type === "snowflake" && dest.schema_type === "multi_event") {
+        const missing: string[] = [];
+        if (!dest.multi_event_table) missing.push("multi_event_table");
+        if (!dest.event_column) missing.push("event_column");
+        if (missing.length > 0) {
+          throw new Error(
+            `destinations[${i}]: Snowflake destination with schema_type: "multi_event" ` +
+              `requires the following fields: ${missing.join(", ")}.\n` +
+              `  Example:\n` +
+              `    destinations:\n` +
+              `      - type: snowflake\n` +
+              `        schema_type: multi_event\n` +
+              `        multi_event_table: ANALYTICS.EVENTS\n` +
+              `        event_column: EVENT_NAME`
+          );
+        }
+      }
+      if (dest.type === "bigquery" && dest.schema_type === "multi_event") {
+        const missing: string[] = [];
+        if (!dest.multi_event_table) missing.push("multi_event_table");
+        if (!dest.event_column) missing.push("event_column");
+        if (missing.length > 0) {
+          throw new Error(
+            `destinations[${i}]: BigQuery destination with schema_type: "multi_event" ` +
+              `requires the following fields: ${missing.join(", ")}.\n` +
+              `  Example:\n` +
+              `    destinations:\n` +
+              `      - type: bigquery\n` +
+              `        project_id: my-gcp-project\n` +
+              `        dataset: analytics\n` +
+              `        schema_type: multi_event\n` +
+              `        multi_event_table: events\n` +
+              `        event_column: event_name`
+          );
+        }
+      }
+      if (dest.type === "databricks" && dest.schema_type === "multi_event") {
+        const missing: string[] = [];
+        if (!dest.multi_event_table) missing.push("multi_event_table");
+        if (!dest.event_column) missing.push("event_column");
+        if (missing.length > 0) {
+          throw new Error(
+            `destinations[${i}]: Databricks destination with schema_type: "multi_event" ` +
+              `requires the following fields: ${missing.join(", ")}.\n` +
+              `  Example:\n` +
+              `    destinations:\n` +
+              `      - type: databricks\n` +
+              `        host: dbc-12345678-abcd.cloud.databricks.com\n` +
+              `        http_path: /sql/1.0/warehouses/abc123\n` +
+              `        token: \${DATABRICKS_TOKEN}\n` +
+              `        catalog: main\n` +
+              `        schema: analytics\n` +
+              `        schema_type: multi_event\n` +
+              `        multi_event_table: events\n` +
+              `        event_column: event_name`
+          );
+        }
       }
     }
   }

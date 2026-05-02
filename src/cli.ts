@@ -8,6 +8,7 @@ import { registerPush } from "./commands/push.js";
 import { registerImport } from "./commands/import.js";
 import { registerMcp } from "./commands/mcp.js";
 import { registerFix } from "./commands/fix.js";
+import { registerDestination } from "./commands/destination.js";
 import { registerSuggest } from "./commands/suggest.js";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
@@ -28,6 +29,7 @@ registerPush(program);
 registerImport(program);
 registerMcp(program);
 registerFix(program);
+registerDestination(program);
 registerSuggest(program);
 
 program.parse(process.argv);

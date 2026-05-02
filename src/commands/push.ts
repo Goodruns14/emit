@@ -8,7 +8,7 @@ import { filterEvents } from "../core/catalog/search.js";
 import { createDestinationAdapter } from "../core/destinations/index.js";
 import type { PushResult } from "../types/index.js";
 
-interface PushOptions {
+export interface PushOptions {
   destination?: string;
   dryRun?: boolean;
   event?: string;
@@ -126,7 +126,31 @@ function installDebugFetch(): () => void {
   };
 }
 
-async function runPush(opts: PushOptions): Promise<number> {
+/**
+ * Compose a destination's config-level `events:` scope with the CLI-level
+ * `--event` filter (already resolved into `targetEvents`). Returns the
+ * effective `opts.events` to pass to the adapter.
+ *
+ *   configEvents  cliEvents    result                  meaning
+ *   ────────────  ───────────  ──────────────────────  ──────────────────────
+ *   undefined     undefined    undefined               no filter — all events
+ *   undefined     ["A"]        ["A"]                   CLI filter only
+ *   ["A","B"]     undefined    ["A","B"]               config scope only
+ *   ["A","B"]     ["A"]        ["A"]                   intersection (CLI ⊆ scope)
+ *   ["A","B"]     ["C"]        []                      empty → caller skips destination
+ */
+export function computeScopedEvents(
+  configEvents: string[] | undefined,
+  cliEvents: string[] | undefined
+): string[] | undefined {
+  if (!configEvents && !cliEvents) return undefined;
+  if (!configEvents) return cliEvents;
+  if (!cliEvents) return [...configEvents];
+  const configSet = new Set(configEvents);
+  return cliEvents.filter((e) => configSet.has(e));
+}
+
+export async function runPush(opts: PushOptions): Promise<number> {
   const json = opts.format === "json";
 
   if (!json) {
@@ -216,6 +240,19 @@ async function runPush(opts: PushOptions): Promise<number> {
         logger.line(chalk.bold(`Pushing to ${adapter.name}...`));
       }
 
+      // Compose the destination's scope with the CLI --event flag.
+      // Rule: a destination processes an event if and only if
+      //   (1) it's in destConfig.events (or events is unset, meaning "any"), AND
+      //   (2) the --event flag (if any) selects it.
+      // Empty intersection → silently skip this destination (not an error).
+      const scopedEvents = computeScopedEvents(destConfig.events, targetEvents);
+      if (scopedEvents !== undefined && scopedEvents.length === 0) {
+        logger.stop();
+        // Silent skip — user's config legitimately says this destination
+        // doesn't handle the requested event(s).
+        continue;
+      }
+
       // Roll up discriminator sub-events into their parents unless this
       // destination explicitly opts out. Sub-events are logical entries in the
       // catalog that don't exist as distinct event names on the wire, so
@@ -227,7 +264,7 @@ async function runPush(opts: PushOptions): Promise<number> {
       try {
         const result = await adapter.push(catalogForAdapter, {
           dryRun: opts.dryRun,
-          events: targetEvents,
+          events: scopedEvents,
         });
 
         allResults[adapter.name] = result;
@@ -250,9 +287,11 @@ async function runPush(opts: PushOptions): Promise<number> {
 
           if (result.skipped_events?.length > 0) {
             logger.blank();
-            logger.line(chalk.gray(`  Skipped (no matching table in Snowflake):`));
-            for (const name of result.skipped_events) {
-              logger.line(chalk.gray(`    · ${name}`));
+            logger.line(chalk.gray(`  Skipped (no matching table in destination):`));
+            for (const s of result.skipped_events) {
+              logger.line(
+                chalk.gray(`    · ${s.event}  (looked for ${s.looked_for})`)
+              );
             }
           }
         }

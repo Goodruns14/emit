@@ -1,5 +1,45 @@
 import type { CodeContext, LiteralValues } from "../../types/index.js";
 
+/**
+ * Shared confidence-level definitions injected into every extraction prompt.
+ *
+ * Event-level and per-property confidence are scored on the same scale but
+ * independently — an event may be high while some of its properties are
+ * medium, or vice versa. This block teaches the LLM what each label means
+ * for each dimension so labels are calibrated and reproducible across runs.
+ *
+ * Note: today only event-level confidence drives downstream behavior
+ * (review_required, the high/medium/low breakdown). Per-property confidence
+ * is stored and surfaced via MCP but doesn't gate any user-facing aggregate.
+ * The scale still applies consistently so the catalog is self-consistent.
+ */
+export const CONFIDENCE_DEFINITIONS = `
+Confidence levels (apply consistently to both event and per-property
+confidence — they are independent dimensions; an event may be high while
+some of its properties are medium, or vice versa):
+
+- high   — The evidence is complete and unambiguous.
+  · Event:    an actual track/fire call is visible AND its trigger context
+              (function/handler/branch where it lives) is clear.
+  · Property: the property appears in the call site with a clear value,
+              type, or literal.
+
+- medium — Most evidence is present but one specific piece is missing.
+           A justified read, not fully verified.
+  · Event:    only a type/interface declaration is visible and the fire
+              site is inferred from naming, OR the trigger context is
+              ambiguous (multiple plausible flows).
+  · Property: the name is visible but value, type, or origin isn't — e.g.,
+              passed as a typed parameter, set in a wrapper/helper not
+              shown (backend_patterns context_files addresses this), or
+              assembled dynamically.
+
+- low    — Critical evidence is missing.
+  · Event:    you can't confirm the event fires from the code shown.
+  · Property: you can't tell whether this is an event property or an
+              unrelated local variable.
+`.trim();
+
 export function buildExtractionPrompt(
   eventName: string,
   codeContext: CodeContext,
@@ -25,6 +65,13 @@ export function buildExtractionPrompt(
           .join("\n")}\n`
       : "";
 
+  const extraContextSection =
+    codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+      ? `\nReference helper sources — the call site above does not show the property payload directly because properties are assembled downstream in these helpers. Treat the properties emitted in these helpers as this event's properties when this event fires. Ignore any unrelated helpers in these files:\n\n${codeContext.extra_context_files
+          .map((f) => `Reference file (${f.path}):\n\`\`\`\n${f.content}\n\`\`\``)
+          .join("\n\n")}\n`
+      : "";
+
   return `
 You are analyzing analytics instrumentation code to extract semantic metadata.
 Your job is to understand what this event means in business terms.
@@ -41,6 +88,8 @@ Primary call site (${codeContext.file_path}:${codeContext.line_number}):
 ${codeContext.context}
 \`\`\`
 ${additionalContext ? `\nAdditional call sites:\n${additionalContext}` : ""}
+${extraContextSection}
+${CONFIDENCE_DEFINITIONS}
 
 Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
 {
@@ -150,6 +199,15 @@ Primary code reference (${codeContext.file_path}:${codeContext.line_number}):
 ${codeContext.context}
 \`\`\`
 ${additionalContext ? `\nAdditional references:\n${additionalContext}` : ""}
+${
+  codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+    ? `\nReference helper sources — the call site does not show the payload directly because properties are assembled downstream in these helpers. Use them to understand what fields belong to ${parentEventName} when ${discriminatorProperty} = "${discriminatorValue}":\n\n${codeContext.extra_context_files
+        .map((f) => `Reference file (${f.path}):\n\`\`\`\n${f.content}\n\`\`\``)
+        .join("\n\n")}\n`
+    : ""
+}
+
+${CONFIDENCE_DEFINITIONS}
 
 Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
 {
@@ -223,13 +281,29 @@ export function buildDiagnosticPrompt(signal: import("../catalog/diagnostic.js")
     );
   }
 
+  if (signal.notFoundEvents.length >= 2) {
+    const sample = signal.notFoundEvents.slice(0, 20).join(", ");
+    const more = signal.notFoundEvents.length > 20 ? ` (+${signal.notFoundEvents.length - 20} more)` : "";
+    sections.push(
+      `NOT-FOUND EVENTS — ${signal.notFoundEvents.length} events could not be located in the configured paths\n` +
+      `with the configured tracking patterns:\n` +
+      `  Events: ${sample}${more}\n` +
+      `  These may be missing because (a) the events are in code paths not covered by\n` +
+      `  \`paths\`, (b) they use a tracking pattern not covered by \`track_pattern\` /\n` +
+      `  \`backend_patterns\` (e.g. server-side helpers, wrapped SDKs), or (c) existing\n` +
+      `  \`exclude_paths\` entries are blocking discovery. The fix is rarely to ignore\n` +
+      `  them — it's almost always a discovery-broadening config change.`
+    );
+  }
+
   return `
 You are analyzing the results of an emit catalog scan of ${signal.eventCount} events.
 The following structural anomalies were detected. For each anomaly, you are given
 raw evidence: property names, code_sample_values, file paths, and/or confidence reasons.
 
 For each anomaly, write one short paragraph identifying the root cause — what
-non-analytics code or data is appearing in the catalog and why.
+non-analytics code or data is appearing in the catalog and why, OR why expected
+events aren't being found.
 
 Do not explain what emit is. Do not address single-event issues. Only address the
 cross-cutting patterns below.
@@ -237,9 +311,25 @@ cross-cutting patterns below.
 ${sections.join("\n\n")}
 
 Valid emit.config.yml options you may suggest in fix_instruction:
-- exclude_paths: string[] — glob patterns to exclude from scanning
-- track_pattern: string — the function call pattern to match (e.g., "analytics.track(")
-- discriminator_properties: object — maps parent event to property + values for sub-event expansion
+- paths: string[] — directories to scan; narrowing scope (e.g. ["./apps/web", "./backend"])
+  often beats blanket excludes
+- track_pattern: string | string[] — function call pattern(s) to match (e.g., "analytics.track(")
+- backend_patterns: array — additional patterns for server-side / wrapped helpers
+  (e.g. "captureEntityCRUDEvent("). Each entry can also declare \`context_files\` to
+  load helper source into the LLM prompt when the event payload is built downstream
+  from the call site.
+- exclude_paths: string[] — glob patterns to exclude. May be ADDED to suppress real
+  noise, or REMOVED when an existing entry is blocking discovery of not-found events.
+- discriminator_properties: object — maps parent event to property + values for
+  sub-event expansion.
+
+Bias rules:
+- When NOT-FOUND EVENTS are present, prefer narrowing \`paths\` or adding
+  \`track_pattern\` / \`backend_patterns\` over adding new \`exclude_paths\`.
+  If existing \`exclude_paths\` entries plausibly cover where the missing events
+  live, suggest REMOVING them.
+- \`exclude_paths\` additions are a last resort and only appropriate when the
+  evidence is pure noise (build artifacts, test fixtures) with no not-found pressure.
 
 Do NOT suggest any other config options. Options like \`context_lines\`, \`window_size\`,
 \`max_context\`, or similar DO NOT EXIST. The context window size is hardcoded.
@@ -249,9 +339,9 @@ fix_instruction and describe the problem rather than inventing a solution.
 Return ONLY a valid JSON object. No preamble, no markdown fences:
 {
   "findings": [
-    "One or two sentences per anomaly — what is leaking in and why. Be concise."
+    "One or two sentences per anomaly — what is leaking in (or what is missing) and why. Be concise."
   ],
-  "fix_instruction": "A single short clause, MAX 80 characters, no period. Imperative. E.g. \\"add backend/stacktraces/test-files/** to exclude_paths in emit.config.yml\\". If multiple fixes, combine into one clause with \\"and\\"."
+  "fix_instruction": "A single short clause, MAX 100 characters, no period. Imperative. E.g. \\"narrow paths to apps/web and add backend_patterns for captureEntityCRUDEvent\\" or \\"remove src/audit/** from exclude_paths to surface backend events\\". If multiple fixes, combine with \\"and\\"."
 }
 `.trim();
 }

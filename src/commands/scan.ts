@@ -77,7 +77,7 @@ export function registerScan(program: Command): void {
     });
 }
 
-async function runScan(opts: ScanOptions): Promise<number> {
+export async function runScan(opts: ScanOptions): Promise<number> {
   const json = opts.format === "json";
 
   if (!json) {
@@ -318,7 +318,12 @@ async function runScan(opts: ScanOptions): Promise<number> {
       config.repo.paths
     );
 
-    const contextHash = computeContextHash(ctx.context, callSiteContexts, literalValues);
+    const contextHash = computeContextHash(
+      ctx.context,
+      callSiteContexts,
+      literalValues,
+      ctx.extra_context_files ?? []
+    );
     const previousEntry = previousCatalog?.events[event.name];
 
     if (previousEntry?.context_hash === contextHash) {
@@ -365,18 +370,14 @@ async function runScan(opts: ScanOptions): Promise<number> {
     const eventFlags = [...meta.flags];
     for (const [propName, values] of Object.entries(literalValues)) {
       if (!mergedProperties[propName]) {
+        // Regex extractor saw a literal the LLM didn't include as a property.
+        // Trust the LLM — these are usually JSX attrs, CSS tokens, routing
+        // metadata, or framework option keys in surrounding code, not event
+        // payload fields. Surface as a human-review flag but do NOT inject a
+        // phantom property (which would pollute the catalog with fake fields).
         eventFlags.push(
-          `Property '${propName}' has code literal values but was not described by LLM — review`
+          `Literal '${propName}=${values.slice(0, 3).join("|")}' found in context but not extracted by LLM — likely not an event property`
         );
-        mergedProperties[propName] = {
-          description: "See code_sample_values for known literal values; LLM did not extract a description.",
-          edge_cases: [],
-          null_rate: 0,
-          cardinality: 0,
-          sample_values: [],
-          code_sample_values: values,
-          confidence: "low",
-        };
       }
     }
 
@@ -414,6 +415,31 @@ async function runScan(opts: ScanOptions): Promise<number> {
   if (!json) {
     logger.blank();
     logger.succeed("Extraction complete");
+  }
+
+  // ── Guard: refuse to write an empty catalog when events were configured ──
+  // If LLM calls fail at scale (rate limit, API error, claude-code session
+  // degradation), parseJsonResponse falls back to a placeholder per event and
+  // the user ends up with a catalog full of "Could not extract — JSON parse
+  // failed" rows or, worse, no catalog at all. Either way it's silently broken.
+  // Fail loudly here instead of pretending the scan worked.
+  const extractedKeys = Object.keys(catalog);
+  const placeholderCount = extractedKeys.filter((k) =>
+    catalog[k]?.confidence_reason === "LLM returned unparseable response"
+  ).length;
+  const successfulCount = extractedKeys.length - placeholderCount;
+
+  if (located.length > 0 && successfulCount === 0) {
+    const reason =
+      extractedKeys.length === 0
+        ? `extraction produced 0 events from ${located.length} located in code`
+        : `all ${extractedKeys.length} extractions returned the JSON-parse fallback (LLM is failing — likely rate limit, quota exhaustion, or claude-code session degradation)`;
+    logger.error(
+      `Refusing to save catalog: ${reason}.\n` +
+        `  No catalog file was written — your previous catalog (if any) is untouched.\n` +
+        `  Check the LLM provider in emit.config.yml. If using ${llmCfg.provider}, verify credentials/quota and retry.`
+    );
+    return 3;
   }
 
   // ── Property definitions glossary ─────────────────────────────────
@@ -604,6 +630,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
         findings: diagnosis.findings,
         fixInstruction: diagnosis.fixInstruction || null,
         flaggedEvents: flaggedEventDetails,
+        notFoundEvents: signal.notFoundEvents,
       };
     }
     process.stdout.write(JSON.stringify(jsonOutput, null, 2) + "\n");
@@ -716,6 +743,7 @@ async function runScan(opts: ScanOptions): Promise<number> {
           skippedCount: choice === "1" ? dirtyCount : 0,
           findings: diagnosis.findings,
           flaggedEvents: flaggedEventDetails,
+          notFoundEvents: signal.notFoundEvents,
         };
         fs.writeFileSync(path.join(emitDir, "last-fix.json"), JSON.stringify(lastFixData, null, 2));
         const gitignorePath = path.join(emitDir, ".gitignore");

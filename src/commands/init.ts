@@ -9,13 +9,35 @@ import { execa } from "execa";
 import { logger } from "../utils/logger.js";
 import { parseEventsFile, getCsvHeaders, parseDiscriminatorCsv } from "../core/import/parse.js";
 import { discoverBackendPatterns } from "../core/scanner/discovery.js";
+import { arrowSelect, createPrompter } from "../utils/prompts.js";
+
+export interface InitOptions {
+  /** Skip all prompts. Required for non-interactive mode. */
+  yes?: boolean;
+  /** Path to a pre-written emit.config.yml to validate + copy. */
+  configFile?: string;
+  /** Inline LLM provider. Mutually exclusive with --config-file. */
+  llmProvider?: string;
+  /** Comma-separated inline event names. Mutually exclusive with --config-file. */
+  events?: string;
+  /** Explicitly seed a config with no events. Mutually exclusive with --events. */
+  skipEvents?: boolean;
+  /** Overwrite an existing emit.config.yml. */
+  force?: boolean;
+}
 
 export function registerInit(program: Command): void {
   program
     .command("init [repo-path]")
     .description("Interactive setup wizard — detects your tracking SDK and creates emit.config.yml (defaults to current directory)")
-    .action(async (dir?: string) => {
-      const exitCode = await runInit(dir);
+    .option("-y, --yes", "Run non-interactively. Requires one of --config-file / --llm-provider / --events / --skip-events.")
+    .option("--config-file <path>", "Validate and copy a pre-written emit.config.yml. Conflicts with --llm-provider and --events.")
+    .option("--llm-provider <name>", "LLM provider (claude-code | anthropic | openai | openai-compatible).")
+    .option("--events <csv>", "Comma-separated event names to seed manual_events.")
+    .option("--skip-events", "Create the config with no events seeded.")
+    .option("--force", "Overwrite an existing emit.config.yml without confirming.")
+    .action(async (dir: string | undefined, opts: InitOptions) => {
+      const exitCode = await runInit(dir, opts);
       process.exit(exitCode);
     });
 }
@@ -59,54 +81,6 @@ function showStep(n: number, total: number): void {
   logger.line(chalk.gray(`  step ${n} of ${total}`));
   logger.line(chalk.gray("  " + "─".repeat(40)));
   logger.blank();
-}
-
-// ── Arrow-key single select ────────────────────────────────────────────────────
-
-async function arrowSelect<T extends string>(
-  options: { label: string; value: T }[]
-): Promise<T> {
-  let idx = 0;
-  const count = options.length;
-
-  const render = (first: boolean) => {
-    if (!first) {
-      process.stdout.write(`\u001B[${count}A`);
-    }
-    for (let i = 0; i < count; i++) {
-      const cursor = i === idx ? chalk.cyan("❯") : " ";
-      const label = i === idx ? chalk.white(options[i].label) : chalk.gray(options[i].label);
-      process.stdout.write(`\r\u001B[2K  ${cursor}  ${label}\n`);
-    }
-  };
-
-  return new Promise((resolve) => {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding("utf8");
-
-    render(true);
-
-    const onData = (key: string) => {
-      if (key === "\u001B[A") {
-        idx = Math.max(0, idx - 1);
-        render(false);
-      } else if (key === "\u001B[B") {
-        idx = Math.min(count - 1, idx + 1);
-        render(false);
-      } else if (key === "\r" || key === "\n") {
-        process.stdin.removeListener("data", onData);
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stdout.write("\n");
-        resolve(options[idx].value);
-      } else if (key === "\u0003") {
-        process.exit(0);
-      }
-    };
-
-    process.stdin.on("data", onData);
-  });
 }
 
 // ── Inline event collection ────────────────────────────────────────────────────
@@ -394,9 +368,173 @@ function showSummary(patterns: string[], llm: string, backendPatterns?: string[]
   logger.blank();
 }
 
+// ── Non-interactive entry point ────────────────────────────────────────────────
+
+const VALID_LLM_PROVIDERS = new Set([
+  "claude-code",
+  "anthropic",
+  "openai",
+  "openai-compatible",
+]);
+
+async function runInitNonInteractive(
+  repoDir: string,
+  configPath: string,
+  opts: InitOptions,
+): Promise<number> {
+  // ── Validate flag combinations ─────────────────────────────────────────
+  if (!opts.yes) {
+    logger.error(
+      "Non-interactive mode requires --yes (or -y).\n" +
+        "  Example: emit init --yes --llm-provider anthropic --events foo,bar",
+    );
+    return 1;
+  }
+
+  if (opts.configFile && (opts.llmProvider || opts.events !== undefined || opts.skipEvents)) {
+    logger.error(
+      "--config-file conflicts with --llm-provider / --events / --skip-events.\n" +
+        "  Pick one: either a pre-written config file, or inline flags.",
+    );
+    return 1;
+  }
+
+  if (opts.events !== undefined && opts.skipEvents) {
+    logger.error("--events and --skip-events cannot be combined.");
+    return 1;
+  }
+
+  if (fs.existsSync(configPath) && !opts.force) {
+    logger.error(
+      `emit.config.yml already exists at ${configPath}.\n` +
+        "  Pass --force to overwrite.",
+    );
+    return 1;
+  }
+
+  // ── Path A: config-file ────────────────────────────────────────────────
+  if (opts.configFile) {
+    const resolved = path.isAbsolute(opts.configFile)
+      ? opts.configFile
+      : path.resolve(repoDir, opts.configFile);
+
+    if (!fs.existsSync(resolved)) {
+      logger.error(`--config-file not found: ${resolved}`);
+      return 1;
+    }
+
+    let raw: string;
+    try {
+      raw = fs.readFileSync(resolved, "utf8");
+    } catch (err) {
+      logger.error(`Could not read --config-file: ${(err as Error).message}`);
+      return 1;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = yaml.load(raw);
+    } catch (err) {
+      logger.error(`Invalid YAML in --config-file: ${(err as Error).message}`);
+      return 1;
+    }
+
+    const shapeError = validateConfigShape(parsed);
+    if (shapeError) {
+      logger.error(`--config-file failed validation: ${shapeError}`);
+      return 1;
+    }
+
+    fs.writeFileSync(configPath, raw);
+    logger.succeed(`emit.config.yml written from ${opts.configFile}`);
+    return 0;
+  }
+
+  // ── Path B: inline flags ───────────────────────────────────────────────
+  if (!opts.llmProvider && opts.events === undefined && !opts.skipEvents) {
+    logger.error(
+      "Non-interactive mode requires one of: --config-file, --llm-provider, --events, --skip-events.",
+    );
+    return 1;
+  }
+
+  const llm = opts.llmProvider ?? "anthropic";
+  if (!VALID_LLM_PROVIDERS.has(llm)) {
+    logger.error(
+      `Unknown --llm-provider: "${llm}".\n` +
+        `  Valid options: ${Array.from(VALID_LLM_PROVIDERS).join(", ")}`,
+    );
+    return 1;
+  }
+
+  const events: string[] = opts.events
+    ? opts.events
+        .split(",")
+        .map((e) => e.trim())
+        .filter(Boolean)
+    : [];
+
+  const repoPaths = ["./"];
+  const configYml = buildConfig(
+    [], // no track patterns in headless mode; scanner's broad search works
+    llm,
+    undefined,
+    "custom",
+    repoPaths,
+    undefined,
+  );
+  fs.writeFileSync(configPath, configYml);
+
+  if (events.length > 0) {
+    appendManualEvents(configPath, events);
+  }
+
+  logger.succeed(
+    `emit.config.yml created (llm: ${llm}, events: ${events.length})`,
+  );
+  return 0;
+}
+
+/**
+ * Minimal shape check for a user-supplied config file. Doesn't enforce
+ * API-key presence (user may set env vars later); does catch structural
+ * nonsense that would fail at scan time.
+ */
+function validateConfigShape(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return "expected a YAML object at the top level.";
+  }
+  const obj = parsed as Record<string, unknown>;
+
+  if (obj.llm !== undefined) {
+    if (typeof obj.llm !== "object" || obj.llm === null || Array.isArray(obj.llm)) {
+      return "`llm` must be an object.";
+    }
+    const provider = (obj.llm as Record<string, unknown>).provider;
+    if (provider !== undefined && typeof provider !== "string") {
+      return "`llm.provider` must be a string.";
+    }
+    if (typeof provider === "string" && !VALID_LLM_PROVIDERS.has(provider)) {
+      return `unknown llm.provider "${provider}". Valid: ${Array.from(VALID_LLM_PROVIDERS).join(", ")}.`;
+    }
+  }
+
+  if (obj.manual_events !== undefined && !Array.isArray(obj.manual_events)) {
+    return "`manual_events` must be a list.";
+  }
+
+  if (obj.repo !== undefined) {
+    if (typeof obj.repo !== "object" || obj.repo === null || Array.isArray(obj.repo)) {
+      return "`repo` must be an object.";
+    }
+  }
+
+  return null;
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 
-async function runInit(dir?: string): Promise<number> {
+export async function runInit(dir?: string, opts: InitOptions = {}): Promise<number> {
   const repoDir = dir ? path.resolve(dir) : process.cwd();
 
   if (!fs.existsSync(repoDir) || !fs.statSync(repoDir).isDirectory()) {
@@ -405,6 +543,22 @@ async function runInit(dir?: string): Promise<number> {
   }
 
   const configPath = path.resolve(repoDir, "emit.config.yml");
+
+  // ── Non-interactive mode ────────────────────────────────────────────────
+  // Any non-interactive flag triggers the headless path. --yes is the
+  // explicit opt-in; we still run non-interactively if --config-file is
+  // passed (the intent is unambiguous) so agents don't silently fall into
+  // the wizard.
+  const nonInteractive =
+    !!opts.yes ||
+    !!opts.configFile ||
+    !!opts.llmProvider ||
+    opts.events !== undefined ||
+    !!opts.skipEvents;
+
+  if (nonInteractive) {
+    return runInitNonInteractive(repoDir, configPath, opts);
+  }
 
   logger.blank();
   logger.line(chalk.bold("  Welcome to emit."));
@@ -978,21 +1132,3 @@ async function isClaudeCodeInstalled(): Promise<boolean> {
   return false;
 }
 
-function createPrompter() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: true,
-  });
-
-  return {
-    ask(question: string): Promise<string> {
-      return new Promise((resolve) => {
-        rl.question(question, resolve);
-      });
-    },
-    close() {
-      rl.close();
-    },
-  };
-}

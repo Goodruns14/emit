@@ -16,7 +16,26 @@ export interface CodeContext {
   segment_event_name?: string;
   track_pattern?: string;
   all_call_sites: CallSite[];
+  /**
+   * Reference helper files attached to the LLM prompt when a match fires near
+   * a configured backend_patterns entry that declares `context_files`. Used
+   * for call sites that are thin wrappers where the property payload is
+   * assembled in a downstream helper (e.g. audit-event appenders, event
+   * builders). Empty/absent when no pattern matched or no files configured.
+   */
+  extra_context_files?: { path: string; content: string }[];
 }
+
+/**
+ * A backend tracking pattern entry. A bare string is a regex/substring the
+ * scanner treats as a tracking call — existing behavior. The object form lets
+ * users attach reference files that are loaded into the LLM prompt when the
+ * pattern matches. Useful when the actual property payload is assembled in a
+ * helper file (e.g. an audit-event appender) separate from the call site.
+ */
+export type BackendPatternConfig =
+  | string
+  | { pattern: string; context_files: string[] };
 
 export interface LiteralValues {
   [propertyName: string]: string[];
@@ -251,21 +270,25 @@ export interface LlmCallConfig {
  * Snowflake per-event) only recognize the parent event name on the wire, so
  * pushing sub-events creates phantom entries. Set to `true` if your adapter
  * genuinely treats each sub-event as a distinct push target.
+ *
+ * `events` scopes a destination to a specific subset of catalog events. This
+ * is what makes multi-table layouts work cleanly — one destination per table,
+ * each scoped to the events that actually live in that table. When omitted
+ * (the default), the destination processes every event in the catalog.
+ *
+ * Composition with the `--event` CLI flag: a destination processes an event
+ * if and only if (1) it's in `events:` (or `events:` is unset), AND (2) the
+ * `--event` flag (if any) selects it. If the intersection is empty for a
+ * given destination, it silently skips — not an error.
  */
 export interface DestinationConfigBase {
   /** If true, skip the discriminator rollup and pass sub-events through to the adapter. */
   include_sub_events?: boolean;
-}
-
-export interface SegmentDestinationConfig extends DestinationConfigBase {
-  type: "segment";
-  workspace: string;
-  tracking_plan_id: string;
-}
-
-export interface AmplitudeDestinationConfig extends DestinationConfigBase {
-  type: "amplitude";
-  project_id: string | number;
+  /**
+   * Scope this destination to a specific subset of catalog events.
+   * Omit to process every catalog event (existing behavior).
+   */
+  events?: string[];
 }
 
 export interface MixpanelDestinationConfig extends DestinationConfigBase {
@@ -282,7 +305,16 @@ export interface SnowflakeDestinationConfig extends DestinationConfigBase {
   password?: string;
   database?: string;
   schema?: string;
-  schema_type: "per_event" | "monolith";
+  /**
+   * Which schema layout describes the user's warehouse:
+   *   "per_event"   — one table per event (Segment/Rudderstack CDP default)
+   *   "multi_event" — one or more tables where each holds rows for multiple
+   *                    events, discriminated by an event-name column
+   *                    (Snowplow `ATOMIC.EVENTS`, custom domain-grouped
+   *                    layouts like `USER_EVENTS` + `ORDER_EVENTS`, or a
+   *                    single giant `TRACKS` table).
+   */
+  schema_type: "per_event" | "multi_event";
   cdp_preset?: CdpPreset;
   /**
    * Additional column names to skip when writing COMMENTs, merged with (not
@@ -292,6 +324,51 @@ export interface SnowflakeDestinationConfig extends DestinationConfigBase {
    * uppercase column names Snowflake returns from information_schema.
    */
   exclude_columns?: string[];
+
+  // ── per_event mode ───────────────────────────────────────────────────────
+
+  /**
+   * Per-event mode override: explicit mapping from catalog event name to the
+   * Snowflake table name that holds it. Only set entries you need to override;
+   * events not listed here fall through to the default naming convention
+   * (UPPERCASE event name with hyphens/dots/spaces replaced by underscores).
+   *
+   * Example:
+   *   event_table_mapping:
+   *     purchase_completed: EVT_PURCHASES
+   *     user_signed_up: USER_SIGNUP_V2
+   *
+   * When a mapping is present for an event, `event_table_mapping` wins
+   * unconditionally over the naming convention (explicit > implicit).
+   */
+  event_table_mapping?: Record<string, string>;
+
+  // ── multi_event mode ─────────────────────────────────────────────────────
+
+  /**
+   * Multi-event mode: the table that holds rows for multiple events.
+   * REQUIRED when `schema_type: multi_event`. Can be fully qualified
+   * ("ANALYTICS.EVENTS") or a bare table name (which uses the destination's
+   * `schema` field to qualify).
+   */
+  multi_event_table?: string;
+
+  /**
+   * Multi-event mode: the column name that discriminates rows by event type
+   * (e.g., `EVENT_NAME`, `EVENT`, `EVENT_TEXT`). REQUIRED when
+   * `schema_type: multi_event`.
+   */
+  event_column?: string;
+
+  /**
+   * Multi-event mode: optional. Name of a VARIANT/OBJECT column that holds
+   * per-event properties as JSON ("narrow multi-event" layout). When set,
+   * emit writes a generic pointer comment on this column explaining where
+   * to find per-event property docs (catalog.yml). When unset, emit assumes
+   * a "wide multi-event" layout where properties are their own columns on
+   * the same table — those columns get their own per-property COMMENTs.
+   */
+  properties_column?: string;
 }
 
 /**
@@ -319,11 +396,152 @@ export interface CustomDestinationConfig extends DestinationConfigBase {
   options?: Record<string, unknown>;
 }
 
+export interface BigQueryDestinationConfig extends DestinationConfigBase {
+  type: "bigquery";
+  /**
+   * GCP project ID holding the dataset. Falls back to
+   * GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env vars.
+   */
+  project_id?: string;
+  /** BigQuery dataset (analogous to Snowflake schema). */
+  dataset?: string;
+  /**
+   * Dataset location (e.g. "US", "us-central1"). Optional — BigQuery infers
+   * from the dataset. Set when cross-region metadata queries are ambiguous.
+   */
+  location?: string;
+  /**
+   * Path to a service-account JSON key file. Optional. When omitted, the
+   * `@google-cloud/bigquery` SDK falls back to Application Default
+   * Credentials (ADC) — see `gcloud auth application-default login`. Set
+   * via `key_file` here or the standard GOOGLE_APPLICATION_CREDENTIALS env var.
+   */
+  key_file?: string;
+  /**
+   * Which schema layout describes the user's warehouse. Same semantics as
+   * Snowflake's field — "per_event" (one table per event) vs "multi_event"
+   * (one table with an event-name discriminator column).
+   */
+  schema_type: "per_event" | "multi_event";
+  cdp_preset?: CdpPreset;
+  /**
+   * Additional column names to skip when writing descriptions, merged with
+   * (not replacing) the cdp_preset's exclude list. Matched case-insensitively
+   * against BigQuery's lowercase column names.
+   */
+  exclude_columns?: string[];
+
+  // ── per_event mode ───────────────────────────────────────────────────────
+
+  /**
+   * Per-event mode override: explicit mapping from catalog event name to the
+   * BigQuery table name that holds it. Only set entries you need to override;
+   * events not listed here fall through to the default naming convention
+   * (lowercase event name with hyphens/dots/spaces replaced by underscores).
+   */
+  event_table_mapping?: Record<string, string>;
+
+  // ── multi_event mode ─────────────────────────────────────────────────────
+
+  /**
+   * Multi-event mode: the table that holds rows for multiple events.
+   * REQUIRED when `schema_type: multi_event`. Can be fully qualified
+   * ("analytics.events") or a bare table name (which uses the destination's
+   * `dataset` field to qualify).
+   */
+  multi_event_table?: string;
+
+  /**
+   * Multi-event mode: the column name that discriminates rows by event type
+   * (e.g., `event_name`, `event`). REQUIRED when `schema_type: multi_event`.
+   */
+  event_column?: string;
+
+  /**
+   * Multi-event mode: optional. Name of a JSON/STRUCT column that holds
+   * per-event properties ("narrow multi-event" layout). When set, emit
+   * writes a generic pointer description on this column. When unset, emit
+   * assumes a "wide multi-event" layout where each property has its own
+   * column.
+   */
+  properties_column?: string;
+}
+
+export interface DatabricksDestinationConfig extends DestinationConfigBase {
+  type: "databricks";
+  /**
+   * Databricks workspace host, e.g. `dbc-12345678-abcd.cloud.databricks.com`.
+   * Do not include `https://`. Falls back to DATABRICKS_HOST env var.
+   */
+  host?: string;
+  /**
+   * HTTP path of the SQL warehouse, e.g. `/sql/1.0/warehouses/abc123def456`.
+   * Find it under the warehouse's Connection details tab. Falls back to
+   * DATABRICKS_HTTP_PATH env var.
+   */
+  http_path?: string;
+  /**
+   * Personal access token or OAuth M2M token. Usually set via env-var
+   * substitution (`token: ${DATABRICKS_TOKEN}`). Falls back to
+   * DATABRICKS_TOKEN env var.
+   */
+  token?: string;
+  /** Unity Catalog name, e.g. `main` or `analytics`. */
+  catalog?: string;
+  /** Schema (= Snowflake-style schema, UC-style schema) within the catalog. */
+  schema?: string;
+  /**
+   * Which schema layout describes the user's warehouse. Same semantics as
+   * Snowflake/BigQuery.
+   */
+  schema_type: "per_event" | "multi_event";
+  cdp_preset?: CdpPreset;
+  /**
+   * Additional column names to skip when writing comments, merged with the
+   * cdp_preset's exclude list. Matched case-insensitively against Databricks
+   * lowercase column names.
+   */
+  exclude_columns?: string[];
+
+  // ── per_event mode ───────────────────────────────────────────────────────
+
+  /**
+   * Per-event mode override: explicit catalog event name → Databricks table
+   * name. Only set entries you need to override; unmapped events fall
+   * through to the default naming convention (lowercase, `[-.\s]` → `_`).
+   */
+  event_table_mapping?: Record<string, string>;
+
+  // ── multi_event mode ─────────────────────────────────────────────────────
+
+  /**
+   * Multi-event mode: the table that holds rows for multiple events.
+   * REQUIRED when `schema_type: multi_event`. Can be fully qualified
+   * (`reporting.events`) or a bare table name (uses the destination's
+   * `schema` field to qualify).
+   */
+  multi_event_table?: string;
+
+  /**
+   * Multi-event mode: the column name that discriminates rows by event type
+   * (e.g., `event_name`, `event`). REQUIRED when `schema_type: multi_event`.
+   */
+  event_column?: string;
+
+  /**
+   * Multi-event mode: optional JSON/STRUCT column that holds per-event
+   * properties. When set, emit writes a generic pointer comment on this
+   * column. When unset, emit assumes a wide layout (each property has its
+   * own column).
+   */
+  properties_column?: string;
+}
+
 export type DestinationConfig =
-  | SegmentDestinationConfig
-  | AmplitudeDestinationConfig
   | MixpanelDestinationConfig
   | SnowflakeDestinationConfig
+  | BigQueryDestinationConfig
+  | DatabricksDestinationConfig
   | CustomDestinationConfig;
 
 export type DiscriminatorPropertyConfig = string | {
@@ -338,8 +556,14 @@ export interface EmitConfig {
     paths: string[];
     sdk: SdkType;
     track_pattern?: string | string[];
-    /** Additional patterns for backend tracking (e.g. Java audit helpers, server-side SDKs) */
-    backend_patterns?: string[];
+    /**
+     * Additional patterns for backend tracking (e.g. Java audit helpers,
+     * server-side SDKs). Entries may be a bare string, or an object with
+     * `context_files` pointing at helper files to load into the LLM prompt
+     * when the pattern matches — useful when the property payload is
+     * assembled downstream from the call site.
+     */
+    backend_patterns?: BackendPatternConfig[];
     /** Paths or file patterns to exclude from scanning (e.g. 'cypress', '*.test.*'). Directories are passed as --exclude-dir; glob patterns (containing *) as --exclude. Leading `**\/` is stripped automatically. */
     exclude_paths?: string[];
   };

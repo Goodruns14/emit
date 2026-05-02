@@ -49,7 +49,17 @@ export class MetadataExtractor {
     codeContext: CodeContext,
     literalValues: LiteralValues,
   ): Promise<ExtractedMetadata> {
-    const cacheKey = codeContext.context;
+    // Fold reference-helper file identity into the cache key so cached
+    // extractions invalidate when a configured context_file changes. Without
+    // this, adding context_files to a previously-cached event has no visible
+    // effect — the stale cache entry keeps winning.
+    const extraKey =
+      codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+        ? codeContext.extra_context_files
+            .map((f) => `${f.path}::${f.content.length}::${f.content.slice(0, 64)}`)
+            .join("|")
+        : "";
+    const cacheKey = codeContext.context + (extraKey ? `||extras:${extraKey}` : "");
     const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
     if (cached) return sanitizeExtraction(cached);
 
@@ -74,7 +84,16 @@ export class MetadataExtractor {
     ctx: CodeContext,
     parentDescription?: string,
   ): Promise<ExtractedMetadata> {
-    const cacheKey = ctx.context + `::disc::${parentEventName}::${property}::${value}`;
+    const extraKey =
+      ctx.extra_context_files && ctx.extra_context_files.length > 0
+        ? ctx.extra_context_files
+            .map((f) => `${f.path}::${f.content.length}::${f.content.slice(0, 64)}`)
+            .join("|")
+        : "";
+    const cacheKey =
+      ctx.context +
+      `::disc::${parentEventName}::${property}::${value}` +
+      (extraKey ? `||extras:${extraKey}` : "");
     const eventKey = `${parentEventName}.${value}`;
     const cached = getCached<ExtractedMetadata>(eventKey, cacheKey);
     if (cached) return cached;
@@ -98,7 +117,10 @@ export class MetadataExtractor {
     eventName: string,
     repoPaths: string[]
   ): Promise<ResolvedEvent | null> {
-    const broadMatches = await searchBroad(eventName, repoPaths);
+    // Bypass user-configured exclude_paths when resolving — the whole point is
+    // to find events the regular scan couldn't find, and excludes are often
+    // what's blocking discovery in the first place.
+    const broadMatches = await searchBroad(eventName, repoPaths, { ignoreUserExcludes: true });
 
     if (broadMatches.length === 0) return null;
 

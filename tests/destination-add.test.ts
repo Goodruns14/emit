@@ -1,0 +1,237 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+
+const answers: string[] = [];
+const arrowChoice = { current: "custom-header" as string };
+
+vi.mock("../src/utils/prompts.js", () => ({
+  arrowSelect: vi.fn(async () => arrowChoice.current),
+  createPrompter: () => ({
+    ask: async () => answers.shift() ?? "",
+    close: () => {},
+  }),
+}));
+
+import { runDestinationAdd } from "../src/commands/destination/add.js";
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "emit-dest-add-"));
+  answers.length = 0;
+  arrowChoice.current = "custom-header";
+});
+
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function writeBaseConfig() {
+  fs.writeFileSync(
+    path.join(tmpDir, "emit.config.yml"),
+    `source:
+  path: ./src
+# My destinations
+destinations:
+  - type: mixpanel
+    project_id: 42
+`,
+  );
+}
+
+describe("runDestinationAdd — scaffolding", () => {
+  it("writes adapter file and appends config entry (custom-header)", async () => {
+    writeBaseConfig();
+    arrowChoice.current = "custom-header";
+    answers.push("", "STATSIG-API-KEY", "");
+
+    const code = await runDestinationAdd("Statsig", { cwd: tmpDir });
+    expect(code).toBe(0);
+
+    const adapterPath = path.join(tmpDir, "emit.destinations/statsig.mjs");
+    expect(fs.existsSync(adapterPath)).toBe(true);
+    const adapter = fs.readFileSync(adapterPath, "utf8");
+    expect(adapter).toContain("export default class StatsigAdapter");
+    expect(adapter).toContain('"STATSIG-API-KEY": this.apiKey');
+
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    expect(cfg).toContain("# My destinations");
+    expect(cfg).toContain("  - type: mixpanel");
+    expect(cfg).toContain("  - type: custom\n    name: Statsig");
+    expect(cfg).toContain("      api_key_env: STATSIG_API_KEY");
+  });
+
+  it("writes basic_auth_env option for HTTP Basic style", async () => {
+    writeBaseConfig();
+    arrowChoice.current = "basic";
+    answers.push("", "");
+
+    const code = await runDestinationAdd("Legacy", { cwd: tmpDir });
+    expect(code).toBe(0);
+
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    expect(cfg).toContain("      basic_auth_env: LEGACY_BASIC_AUTH");
+    expect(cfg).not.toContain("api_key_env");
+  });
+
+  it("writes no options block when auth=none", async () => {
+    writeBaseConfig();
+    arrowChoice.current = "none";
+    answers.push("");
+
+    const code = await runDestinationAdd("Public", { cwd: tmpDir });
+    expect(code).toBe(0);
+
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    const publicBlock = cfg.slice(cfg.indexOf("name: Public"));
+    expect(publicBlock).not.toContain("options:");
+  });
+});
+
+describe("runDestinationAdd — non-interactive mode", () => {
+  it("scaffolds end-to-end with no prompts when all flags are provided", async () => {
+    writeBaseConfig();
+    // Answers array stays empty — if runDestinationAdd reaches the prompter
+    // for anything it'll get "" and produce wrong output; we verify that
+    // doesn't happen by checking the final scaffold.
+
+    const code = await runDestinationAdd("Statsig", {
+      cwd: tmpDir,
+      yes: true,
+      auth: "custom-header",
+      envVar: "STATSIG_KEY",
+      headerName: "X-Statsig-Token",
+      docsUrl: "https://docs.example.com",
+    });
+    expect(code).toBe(0);
+
+    const adapter = fs.readFileSync(
+      path.join(tmpDir, "emit.destinations/statsig.mjs"),
+      "utf8",
+    );
+    expect(adapter).toContain(`options.api_key_env ?? "STATSIG_KEY"`);
+    expect(adapter).toContain(`"X-Statsig-Token": this.apiKey`);
+    expect(adapter).toContain("https://docs.example.com");
+
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    expect(cfg).toContain("      api_key_env: STATSIG_KEY");
+  });
+
+  it("errors with --yes when required flag is missing (no auth)", async () => {
+    writeBaseConfig();
+    const code = await runDestinationAdd("Statsig", { cwd: tmpDir, yes: true });
+    expect(code).toBe(1);
+    expect(fs.existsSync(path.join(tmpDir, "emit.destinations"))).toBe(false);
+  });
+
+  it("errors with --yes --auth=custom-header when --header-name missing", async () => {
+    writeBaseConfig();
+    const code = await runDestinationAdd("Statsig", {
+      cwd: tmpDir,
+      yes: true,
+      auth: "custom-header",
+    });
+    expect(code).toBe(1);
+  });
+
+  it("errors on invalid --auth value", async () => {
+    writeBaseConfig();
+    const code = await runDestinationAdd("Statsig", {
+      cwd: tmpDir,
+      yes: true,
+      auth: "invalid-style" as any,
+    });
+    expect(code).toBe(1);
+  });
+
+  it("auth=none non-interactive works without env-var", async () => {
+    writeBaseConfig();
+    const code = await runDestinationAdd("Public", {
+      cwd: tmpDir,
+      yes: true,
+      auth: "none",
+    });
+    expect(code).toBe(0);
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    const block = cfg.slice(cfg.indexOf("name: Public"));
+    expect(block).not.toContain("options:");
+  });
+
+  it("positional name still required in non-interactive mode", async () => {
+    writeBaseConfig();
+    const code = await runDestinationAdd(undefined, {
+      cwd: tmpDir,
+      yes: true,
+      auth: "bearer",
+    });
+    expect(code).toBe(1);
+  });
+
+  it("flag-driven interactive mode (no --yes) skips prompts for provided fields", async () => {
+    writeBaseConfig();
+    // Only envVar + docsUrl — auth still needs arrow-select (mocked).
+    arrowChoice.current = "bearer";
+    // No readline prompts should fire since envVar + docsUrl are flag-provided
+    // and bearer doesn't need header-name. If a prompt leaks, answers is empty
+    // so it'd return "" — we assert final config uses the flag values.
+
+    const code = await runDestinationAdd("MyApi", {
+      cwd: tmpDir,
+      envVar: "MY_FLAG_TOKEN",
+      docsUrl: "https://example.com/docs",
+    });
+    expect(code).toBe(0);
+
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    expect(cfg).toContain("      api_key_env: MY_FLAG_TOKEN");
+    const adapter = fs.readFileSync(
+      path.join(tmpDir, "emit.destinations/myapi.mjs"),
+      "utf8",
+    );
+    expect(adapter).toContain("https://example.com/docs");
+  });
+});
+
+describe("runDestinationAdd — error paths", () => {
+  it("errors when emit.config.yml is missing", async () => {
+    const code = await runDestinationAdd("Statsig", { cwd: tmpDir });
+    expect(code).toBe(1);
+  });
+
+  it("errors when destination name already exists", async () => {
+    writeBaseConfig();
+    arrowChoice.current = "custom-header";
+    answers.push("", "X-API-Key", "");
+    const first = await runDestinationAdd("Statsig", { cwd: tmpDir });
+    expect(first).toBe(0);
+
+    const existingAdapter = fs.readFileSync(
+      path.join(tmpDir, "emit.destinations/statsig.mjs"),
+      "utf8",
+    );
+    const second = await runDestinationAdd("Statsig", { cwd: tmpDir });
+    expect(second).toBe(1);
+    expect(
+      fs.readFileSync(path.join(tmpDir, "emit.destinations/statsig.mjs"), "utf8"),
+    ).toBe(existingAdapter);
+  });
+
+  it("errors when the adapter file already exists", async () => {
+    writeBaseConfig();
+    fs.mkdirSync(path.join(tmpDir, "emit.destinations"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "emit.destinations/statsig.mjs"), "// pre-existing\n");
+
+    arrowChoice.current = "custom-header";
+    answers.push("", "X-API-Key", "");
+
+    const code = await runDestinationAdd("Statsig", { cwd: tmpDir });
+    expect(code).toBe(1);
+    expect(
+      fs.readFileSync(path.join(tmpDir, "emit.destinations/statsig.mjs"), "utf8"),
+    ).toBe("// pre-existing\n");
+    const cfg = fs.readFileSync(path.join(tmpDir, "emit.config.yml"), "utf8");
+    expect(cfg).not.toContain("name: Statsig");
+  });
+});

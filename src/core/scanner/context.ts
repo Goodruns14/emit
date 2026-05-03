@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import type { LiteralValues } from "../../types/index.js";
 import { buildExcludeArgs } from "./search.js";
 
@@ -96,19 +96,30 @@ export function resolveEnumStringValue(
   constantName: string,
   repoPaths: string[]
 ): string | null {
-  const excludeArgs = buildExcludeArgs().map((a) => `'${a}'`).join(" ");
   for (const repoPath of repoPaths) {
+    let result: string;
     try {
-      const result = execSync(
-        `grep -rn "${constantName}\\s*=" "${repoPath}" --include="*.ts" --include="*.tsx" --include="*.java" ${excludeArgs} 2>/dev/null | head -5`,
-        { encoding: "utf8" }
+      result = execFileSync(
+        "grep",
+        [
+          "-rn",
+          `${constantName}\\s*=`,
+          repoPath,
+          "--include=*.ts",
+          "--include=*.tsx",
+          "--include=*.java",
+          ...buildExcludeArgs(),
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
       ).trim();
-      if (!result) continue;
-      const match = result.match(/=\s*["']([^"']+)["']/);
-      if (match) return match[1];
     } catch {
-      // no match in this path
+      // grep exits non-zero when no match found
+      continue;
     }
+    if (!result) continue;
+    const head = result.split("\n").slice(0, 5).join("\n");
+    const match = head.match(/=\s*["']([^"']+)["']/);
+    if (match) return match[1];
   }
   return null;
 }

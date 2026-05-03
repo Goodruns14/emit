@@ -5,24 +5,33 @@ import { buildExtractionPrompt } from "../src/core/extractor/prompts.js";
 import type { CodeContext } from "../src/types/index.js";
 
 describe("cache", () => {
+  const scope = { provider: "anthropic", model: "claude-sonnet-4-6", promptVersion: "1" };
   beforeEach(() => clearCache());
 
   it("returns null for a cache miss", () => {
-    const result = getCached("some_event", "some_context");
+    const result = getCached("some_event", "some_context", scope);
     expect(result).toBeNull();
   });
 
   it("round-trips a value", () => {
     const value = { foo: "bar", num: 42 };
-    setCached("event_name", "code_context", value);
-    const retrieved = getCached("event_name", "code_context");
+    setCached("event_name", "code_context", scope, value);
+    const retrieved = getCached("event_name", "code_context", scope);
     expect(retrieved).toEqual(value);
   });
 
   it("returns null for a different event/context pair", () => {
-    setCached("event_a", "ctx", { data: 1 });
-    const result = getCached("event_b", "ctx");
+    setCached("event_a", "ctx", scope, { data: 1 });
+    const result = getCached("event_b", "ctx", scope);
     expect(result).toBeNull();
+  });
+
+  it("returns null when the cache scope (provider/model/prompt version) changes", () => {
+    setCached("event_a", "ctx", scope, { data: 1 });
+    const differentModel = { ...scope, model: "claude-opus-4-7" };
+    expect(getCached("event_a", "ctx", differentModel)).toBeNull();
+    const differentPromptVersion = { ...scope, promptVersion: "2" };
+    expect(getCached("event_a", "ctx", differentPromptVersion)).toBeNull();
   });
 });
 

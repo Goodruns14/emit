@@ -1027,7 +1027,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
     logger.line("  You're all set. Running your first scan now...");
     logger.blank();
     try {
-      await execa("node", [cliPath, "scan", "--confirm"], { stdio: "inherit", cwd: repoDir });
+      await execa("node", [cliPath, "scan", "--yes"], { stdio: "inherit", cwd: repoDir });
     } catch {
       // scan handles its own error output
     }
@@ -1045,7 +1045,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
 
     if (scanChoice === "yes") {
       try {
-        await execa("node", [cliPath, "scan", "--confirm"], { stdio: "inherit", cwd: repoDir });
+        await execa("node", [cliPath, "scan", "--yes"], { stdio: "inherit", cwd: repoDir });
       } catch {
         // scan handles its own error output
       }

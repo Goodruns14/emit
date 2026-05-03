@@ -7,18 +7,22 @@ import * as yaml from "js-yaml";
 // ── Mock the LLM layer ─────────────────────────────────────────────
 // We mock callLLM so tests never hit a real API. Everything else
 // (config loading, scanner, writer) runs for real.
-vi.mock("../src/core/extractor/claude.js", () => ({
-  callLLM: vi.fn(),
-  parseJsonResponse: vi.fn((text: string, fallback: any) => {
-    try {
-      // Strip markdown fences if present
-      const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(cleaned);
-    } catch {
-      return fallback;
-    }
-  }),
-}));
+vi.mock("../src/core/extractor/claude.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/core/extractor/claude.js")>();
+  return {
+    ...actual,
+    callLLM: vi.fn(),
+    parseJsonResponse: vi.fn((text: string, fallback: any) => {
+      try {
+        // Strip markdown fences if present
+        const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        return JSON.parse(cleaned);
+      } catch {
+        return fallback;
+      }
+    }),
+  };
+});
 
 import { callLLM } from "../src/core/extractor/claude.js";
 import { loadConfig, resolveOutputPath } from "../src/utils/config.js";

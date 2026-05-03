@@ -212,3 +212,30 @@ export function parseJsonResponse<T>(text: string, fallback: T): T {
     }
   }
 }
+
+export class JsonParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JsonParseError";
+  }
+}
+
+// Returns parsed JSON, or null if both raw and fence-stripped parses fail.
+export function tryParseJson<T>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const stripped = text.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
+    try {
+      return JSON.parse(stripped) as T;
+    } catch {
+      return null;
+    }
+  }
+}
+
+// Appended to the original prompt on retry when the first response was
+// unparseable — callers do the actual retry inline so callLLM stays the only
+// LLM-invocation seam (keeps test mocking simple).
+export const JSON_RETRY_NUDGE =
+  "\n\nIMPORTANT: Respond with ONLY valid JSON. No prose before or after, no markdown fences, no explanations.";

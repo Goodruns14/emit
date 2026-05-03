@@ -8,26 +8,34 @@ import type {
   ResolvedEvent,
 } from "../../types/index.js";
 import type { DiagnosticSignal } from "../catalog/diagnostic.js";
-import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt, buildDiagnosticPrompt } from "./prompts.js";
-import { callLLM, parseJsonResponse } from "./claude.js";
-import { getCached, setCached } from "./cache.js";
+import { buildExtractionPrompt, buildDiscriminatorExtractionPrompt, buildResolveMissingPrompt, buildDiagnosticPrompt, PROMPT_VERSION } from "./prompts.js";
+import { callLLM, parseJsonResponse, tryParseJson, JsonParseError, JSON_RETRY_NUDGE } from "./claude.js";
+import { getCached, setCached, type CacheScope } from "./cache.js";
 import { searchBroad } from "../scanner/search.js";
 import { extractContext } from "../scanner/context.js";
 
-const EXTRACTION_FALLBACK: ExtractedMetadata = {
-  event_description: "Could not extract — JSON parse failed",
-  fires_when: "Unknown",
-  confidence: "low",
-  confidence_reason: "LLM returned unparseable response",
-  properties: {},
-  flags: ["Extraction failed — manual review required"],
-};
+// Call the LLM and parse JSON; on parse failure retry once with an explicit
+// JSON-only nudge appended, then throw JsonParseError if still unparseable.
+// Lives here (not in claude.ts) so callLLM is invoked through the module
+// import boundary and remains mockable in tests.
+async function callLLMExpectingJson<T>(
+  prompt: string,
+  cfg: LlmCallConfig,
+  context: string,
+): Promise<T> {
+  const text = await callLLM(prompt, cfg);
+  const parsed = tryParseJson<T>(text);
+  if (parsed !== null) return parsed;
 
-/**
- * Strip scanner/LLM artifacts that aren't real event properties.
- * Applied to both cache hits and fresh LLM results so legacy cached
- * entries get cleaned transparently.
- */
+  const text2 = await callLLM(prompt + JSON_RETRY_NUDGE, cfg);
+  const parsed2 = tryParseJson<T>(text2);
+  if (parsed2 !== null) return parsed2;
+
+  throw new JsonParseError(
+    `LLM returned unparseable JSON for ${context} (provider=${cfg.provider}, model=${cfg.model}) after one retry`,
+  );
+}
+
 function sanitizeExtraction(m: ExtractedMetadata): ExtractedMetadata {
   if (m.properties && "$set" in m.properties) {
     const { $set, ...rest } = m.properties as Record<string, unknown>;
@@ -39,9 +47,15 @@ function sanitizeExtraction(m: ExtractedMetadata): ExtractedMetadata {
 
 export class MetadataExtractor {
   private cfg: LlmCallConfig;
+  private cacheScope: CacheScope;
 
   constructor(cfg: LlmCallConfig) {
     this.cfg = cfg;
+    this.cacheScope = {
+      provider: cfg.provider,
+      model: cfg.model,
+      promptVersion: PROMPT_VERSION,
+    };
   }
 
   async extractMetadata(
@@ -60,7 +74,7 @@ export class MetadataExtractor {
             .join("|")
         : "";
     const cacheKey = codeContext.context + (extraKey ? `||extras:${extraKey}` : "");
-    const cached = getCached<ExtractedMetadata>(eventName, cacheKey);
+    const cached = getCached<ExtractedMetadata>(eventName, cacheKey, this.cacheScope);
     if (cached) return sanitizeExtraction(cached);
 
     const prompt = buildExtractionPrompt(
@@ -69,11 +83,10 @@ export class MetadataExtractor {
       literalValues,
     );
 
-    const text = await callLLM(prompt, this.cfg);
-    const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
+    const result = await callLLMExpectingJson<ExtractedMetadata>(prompt, this.cfg, eventName);
 
     const sanitized = sanitizeExtraction(result);
-    setCached(eventName, cacheKey, sanitized);
+    setCached(eventName, cacheKey, this.cacheScope, sanitized);
     return sanitized;
   }
 
@@ -95,7 +108,7 @@ export class MetadataExtractor {
       `::disc::${parentEventName}::${property}::${value}` +
       (extraKey ? `||extras:${extraKey}` : "");
     const eventKey = `${parentEventName}.${value}`;
-    const cached = getCached<ExtractedMetadata>(eventKey, cacheKey);
+    const cached = getCached<ExtractedMetadata>(eventKey, cacheKey, this.cacheScope);
     if (cached) return cached;
 
     const prompt = buildDiscriminatorExtractionPrompt(
@@ -106,10 +119,13 @@ export class MetadataExtractor {
       parentDescription,
     );
 
-    const text = await callLLM(prompt, this.cfg);
-    const result = parseJsonResponse<ExtractedMetadata>(text, EXTRACTION_FALLBACK);
+    const result = await callLLMExpectingJson<ExtractedMetadata>(
+      prompt,
+      this.cfg,
+      `${parentEventName}.${value}`
+    );
 
-    setCached(eventKey, cacheKey, result);
+    setCached(eventKey, cacheKey, this.cacheScope, result);
     return result;
   }
 

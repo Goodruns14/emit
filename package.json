@@ -39,7 +39,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.20.0",
+    "@anthropic-ai/sdk": "^0.92.0",
     "@databricks/sql": "^1.13.0",
     "@google-cloud/bigquery": "^8.1.1",
     "@modelcontextprotocol/sdk": "^1.27.1",

@@ -1,5 +1,9 @@
 import type { CodeContext, LiteralValues } from "../../types/index.js";
 
+// Bump whenever the wording or output schema of any prompt changes — included
+// in the extraction cache key so edits invalidate stale entries automatically.
+export const PROMPT_VERSION = "1";
+
 /**
  * Shared confidence-level definitions injected into every extraction prompt.
  *

@@ -15,7 +15,7 @@ Emit is an open-source CLI tool that automatically generates event metadata cata
 - **Phase 4 (MCP Server):** Complete — local MCP server with 8 tools, `emit mcp` command
 - **Phase 5 (Implementation Agent):** Not started
 
-See `md files/emit-master-plan.md` for the full roadmap, business model, competitive landscape, and architectural vision.
+See `md files/emit-master-plan.md` for the full roadmap and architectural vision.
 
 ## Architecture
 
@@ -226,7 +226,6 @@ Added to stress-test emit across diverse real-world codebases:
 - Scanner achieves **100% discovery** for repos with standard `trackFn("event_name")` patterns
 - **Enum/constant resolution** improved: now tries PascalCase, camelCase, UPPER_SNAKE_CASE variants + broad search fallback
 - Repos with **object-param tracking** (twenty), **server-side only** (mattermost, directus), or **aggregate telemetry** (prisma) are intentionally hard edge cases
-- The `claude-code` LLM provider has JSON parse reliability issues — `anthropic` provider recommended for production
 
 Each has its own `emit.config.yml`. Run tests against them with:
 ```bash
@@ -318,7 +317,7 @@ button_click.signup_cta:
 - **Partial scan merges** — `--event`/`--events` flags merge results into existing catalog (don't overwrite)
 - **Confidence signals uncertainty** — Low confidence is better than wrong confidence. The reconciler downgrades when signals conflict.
 - **Provider validation at config load** — Invalid LLM providers fail fast with clear error messages, not at extraction time
-- **MCP write path goes to file** — `update_event_description` and `update_property_description` write directly to `emit.catalog.yml`. No warehouse write path exists in the local MCP (remote MCP with Snowflake write-through is Phase 4 paid tier, not yet built)
+- **MCP write path goes to file** — `update_event_description` and `update_property_description` write directly to `emit.catalog.yml`. No warehouse write path exists in the local MCP.
 - **MCP uses `loadConfigLight()`** — The MCP server skips warehouse and LLM credential validation at startup. It only needs to resolve the catalog file path. Pass `--catalog <path>` to bypass config lookup entirely.
 - **`track_pattern` is optional when events are provided** — When `emit init` collects events (inline or from file), it skips pattern detection entirely. The scanner's broad search path finds event call sites without needing `track_pattern`. Pattern detection only runs in the no-events init path.
 
@@ -337,7 +336,7 @@ These files are gitignored but contain important context:
 
 | File | Contents |
 |------|----------|
-| `md files/emit-master-plan.md` | Full roadmap, business model, phases, competitive landscape |
+| `md files/emit-master-plan.md` | Full roadmap, phases, architectural vision |
 | `md files/emit-user-tests.md` | 21 detailed real-user simulation test scripts |
 | `md files/emit-test-results.md` | Test execution results and findings |
 | `md files/emit-phase1-plan.md` | Original Phase 1 implementation plan |

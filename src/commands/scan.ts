@@ -12,6 +12,7 @@ import { RepoScanner } from "../core/scanner/index.js";
 import { setExcludePaths } from "../core/scanner/search.js";
 import { extractAllLiteralValues } from "../core/scanner/context.js";
 import { MetadataExtractor } from "../core/extractor/index.js";
+import { JsonParseError } from "../core/extractor/claude.js";
 import { writeOutput } from "../core/writer/index.js";
 import { diffCatalogs } from "../core/diff/index.js";
 import { formatTerminalDiff } from "../core/diff/format.js";
@@ -307,6 +308,8 @@ export async function runScan(opts: ScanOptions): Promise<number> {
   const stats = { high: 0, medium: 0, low: 0 };
   let extracted = 0;
   let unchanged = 0;
+  let failedCount = 0;
+  const failedEvents: string[] = [];
 
   for (const event of located) {
     const ctx = codeContextMap.get(event.name)!;
@@ -338,22 +341,32 @@ export async function runScan(opts: ScanOptions): Promise<number> {
 
     const subInfo = subEventMap.get(event.name);
     let meta;
-    if (subInfo) {
-      // Sub-event: use discriminator-specific extraction
-      const parentDescription = catalog[subInfo.parentEvent]?.description;
-      meta = await extractor.extractDiscriminatorMetadata(
-        subInfo.parentEvent,
-        subInfo.property,
-        subInfo.value,
-        ctx,
-        parentDescription,
-      );
-    } else {
-      meta = await extractor.extractMetadata(
-        event.name,
-        ctx,
-        literalValues,
-      );
+    try {
+      if (subInfo) {
+        // Sub-event: use discriminator-specific extraction
+        const parentDescription = catalog[subInfo.parentEvent]?.description;
+        meta = await extractor.extractDiscriminatorMetadata(
+          subInfo.parentEvent,
+          subInfo.property,
+          subInfo.value,
+          ctx,
+          parentDescription,
+        );
+      } else {
+        meta = await extractor.extractMetadata(
+          event.name,
+          ctx,
+          literalValues,
+        );
+      }
+    } catch (err) {
+      if (err instanceof JsonParseError) {
+        failedCount++;
+        failedEvents.push(event.name);
+        if (!json) logger.scanRow(event.name, "json parse failed (skipped)", "fail");
+        continue;
+      }
+      throw err;
     }
 
     // ── Build catalog event ──────────────────────────────────────
@@ -418,22 +431,25 @@ export async function runScan(opts: ScanOptions): Promise<number> {
   }
 
   // ── Guard: refuse to write an empty catalog when events were configured ──
-  // If LLM calls fail at scale (rate limit, API error, claude-code session
-  // degradation), parseJsonResponse falls back to a placeholder per event and
-  // the user ends up with a catalog full of "Could not extract — JSON parse
-  // failed" rows or, worse, no catalog at all. Either way it's silently broken.
-  // Fail loudly here instead of pretending the scan worked.
-  const extractedKeys = Object.keys(catalog);
-  const placeholderCount = extractedKeys.filter((k) =>
-    catalog[k]?.confidence_reason === "LLM returned unparseable response"
-  ).length;
-  const successfulCount = extractedKeys.length - placeholderCount;
+  // Failed extractions are skipped (not written as placeholder rows), but if
+  // every located event fails we want to surface the systemic problem rather
+  // than silently produce an empty catalog.
+  const successfulCount = Object.keys(catalog).length;
+
+  if (failedCount > 0 && !json) {
+    logger.blank();
+    logger.line(
+      chalk.yellow(
+        `  ⚠ ${failedCount} event${failedCount === 1 ? "" : "s"} skipped — LLM returned unparseable JSON after retry: ${failedEvents.slice(0, 5).join(", ")}${failedEvents.length > 5 ? `, +${failedEvents.length - 5} more` : ""}`
+      )
+    );
+  }
 
   if (located.length > 0 && successfulCount === 0) {
     const reason =
-      extractedKeys.length === 0
-        ? `extraction produced 0 events from ${located.length} located in code`
-        : `all ${extractedKeys.length} extractions returned the JSON-parse fallback (LLM is failing — likely rate limit, quota exhaustion, or claude-code session degradation)`;
+      failedCount > 0
+        ? `all ${failedCount} extractions returned unparseable JSON (LLM is failing — likely rate limit, quota exhaustion, or session degradation)`
+        : `extraction produced 0 events from ${located.length} located in code`;
     logger.error(
       `Refusing to save catalog: ${reason}.\n` +
         `  No catalog file was written — your previous catalog (if any) is untouched.\n` +
@@ -481,14 +497,17 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       logger.line(chalk.gray("  This uses LLM calls to fuzzy-match renamed/refactored events."));
       logger.blank();
 
-      // Checkpoint: confirm before spending tokens
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`  Proceed with resolving ${eventsToResolve.length} event${eventsToResolve.length === 1 ? "" : "s"}? [Y/n]: `, (ans) => {
-          rl.close();
-          resolve(ans);
+      // Checkpoint: confirm before spending tokens (skipped under --yes)
+      let answer = "y";
+      if (!opts.yes) {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        answer = await new Promise<string>((resolve) => {
+          rl.question(`  Proceed with resolving ${eventsToResolve.length} event${eventsToResolve.length === 1 ? "" : "s"}? [Y/n]: `, (ans) => {
+            rl.close();
+            resolve(ans);
+          });
         });
-      });
+      }
 
       if (answer.trim().toLowerCase() !== "n") {
         let resolvedCount = 0;
@@ -514,9 +533,9 @@ export async function runScan(opts: ScanOptions): Promise<number> {
             logger.scanRow(eventName, "no match found", "fail");
           }
 
-          // Checkpoint every 5 events if more than 10 remain
+          // Checkpoint every 5 events if more than 10 remain (skipped under --yes)
           const remaining = eventsToResolve.length - (i + 1);
-          if (remaining > 5 && (i + 1) % 5 === 0) {
+          if (!opts.yes && remaining > 5 && (i + 1) % 5 === 0) {
             const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout });
             const cont = await new Promise<string>((resolve) => {
               rl2.question(

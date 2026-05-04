@@ -11,6 +11,15 @@
     "cli"
   ],
   "license": "MIT",
+  "author": "Goodruns14",
+  "homepage": "https://github.com/Goodruns14/emit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Goodruns14/emit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Goodruns14/emit/issues"
+  },
   "bin": {
     "emit": "dist/cli.js"
   },

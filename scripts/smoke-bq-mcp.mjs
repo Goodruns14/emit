@@ -4,10 +4,19 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+const PROJECT = process.env.BIGQUERY_PROJECT;
+if (!PROJECT) {
+  console.error(
+    "Set BIGQUERY_PROJECT to your GCP project ID. Example:\n" +
+      "  BIGQUERY_PROJECT=my-project node scripts/smoke-bq-mcp.mjs",
+  );
+  process.exit(2);
+}
+
 const transport = new StdioClientTransport({
   command: "npx",
   args: ["-y", "@toolbox-sdk/server", "--prebuilt", "bigquery", "--stdio"],
-  env: { ...process.env, BIGQUERY_PROJECT: "stub-project-id-not-used-for-listing" },
+  env: { ...process.env, BIGQUERY_PROJECT: PROJECT },
   stderr: "pipe",
 });
 

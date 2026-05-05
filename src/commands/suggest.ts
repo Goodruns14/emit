@@ -235,7 +235,7 @@ async function runSuggest(opts: SuggestOptions): Promise<number> {
   // Claude Code reads the file via its Read tool (same context flows through)
   // and the visible conversation stays short enough to fit in-viewport.
   const brief = buildAgentBrief({ ctx, branchSlug, headless });
-  const briefPath = writeBriefFile(brief, branchSlug);
+  const briefPath = writeBriefFile(brief, branchSlug, repoRoot);
 
   logger.line(chalk.gray(`  Brief written to: ${briefPath}`));
   if (headless) {
@@ -352,20 +352,36 @@ async function promptForAsk(): Promise<string> {
 }
 
 /**
- * Write the agent brief to a tempfile and return the absolute path.
+ * Write the agent brief to a file inside the repo and return the absolute
+ * path.
  *
- * Why: passing a 300+ line brief via argv makes Claude Code echo it into the
- * conversation view, which blows past the terminal viewport and causes Ink's
- * renderer to pollute scrollback with repaint frames. A tempfile + pointer
- * keeps the visible conversation short and lets Claude Code Read the file.
+ * Why a file (vs. argv): passing a 300+ line brief via argv makes Claude Code
+ * echo it into the conversation view, which blows past the terminal viewport
+ * and causes Ink's renderer to pollute scrollback with repaint frames. A
+ * pointer + file keeps the visible conversation short and lets Claude Code
+ * Read the file.
  *
- * Location: OS tmpdir (survives a reasonable time for debugging post-session,
- * eventually cleaned by the OS). Filename includes the slug and a timestamp
- * so concurrent runs don't collide.
+ * Why inside the repo (vs. os.tmpdir): in headless mode (`emit suggest --yes`)
+ * the inner Claude Code is launched with `--permission-mode acceptEdits`,
+ * which auto-approves edits but NOT reads of paths outside the workspace.
+ * A brief at `os.tmpdir()` (`/var/folders/...` on macOS) triggered a
+ * permission prompt that no human could answer, and the agent silently
+ * exited 0 doing nothing. Writing into `<repoRoot>/.emit/` keeps the brief
+ * inside the workspace permission scope.
+ *
+ * Filename includes the slug and a timestamp so concurrent runs don't
+ * collide. `repoRoot` defaults to tmpdir as a soft fallback for callers that
+ * pre-date this signature.
  */
-export function writeBriefFile(brief: string, branchSlug: string): string {
+export function writeBriefFile(
+  brief: string,
+  branchSlug: string,
+  repoRoot?: string
+): string {
   const filename = `emit-brief-${branchSlug}-${Date.now()}.md`;
-  const briefPath = path.join(os.tmpdir(), filename);
+  const dir = repoRoot ? path.join(repoRoot, ".emit") : os.tmpdir();
+  if (repoRoot) fs.mkdirSync(dir, { recursive: true });
+  const briefPath = path.join(dir, filename);
   fs.writeFileSync(briefPath, brief, "utf8");
   return briefPath;
 }

@@ -786,7 +786,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         logger.line(`  ${chalk.gray(" ".repeat(16))}${chalk.gray(fixHint)}`);
       }
       logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
-      logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);
+      logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
       logger.blank();
 
       const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;

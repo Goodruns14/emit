@@ -356,7 +356,7 @@ export function parseDiscriminatorCsv(filePath: string): DiscriminatorEntry[] {
     throw new Error(
       `No discriminator entries found in ${filePath}.\n` +
       `  Expected 3 columns: event name, property, values\n` +
-      `  Example: button_click,button_id,"signup_cta,add_to_cart,checkout"`
+      `  Example: button_click,button_type,"signup_cta,add_to_cart,checkout"`
     );
   }
 

@@ -120,6 +120,14 @@ describe("McpDelegatedDestinationAdapter — fetchPropertyValues end-to-end", ()
     expect(r.values).toEqual(["all_events__alpha", "all_events__beta", "all_events__gamma"]);
   });
 
+  it("parses multi-block responses (one row per text content block, BigQuery MCP shape)", async () => {
+    const a = await startAdapter(
+      makeConfig({ event_table_mapping: { multi_event: "MULTI_BLOCK_TABLE" } }),
+    );
+    const r = await a.fetchPropertyValues("multi_event", "multi_col", 100);
+    expect(r.values).toEqual(["block_a", "block_b", "block_c"]);
+  });
+
   it("parses wrapped { rows: [...] } responses from the destination MCP", async () => {
     const a = await startAdapter(
       // Trigger wrapped path via the stub's RETURN_WRAPPED sentinel:

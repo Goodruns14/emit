@@ -60,10 +60,19 @@ export class DestinationMcpClient {
   /**
    * Invoke a tool on the destination MCP and return the parsed result.
    *
-   * MCP tool responses are an array of content items. We collect the text
-   * content and try to parse it as JSON (most query-passthrough tools return
-   * JSON rows). If parsing fails, we return the raw concatenated text — the
-   * caller can decide what to do with it.
+   * MCP tool responses are an array of content items. Destination MCPs differ
+   * in how they pack rows into those items:
+   *
+   *   1. Structured content   — `result.structuredContent` is set; prefer it.
+   *   2. Single text block    — one big JSON value (most stub/test MCPs).
+   *   3. Multi text block     — one JSON value per block, no separator
+   *                             (Google's BigQuery MCP returns rows this way:
+   *                              ["a"]["b"]["c"] as separate blocks, which
+   *                              joined is `"a""b""c"` — invalid JSON).
+   *
+   * Strategy: if every text block parses as JSON on its own, return them as
+   * an array. Falls back to single-block parse for the common case. Falls
+   * back to raw text if neither works — caller decides what to do.
    */
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (!this.client) {
@@ -79,16 +88,38 @@ export class DestinationMcpClient {
         `Destination MCP tool "${name}" returned error: ${errText || "(no error text)"}`,
       );
     }
-    // Some MCPs return structured content directly — prefer that when present.
     if (result.structuredContent !== undefined) {
       return result.structuredContent;
     }
-    const text = collectText(result);
-    if (text === "") return null;
+
+    const blocks = textBlocks(result);
+    if (blocks.length === 0) return null;
+
+    // Multi-block path: try to parse each block independently. If they all
+    // parse, the response is per-row — flatten arrays-of-rows into one array.
+    if (blocks.length > 1) {
+      const parsed: unknown[] = [];
+      let allOk = true;
+      for (const b of blocks) {
+        try {
+          parsed.push(JSON.parse(b));
+        } catch {
+          allOk = false;
+          break;
+        }
+      }
+      if (allOk) {
+        return parsed;
+      }
+    }
+
+    // Single-block (or fallback): try to parse the joined text as one JSON
+    // value, then fall through to raw text on failure.
+    const joined = blocks.join("");
     try {
-      return JSON.parse(text);
+      return JSON.parse(joined);
     } catch {
-      return text;
+      return joined;
     }
   }
 
@@ -103,20 +134,24 @@ export class DestinationMcpClient {
   }
 }
 
-function collectText(result: unknown): string {
-  if (!result || typeof result !== "object") return "";
+function textBlocks(result: unknown): string[] {
+  if (!result || typeof result !== "object") return [];
   const r = result as { content?: unknown };
-  if (!Array.isArray(r.content)) return "";
-  const parts: string[] = [];
+  if (!Array.isArray(r.content)) return [];
+  const out: string[] = [];
   for (const c of r.content) {
     if (c && typeof c === "object") {
       const item = c as { type?: unknown; text?: unknown };
       if (item.type === "text" && typeof item.text === "string") {
-        parts.push(item.text);
+        out.push(item.text);
       }
     }
   }
-  return parts.join("");
+  return out;
+}
+
+function collectText(result: unknown): string {
+  return textBlocks(result).join("");
 }
 
 /**

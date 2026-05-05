@@ -35,15 +35,30 @@ const client = new Client({ name: "emit-discover", version: "0.0.1" }, { capabil
 
 function unwrap(result) {
   if (result?.structuredContent !== undefined) return result.structuredContent;
-  const text = (result?.content ?? [])
+  const blocks = (result?.content ?? [])
     .filter((c) => c.type === "text" && typeof c.text === "string")
-    .map((c) => c.text)
-    .join("");
-  if (!text) return null;
+    .map((c) => c.text);
+  if (blocks.length === 0) return null;
+  // Multi-block responses (BigQuery MCP returns one item per text block):
+  // try parsing each block independently; if all parse, return as array.
+  if (blocks.length > 1) {
+    const parsed = [];
+    let allOk = true;
+    for (const b of blocks) {
+      try {
+        parsed.push(JSON.parse(b));
+      } catch {
+        allOk = false;
+        break;
+      }
+    }
+    if (allOk) return parsed;
+  }
+  const joined = blocks.join("");
   try {
-    return JSON.parse(text);
+    return JSON.parse(joined);
   } catch {
-    return text;
+    return joined;
   }
 }
 

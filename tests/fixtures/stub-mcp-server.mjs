@@ -32,6 +32,20 @@ server.tool(
       };
     }
 
+    // Special: a SQL containing "MULTI_BLOCK" returns each row as a separate
+    // text content block, mimicking Google's BigQuery MCP response shape.
+    if (sql.includes("MULTI_BLOCK")) {
+      const m = sql.match(/SELECT DISTINCT (\w+)/i);
+      const col = m ? m[1] : "value";
+      return {
+        content: [
+          { type: "text", text: JSON.stringify({ [col]: "block_a" }) },
+          { type: "text", text: JSON.stringify({ [col]: "block_b" }) },
+          { type: "text", text: JSON.stringify({ [col]: "block_c" }) },
+        ],
+      };
+    }
+
     // Special: a SQL containing "RETURN_WRAPPED" returns rows under a "rows" key
     if (sql.includes("RETURN_WRAPPED")) {
       const m = sql.match(/SELECT DISTINCT (\w+)/i);

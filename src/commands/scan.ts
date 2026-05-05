@@ -468,7 +468,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     const deviationCount = Object.values(propertyDefinitions).filter((d) =>
       Object.values(d.deviations).some((v) => v !== "")
     ).length;
-    if (!json) logger.succeed(`${sharedCount} shared properties, ${deviationCount} with deviations flagged`);
+    if (!json) logger.succeed(`${sharedCount} shared propert${sharedCount === 1 ? "y" : "ies"} identified, ${deviationCount} used differently across events`);
   } else {
     propertyDefinitions = previousCatalog?.property_definitions ?? {};
     if (!json) logger.succeed("All events unchanged — property definitions carried forward");
@@ -786,7 +786,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         logger.line(`  ${chalk.gray(" ".repeat(16))}${chalk.gray(fixHint)}`);
       }
       logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
-      logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);
+      logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
       logger.blank();
 
       const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;

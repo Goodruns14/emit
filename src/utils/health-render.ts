@@ -21,16 +21,16 @@ export function renderHealthSection(health: CatalogHealth, hasDiagnosticIssues =
     },
   ]);
 
-  // Legend + framing: shown only when there's actually a non-high event to
-  // explain. An all-high catalog gets a clean breakdown with no extra noise.
-  // The framing intentionally names Low/Not-found as highest-priority without
-  // telling users to leave Medium alone — pushing Medium to High is a valid
-  // user-driven choice when they have the evidence to bridge the gap.
+  logger.line(chalk.gray(
+    "  ✓ High = verified  ~ Medium = some evidence missing, justified read  ⚠ Low = needs review"
+  ));
+
+  // Priority framing: only when there's actually something to act on.
+  // Names Low/Not-found as highest-priority without telling users to leave
+  // Medium alone — pushing Medium to High is a valid user-driven choice when
+  // they have the evidence to bridge the gap.
   const hasNonHigh = health.medium_confidence > 0 || health.low_confidence > 0;
   if (hasNonHigh) {
-    logger.line(chalk.gray(
-      "  ✓ High = verified  ~ Medium = some evidence missing, justified read  ⚠ Low = needs review"
-    ));
     logger.line(chalk.gray("  Low and Not-found are highest-priority. Medium is acceptable on its own,"));
     logger.line(chalk.gray("  but you can push it to High by surfacing more context if you want."));
   }

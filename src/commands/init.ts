@@ -821,7 +821,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
   logger.line("  " + chalk.bold("Discriminator properties") + chalk.gray(" (optional)"));
   logger.blank();
   logger.line(chalk.gray("  Some events act as containers for many distinct actions."));
-  logger.line(chalk.gray("  For example, a ") + chalk.cyan("button_click") + chalk.gray(" event where the property ") + chalk.cyan("button_id"));
+  logger.line(chalk.gray("  For example, a ") + chalk.cyan("button_click") + chalk.gray(" event where the property ") + chalk.cyan("button_type"));
   logger.line(chalk.gray("  tells you ") + chalk.italic("which") + chalk.gray(" button was clicked (signup_cta, add_to_cart, etc.)."));
   logger.line(chalk.gray("  Emit can expand each value into its own catalog entry."));
   logger.blank();
@@ -842,7 +842,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
       const dp = createPrompter();
       logger.blank();
       logger.line(chalk.gray("  CSV format: 3 columns — event name, property, values"));
-      logger.line(chalk.gray("  Example row: ") + chalk.cyan('button_click,button_id,"signup_cta,add_to_cart,checkout"'));
+      logger.line(chalk.gray("  Example row: ") + chalk.cyan('button_click,button_type,"signup_cta,add_to_cart,checkout"'));
       logger.blank();
       const filePath = await dp.ask("  File path: ");
 
@@ -1060,7 +1060,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
   logger.line(chalk.gray("  " + "─".repeat(40)));
   logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
   logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
-  logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);
+  logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
   logger.blank();
 
   return 0;

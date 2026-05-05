@@ -13,29 +13,49 @@ const createdFiles: string[] = [];
 afterAll(() => {
   for (const f of createdFiles) {
     try {
-      fs.unlinkSync(f);
+      // Some entries are tmp directories from tmpRepo(); rm recursive handles both.
+      fs.rmSync(f, { recursive: true, force: true });
     } catch {
       // already gone — fine
     }
   }
 });
 
-describe("writeBriefFile", () => {
-  it("writes the brief to os.tmpdir() with a deterministic-shaped filename", () => {
-    const brief = "# test brief\n\nbody content";
-    const briefPath = writeBriefFile(brief, "survey-dropoff");
-    createdFiles.push(briefPath);
+/** Make a fresh fake repo root under tmpdir for a single test. */
+function tmpRepo(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "emit-suggest-test-"));
+  createdFiles.push(dir);
+  return dir;
+}
 
-    expect(briefPath.startsWith(os.tmpdir())).toBe(true);
+describe("writeBriefFile", () => {
+  it("writes the brief into <repoRoot>/.emit/ with a deterministic-shaped filename", () => {
+    const repoRoot = tmpRepo();
+    const brief = "# test brief\n\nbody content";
+    const briefPath = writeBriefFile(brief, "survey-dropoff", repoRoot);
+
+    expect(briefPath.startsWith(path.join(repoRoot, ".emit"))).toBe(true);
     expect(path.basename(briefPath)).toMatch(
       /^emit-brief-survey-dropoff-\d+\.md$/
     );
   });
 
-  it("writes the brief contents exactly as passed in", () => {
-    const brief = "line one\nline two\nline three";
-    const briefPath = writeBriefFile(brief, "x");
+  it("creates the .emit/ directory if it doesn't exist", () => {
+    const repoRoot = tmpRepo();
+    const briefPath = writeBriefFile("x", "mkdir-test", repoRoot);
+    expect(fs.existsSync(path.dirname(briefPath))).toBe(true);
+  });
+
+  it("falls back to os.tmpdir() when no repoRoot is passed", () => {
+    const briefPath = writeBriefFile("x", "fallback");
     createdFiles.push(briefPath);
+    expect(briefPath.startsWith(os.tmpdir())).toBe(true);
+  });
+
+  it("writes the brief contents exactly as passed in", () => {
+    const repoRoot = tmpRepo();
+    const brief = "line one\nline two\nline three";
+    const briefPath = writeBriefFile(brief, "x", repoRoot);
 
     const readBack = fs.readFileSync(briefPath, "utf8");
     expect(readBack).toBe(brief);
@@ -43,20 +63,20 @@ describe("writeBriefFile", () => {
 
   it("handles large briefs (>64KB) without truncation", () => {
     // Realistic worst case: papermark feature-launch can exceed 90K chars.
+    const repoRoot = tmpRepo();
     const big = "x".repeat(100_000);
-    const briefPath = writeBriefFile(big, "large");
-    createdFiles.push(briefPath);
+    const briefPath = writeBriefFile(big, "large", repoRoot);
 
     const readBack = fs.readFileSync(briefPath, "utf8");
     expect(readBack.length).toBe(100_000);
   });
 
   it("produces distinct paths for concurrent writes with the same slug", async () => {
-    const a = writeBriefFile("a", "concurrent");
+    const repoRoot = tmpRepo();
+    const a = writeBriefFile("a", "concurrent", repoRoot);
     // sleep 2ms to ensure a different timestamp
     await new Promise((r) => setTimeout(r, 2));
-    const b = writeBriefFile("b", "concurrent");
-    createdFiles.push(a, b);
+    const b = writeBriefFile("b", "concurrent", repoRoot);
 
     expect(a).not.toBe(b);
     expect(fs.readFileSync(a, "utf8")).toBe("a");

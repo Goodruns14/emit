@@ -1059,6 +1059,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
   logger.line(chalk.gray("  " + "─".repeat(40)));
   logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
   logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
+  logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events from a CSV/JSON file")}`);
   logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
   logger.blank();
 

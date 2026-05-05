@@ -210,11 +210,35 @@ export interface PushResult {
 }
 
 /**
+ * How quickly an event lands in this destination after firing on the client.
+ * Surfaced in read-tool responses so callers can frame "not found" correctly:
+ * a realtime destination with no row probably means the event didn't fire,
+ * but a "hours" destination just means the sync hasn't run yet.
+ */
+export type LatencyClass = "realtime" | "minutes" | "hours" | "daily";
+
+/**
+ * Result of `DestinationAdapter.fetchPropertyValues()`. Distinct values
+ * observed in the destination for a given event/property pair.
+ */
+export interface SampleValueResult {
+  /** Distinct values observed (may be truncated to `limit`). */
+  values: string[];
+  /** True if the destination had more distinct values than `limit`. */
+  truncated: boolean;
+}
+
+/**
  * Interface every destination adapter must implement.
  *
  * Built-in adapters (Mixpanel, Snowflake, etc.) implement this class-style.
  * User-authored custom adapters loaded via `type: custom` default-export a class
  * implementing this interface. See docs/DESTINATIONS.md for the authoring guide.
+ *
+ * Read methods (`fetchPropertyValues`, etc.) and `latencyClass` are opt-in —
+ * the MCP server probes via `typeof adapter.fetchPropertyValues === "function"`
+ * to decide whether to register data-read tools. Adapters that don't implement
+ * them simply omit them from the class.
  */
 export interface DestinationAdapter {
   /** Display name shown in emit push output (e.g. "Mixpanel", "Snowflake"). */
@@ -224,6 +248,24 @@ export interface DestinationAdapter {
    * Must respect opts.dryRun (count only, no network) and opts.events (filter).
    */
   push(catalog: EmitCatalog, opts?: PushOpts): Promise<PushResult>;
+  /**
+   * Optional async setup hook — used by adapters that need to spawn a
+   * subprocess or open a connection before they can serve requests.
+   * Called once after construction; the factory awaits it.
+   */
+  init?(): Promise<void>;
+  /** Latency expectation. Surfaced in read-tool responses for `not found` framing. */
+  latencyClass?: LatencyClass;
+  /**
+   * Fetch distinct values for a property on an event, capped at `limit`.
+   * Adapters delegating to a destination MCP run this as a SQL query.
+   */
+  fetchPropertyValues?(event: string, property: string, limit: number): Promise<SampleValueResult>;
+  /**
+   * Cleanup hook — kill child MCP subprocess, close connections.
+   * Called on emit MCP shutdown (SIGTERM/SIGINT).
+   */
+  close?(): Promise<void>;
 }
 
 // ─────────────────────────────────────────────
@@ -537,12 +579,77 @@ export interface DatabricksDestinationConfig extends DestinationConfigBase {
   properties_column?: string;
 }
 
+/**
+ * Read-only destination that delegates queries to an external MCP server
+ * (e.g. a community BigQuery MCP). emit spawns the MCP as a stdio subprocess
+ * and routes data-read tool calls (`fetchPropertyValues`, etc.) through it
+ * by calling whichever destination-MCP tool implements the capability.
+ *
+ * Auth lives entirely in the spawned MCP — emit never holds destination
+ * credentials. The user gets a working integration the moment they have a
+ * working destination MCP, with no second auth dance for emit.
+ *
+ * `push()` is intentionally not supported on `type: mcp` — destination MCPs
+ * rarely expose structured metadata-write tools (COMMENT ON COLUMN etc.).
+ * Configure a separate `type: snowflake|bigquery|...` destination for push
+ * if you need both push and MCP-delegated reads.
+ *
+ * Example:
+ *   destinations:
+ *     - type: mcp
+ *       name: BigQuery
+ *       command: ["bigquery-mcp-server", "--project", "my-gcp-project"]
+ *       latency_class: hours
+ *       tool_mapping:
+ *         query: bq.query
+ *       schema_type: per_event
+ *       event_table_mapping:
+ *         purchase_completed: purchases
+ */
+export interface McpDestinationConfig extends DestinationConfigBase {
+  type: "mcp";
+  /** Display name. Also used as the `destination` arg on MCP read tools. */
+  name: string;
+  /**
+   * Command to spawn the destination MCP. The first element is the
+   * executable; remaining elements are arguments. e.g.
+   *   ["bigquery-mcp-server", "--project", "my-gcp-project"]
+   */
+  command: string[];
+  /** Optional env vars merged on top of the inherited environment. */
+  env?: Record<string, string>;
+  /** Latency expectation for this destination. Surfaced in read responses. */
+  latency_class: LatencyClass;
+  /**
+   * Map emit capabilities → destination-MCP tool names. Destination MCPs
+   * are not standardized; this lets the user point emit at the right tool.
+   *
+   *   query — name of the SQL-passthrough tool (e.g. "bq.query", "execute_sql")
+   */
+  tool_mapping: {
+    query: string;
+  };
+  /**
+   * How emit synthesizes SQL for reads. Same semantics as the direct
+   * Snowflake/BigQuery configs — destination MCP just runs SQL, so emit
+   * needs to know the table layout.
+   */
+  schema_type: "per_event" | "multi_event";
+  /** Per-event mode: optional explicit event → table mapping. */
+  event_table_mapping?: Record<string, string>;
+  /** Multi-event mode: the table that holds rows for multiple events. */
+  multi_event_table?: string;
+  /** Multi-event mode: the column name discriminating rows by event. */
+  event_column?: string;
+}
+
 export type DestinationConfig =
   | MixpanelDestinationConfig
   | SnowflakeDestinationConfig
   | BigQueryDestinationConfig
   | DatabricksDestinationConfig
-  | CustomDestinationConfig;
+  | CustomDestinationConfig
+  | McpDestinationConfig;
 
 export type DiscriminatorPropertyConfig = string | {
   property: string;

@@ -1021,6 +1021,11 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
 
   const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli.js");
 
+  // Track whether we invoked scan — scan prints its own "What's next" footer
+  // (with conditional `emit fix` hint when noise is detected), so init should
+  // skip its own footer to avoid rendering two adjacent identical blocks.
+  let scanInvoked = false;
+
   if (hasDataSource) {
     // Events are ready — run scan automatically, no prompt needed
     logger.line("  You're all set. Running your first scan now...");
@@ -1030,6 +1035,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
     } catch {
       // scan handles its own error output
     }
+    scanInvoked = true;
   } else {
     // No events yet — let the user choose
     logger.line("  Run a scan once you've added events?");
@@ -1048,20 +1054,23 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
       } catch {
         // scan handles its own error output
       }
+      scanInvoked = true;
     } else {
       logger.line(chalk.gray("  Add events with ") + chalk.cyan("emit import <file>") + chalk.gray(", then run ") + chalk.cyan("emit scan") + chalk.gray("."));
       logger.blank();
     }
   }
 
-  logger.blank();
-  logger.line(chalk.bold("  What's next"));
-  logger.line(chalk.gray("  " + "─".repeat(40)));
-  logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
-  logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
-  logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events from a CSV/JSON file")}`);
-  logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
-  logger.blank();
+  if (!scanInvoked) {
+    logger.blank();
+    logger.line(chalk.bold("  What's next"));
+    logger.line(chalk.gray("  " + "─".repeat(40)));
+    logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
+    logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
+    logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events from a CSV/JSON file")}`);
+    logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
+    logger.blank();
+  }
 
   return 0;
 }

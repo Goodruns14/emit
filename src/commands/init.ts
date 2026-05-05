@@ -232,7 +232,7 @@ function buildConfig(
       yml += `    - "${p}"\n`;
     }
   }
-  yml += `\noutput:\n  file: .emit/catalog.yml\n  confidence_threshold: low\n`;
+  yml += `\noutput:\n  file: emit.catalog.yml\n  confidence_threshold: low\n`;
   yml += `\nllm:\n  provider: ${llmProvider}\n  model: claude-sonnet-4-6\n  max_tokens: 1000\n`;
 
   if (discriminators && discriminators.length > 0) {
@@ -264,7 +264,7 @@ function writeBlankConfig(configPath: string): void {
     '  track_pattern: "analytics.track("',
     "",
     "output:",
-    "  file: .emit/catalog.yml",
+    "  file: emit.catalog.yml",
     "  confidence_threshold: low",
     "",
     "llm:",

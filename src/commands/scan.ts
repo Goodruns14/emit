@@ -786,6 +786,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         logger.line(`  ${chalk.gray(" ".repeat(16))}${chalk.gray(fixHint)}`);
       }
       logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
+      logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events from a CSV/JSON file")}`);
       logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
       logger.blank();
 

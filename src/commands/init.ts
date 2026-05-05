@@ -581,7 +581,6 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
   const eventChoice = await arrowSelect([
     { label: "Type them in now", value: "inline" as const },
     { label: "Load from a file  (CSV, plain text, or JSON)", value: "file" as const },
-    { label: "Skip — I'll do it later", value: "skip" as const },
   ]);
 
   let collectedEvents: string[] = [];

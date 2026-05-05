@@ -468,7 +468,7 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     const deviationCount = Object.values(propertyDefinitions).filter((d) =>
       Object.values(d.deviations).some((v) => v !== "")
     ).length;
-    if (!json) logger.succeed(`${sharedCount} shared properties, ${deviationCount} with deviations flagged`);
+    if (!json) logger.succeed(`${sharedCount} shared propert${sharedCount === 1 ? "y" : "ies"} identified, ${deviationCount} used differently across events`);
   } else {
     propertyDefinitions = previousCatalog?.property_definitions ?? {};
     if (!json) logger.succeed("All events unchanged — property definitions carried forward");

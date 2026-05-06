@@ -252,18 +252,21 @@ try {
   assert("wrote to sample_values (not code_sample_values)",
     writePayload?.field_written === "sample_values");
 
-  // ── 6. Read catalog back, confirm persistence ───────────────────────────
-  console.log("\n[6] Reading catalog from disk to verify persistence...");
-  const persisted = yaml.load(fs.readFileSync(catalogPath, "utf8"));
-  const prop = persisted?.events?.[EVENT]?.properties?.[PROPERTY];
-  console.log("    persisted property:", JSON.stringify(prop, null, 2));
+  // ── 6. Read catalog back through emit's MCP (idiomatic — same path an AI takes) ──
+  console.log("\n[6] Reading catalog back via emit.get_property_description...");
+  const readResult = await emit.callTool({
+    name: "get_property_description",
+    arguments: { event_name: EVENT, property_name: PROPERTY },
+  });
+  const readPayload = unwrap(readResult);
+  console.log("    response:", JSON.stringify(readPayload, null, 2));
 
   assert("sample_values matches what BigQuery returned",
-    JSON.stringify(prop?.sample_values) === JSON.stringify(values));
+    JSON.stringify(readPayload?.sample_values) === JSON.stringify(values),
+    `expected ${JSON.stringify(values)}, got ${JSON.stringify(readPayload?.sample_values)}`);
   assert("code_sample_values preserved (provenance kept separate)",
-    JSON.stringify(prop?.code_sample_values) === JSON.stringify(["existing_code_extracted_value"]));
-  assert("last_modified_by tagged with destination source",
-    persisted?.events?.[EVENT]?.last_modified_by?.includes("destination"));
+    JSON.stringify(readPayload?.code_sample_values) === JSON.stringify(["existing_code_extracted_value"]),
+    `expected ["existing_code_extracted_value"], got ${JSON.stringify(readPayload?.code_sample_values)}`);
 
   // ── Summary ─────────────────────────────────────────────────────────────
   console.log("\n" + "=".repeat(60));

@@ -7,14 +7,12 @@ import { SnowflakeDestinationAdapter } from "./snowflake.js";
 import { BigQueryDestinationAdapter } from "./bigquery.js";
 import { DatabricksDestinationAdapter } from "./databricks.js";
 import { loadCustomAdapter } from "./custom.js";
-import { McpDelegatedDestinationAdapter } from "./mcp-delegated.js";
 
 export { MixpanelDestinationAdapter } from "./mixpanel.js";
 export { SnowflakeDestinationAdapter } from "./snowflake.js";
 export { BigQueryDestinationAdapter } from "./bigquery.js";
 export { DatabricksDestinationAdapter } from "./databricks.js";
 export { loadCustomAdapter } from "./custom.js";
-export { McpDelegatedDestinationAdapter } from "./mcp-delegated.js";
 
 /**
  * Factory for destination adapters.
@@ -45,8 +43,6 @@ export async function createDestinationAdapter(
       return new DatabricksDestinationAdapter(config);
     case "custom":
       return loadCustomAdapter(config, configFilePath);
-    case "mcp":
-      return new McpDelegatedDestinationAdapter(config);
     default: {
       const type = (config as any).type;
       // Helpful hint for users who had Segment/Amplitude/RudderStack as

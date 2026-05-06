@@ -3,7 +3,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createRequire } from "node:module";
 
-import type { DestinationAdapter } from "../types/index.js";
 import { getEventTool } from "./tools/get-event.js";
 import { updateEventTool } from "./tools/update-event.js";
 import { getPropertyTool } from "./tools/get-property.js";
@@ -15,27 +14,11 @@ import { listNotFoundTool } from "./tools/list-not-found.js";
 import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
 import { listPropertiesTool } from "./tools/list-properties.js";
 import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
-import { getPropertyValuesTool } from "./tools/get-property-values.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-export interface McpServerOptions {
-  /**
-   * Destination adapters with optional read capabilities. The server probes
-   * each adapter at registration time — only adapters implementing
-   * `fetchPropertyValues` cause the corresponding read tools to be exposed.
-   * Empty/omitted means no destination read tools are registered (clean
-   * default for users who haven't configured `type: mcp` destinations).
-   */
-  adapters?: DestinationAdapter[];
-}
-
-export async function startMcpServer(
-  catalogPath: string,
-  options: McpServerOptions = {},
-): Promise<void> {
-  const adapters = options.adapters ?? [];
+export async function startMcpServer(catalogPath: string): Promise<void> {
   const server = new McpServer({
     name: "emit-catalog",
     version: pkg.version,
@@ -124,48 +107,6 @@ export async function startMcpServer(
     { file_path: z.string().describe("Full or partial file path to match against event source files") },
     async ({ file_path }) => getEventsBySourceFileTool(catalogPath, { file_path })
   );
-
-  // ── Destination data-read tools (conditional) ──────────────────────────────
-  //
-  // Only registered when at least one configured adapter implements
-  // fetchPropertyValues. Keeps the tool surface honest: if no destination MCP
-  // is wired up, agents don't see tools they can't use.
-
-  const readableAdapters = adapters.filter(
-    (a) => typeof a.fetchPropertyValues === "function",
-  );
-  if (readableAdapters.length > 0) {
-    const destinationNames = readableAdapters.map((a) => a.name).join(", ");
-    server.tool(
-      "get_property_values",
-      `Fetch distinct values observed for a property on an event from a configured destination (${destinationNames}). Uses the destination's own MCP server — emit never holds destination credentials. Useful for discovering real cardinality and finding sample values that aren't visible in source code.`,
-      {
-        destination: z
-          .string()
-          .describe(
-            `Destination name (case-insensitive). Available: ${destinationNames}`,
-          ),
-        event_name: z.string().describe("The catalog event name (e.g. 'purchase_completed')"),
-        property_name: z
-          .string()
-          .describe("The property to fetch distinct values for (e.g. 'bill_amount')"),
-        limit: z
-          .number()
-          .int()
-          .positive()
-          .max(1000)
-          .optional()
-          .describe("Max distinct values to return (default 100, max 1000)"),
-      },
-      async ({ destination, event_name, property_name, limit }) =>
-        getPropertyValuesTool(readableAdapters, {
-          destination,
-          event_name,
-          property_name,
-          limit,
-        }),
-    );
-  }
 
   // ── Write tools ─────────────────────────────────────────────────────────────
 

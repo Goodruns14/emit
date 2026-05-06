@@ -1,25 +1,12 @@
 #!/usr/bin/env node
-// Set up ~/emit-mcp-demo as a permanent dir for the Claude Desktop test.
-// Writes emit.config.yml (BigQuery destination, Mode 3 metadata-only) and
-// emit.catalog.yml (one event with real BigQuery data behind it).
+// Set up ~/emit-mcp-demo as a permanent dir for the real-AI test against
+// Claude Code OR Claude Desktop. Writes:
+//   - emit.config.yml + emit.catalog.yml — the project state emit reads
+//   - .mcp.json — Claude Code project-scoped MCP config (auto-loaded
+//     when you run `claude` from this dir)
 //
-// After running, point Claude Desktop's `cwd` at ~/emit-mcp-demo:
-//
-//   ~/Library/Application Support/Claude/claude_desktop_config.json:
-//   {
-//     "mcpServers": {
-//       "emit": {
-//         "command": "node",
-//         "args": ["/Users/<you>/emit/dist/cli.js", "mcp"],
-//         "cwd": "/Users/<you>/emit-mcp-demo"
-//       },
-//       "bigquery": {
-//         "command": "npx",
-//         "args": ["-y", "@toolbox-sdk/server", "--prebuilt", "bigquery", "--stdio"],
-//         "env": { "BIGQUERY_PROJECT": "<your-project>" }
-//       }
-//     }
-//   }
+// For Claude Desktop instead, paste the printed JSON block into
+// ~/Library/Application Support/Claude/claude_desktop_config.json.
 //
 // Run with: BIGQUERY_PROJECT=<project-id> node scripts/setup-claude-desktop-demo.mjs
 import * as fs from "fs";
@@ -94,38 +81,56 @@ const catalog = {
 fs.writeFileSync(path.join(DEMO_DIR, "emit.config.yml"), yaml.dump(config));
 fs.writeFileSync(path.join(DEMO_DIR, "emit.catalog.yml"), yaml.dump(catalog));
 
-console.log(`\n✓ Demo dir ready: ${DEMO_DIR}\n`);
-console.log("Next steps:");
-console.log("");
-console.log("1. Edit ~/Library/Application\\ Support/Claude/claude_desktop_config.json");
-console.log("   (create it if it doesn't exist) and add:");
-console.log("");
-console.log(JSON.stringify({
-  mcpServers: {
-    emit: {
-      command: "node",
-      args: [path.join(os.homedir(), "emit", "dist", "cli.js"), "mcp"],
-      cwd: DEMO_DIR,
-    },
-    bigquery: {
-      command: "npx",
-      args: ["-y", "@toolbox-sdk/server", "--prebuilt", "bigquery", "--stdio"],
-      env: { BIGQUERY_PROJECT: PROJECT },
-    },
+const EMIT_CLI = path.join(os.homedir(), "emit", "dist", "cli.js");
+
+const mcpServers = {
+  emit: {
+    command: "node",
+    args: [EMIT_CLI, "mcp"],
+    cwd: DEMO_DIR,
   },
-}, null, 2).split("\n").map((l) => "   " + l).join("\n"));
+  bigquery: {
+    command: "npx",
+    args: ["-y", "@toolbox-sdk/server", "--prebuilt", "bigquery", "--stdio"],
+    env: { BIGQUERY_PROJECT: PROJECT },
+  },
+};
+
+// Project-level Claude Code MCP config (auto-loaded by `claude` from this dir)
+fs.writeFileSync(
+  path.join(DEMO_DIR, ".mcp.json"),
+  JSON.stringify({ mcpServers }, null, 2),
+);
+
+console.log(`\n✓ Demo dir ready: ${DEMO_DIR}\n`);
+console.log("Wrote:");
+console.log(`  - ${path.join(DEMO_DIR, "emit.config.yml")}`);
+console.log(`  - ${path.join(DEMO_DIR, "emit.catalog.yml")}`);
+console.log(`  - ${path.join(DEMO_DIR, ".mcp.json")}     ← Claude Code project MCP config\n`);
+
+console.log("== Option A: Claude Code (recommended) ==");
 console.log("");
-console.log("2. Quit and reopen Claude Desktop (fully — Cmd+Q, not just close window).");
+console.log(`  cd ${DEMO_DIR}`);
+console.log("  claude");
 console.log("");
-console.log("3. Open a new chat and ask:");
+console.log("  In Claude Code:");
+console.log("    /mcp                                                     ← confirm emit + bigquery connected");
+console.log("    > What user_ids have we seen for evt_purchase_completed in BigQuery?");
+console.log("    > Save them as sample values for the user_id property.");
 console.log("");
-console.log("   > What user_ids have we seen for evt_purchase_completed in BigQuery?");
-console.log("   > Save them as sample values for the user_id property.");
+
+console.log("== Option B: Claude Desktop ==");
 console.log("");
-console.log("4. Watch the tool calls. Should see Claude call:");
-console.log("     a) emit.get_event_destinations");
-console.log("     b) bigquery.execute_sql");
-console.log("     c) emit.update_property_sample_values");
+console.log("  Edit ~/Library/Application\\ Support/Claude/claude_desktop_config.json");
+console.log("  and add to the `mcpServers` object:");
 console.log("");
-console.log(`5. Verify by inspecting ${path.join(DEMO_DIR, "emit.catalog.yml")} —`);
-console.log("   the user_id sample_values array should be populated.");
+console.log(JSON.stringify(mcpServers, null, 2).split("\n").map((l) => "    " + l).join("\n"));
+console.log("");
+console.log("  Cmd+Q and reopen Claude Desktop, then ask the same prompt as above.");
+console.log("");
+
+console.log("== After the test ==");
+console.log("");
+console.log(`  Verify ${path.join(DEMO_DIR, "emit.catalog.yml")} —`);
+console.log("  the user_id sample_values array should be populated by Claude's tool call.");
+

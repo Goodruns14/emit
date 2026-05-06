@@ -23,14 +23,22 @@ export function registerMcp(program: Command): void {
 
 async function runMcp(opts: { catalog?: string }): Promise<number> {
   let catalogPath: string;
+  let destinations: import("../types/index.js").DestinationConfig[] | undefined;
 
-  if (opts.catalog) {
-    catalogPath = path.resolve(opts.catalog);
-  } else {
-    try {
-      const config = await loadConfigLight();
+  // Always try to load config — destinations metadata is surfaced through the
+  // MCP `get_event_destinations` tool. Failure to load config is non-fatal:
+  // explicit --catalog still works, the destinations tool just returns "no
+  // destinations configured".
+  try {
+    const config = await loadConfigLight();
+    destinations = config.destinations;
+    if (!opts.catalog) {
       catalogPath = resolveOutputPath(config);
-    } catch (err: unknown) {
+    } else {
+      catalogPath = path.resolve(opts.catalog);
+    }
+  } catch (err: unknown) {
+    if (!opts.catalog) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(
         msg +
@@ -38,6 +46,8 @@ async function runMcp(opts: { catalog?: string }): Promise<number> {
       );
       return 1;
     }
+    catalogPath = path.resolve(opts.catalog);
+    destinations = undefined;
   }
 
   if (!catalogExists(catalogPath)) {
@@ -51,9 +61,15 @@ async function runMcp(opts: { catalog?: string }): Promise<number> {
   process.stderr.write(
     `emit MCP server started — catalog: ${catalogPath}\n`
   );
+  if (destinations && destinations.length > 0) {
+    const labels = destinations.map((d) =>
+      d.type === "custom" && d.name ? d.name : d.type,
+    );
+    process.stderr.write(`  destinations registered (metadata only): ${labels.join(", ")}\n`);
+  }
 
   try {
-    await startMcpServer(catalogPath);
+    await startMcpServer(catalogPath, { destinations });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(`MCP server error: ${msg}`);

@@ -62,13 +62,15 @@ function writeCatalogFile(filePath: string, catalog: EmitCatalog): void {
   parts.push("#   high   — verified: track/fire call visible AND trigger context clear");
   parts.push("#   medium — justified read but one piece of evidence missing (acceptable)");
   parts.push("#   low    — critical evidence missing; needs human review");
-  parts.push(yaml.dump({ stats: catalog.stats }, { lineWidth: 120 }).trimEnd());
+  // Default to {} when stats is missing — yaml.dump({ stats: undefined }) emits
+  // a bare "{}" that breaks round-trip parsing when followed by more content.
+  parts.push(yaml.dump({ stats: catalog.stats ?? {} }, { lineWidth: 120 }).trimEnd());
 
   // Property definitions
   parts.push("\n# ── Property Definitions ────────────────────────────────────────────────────");
   parts.push("# Canonical definitions for properties that appear across multiple events.");
   parts.push("# Deviations note where a specific event's usage differs from the shared definition.");
-  parts.push(yaml.dump({ property_definitions: catalog.property_definitions }, { lineWidth: 120 }).trimEnd());
+  parts.push(yaml.dump({ property_definitions: catalog.property_definitions ?? {} }, { lineWidth: 120 }).trimEnd());
 
   // Events — blank line between each entry for scannability
   parts.push("\n# ── Events ──────────────────────────────────────────────────────────────────");
@@ -189,7 +191,7 @@ function writeCatalogDirectory(dirPath: string, catalog: EmitCatalog): void {
   }, { lineWidth: 120 }).trimEnd());
 
   indexParts.push("\n# ── Stats ───────────────────────────────────────────────────────────────────");
-  indexParts.push(yaml.dump({ stats: catalog.stats }, { lineWidth: 120 }).trimEnd());
+  indexParts.push(yaml.dump({ stats: catalog.stats ?? {} }, { lineWidth: 120 }).trimEnd());
 
   indexParts.push("\n# ── Property Definitions ────────────────────────────────────────────────────");
   indexParts.push(yaml.dump({ property_definitions: catalog.property_definitions ?? {} }, { lineWidth: 120 }).trimEnd());
@@ -377,7 +379,7 @@ export function writeSingleEvent(
         commit: index.commit,
       }, { lineWidth: 120 }).trimEnd());
       indexParts.push("\n# ── Stats ───────────────────────────────────────────────────────────────────");
-      indexParts.push(yaml.dump({ stats: index.stats }, { lineWidth: 120 }).trimEnd());
+      indexParts.push(yaml.dump({ stats: index.stats ?? {} }, { lineWidth: 120 }).trimEnd());
       indexParts.push("\n# ── Property Definitions ────────────────────────────────────────────────────");
       indexParts.push(yaml.dump({ property_definitions: index.property_definitions ?? {} }, { lineWidth: 120 }).trimEnd());
       if (index.resolved && index.resolved.length > 0) {

@@ -4,6 +4,7 @@ import { loadConfigLight, resolveOutputPath } from "../utils/config.js";
 import { catalogExists } from "../core/catalog/index.js";
 import { logger } from "../utils/logger.js";
 import { startMcpServer } from "../mcp/server.js";
+import type { DestinationConfig } from "../types/index.js";
 
 export function registerMcp(program: Command): void {
   program
@@ -23,7 +24,7 @@ export function registerMcp(program: Command): void {
 
 async function runMcp(opts: { catalog?: string }): Promise<number> {
   let catalogPath: string;
-  let destinations: import("../types/index.js").DestinationConfig[] | undefined;
+  let destinations: DestinationConfig[] | undefined;
 
   // Always try to load config — destinations metadata is surfaced through the
   // MCP `get_event_destinations` tool. Failure to load config is non-fatal:

@@ -10,6 +10,7 @@ import { registerMcp } from "./commands/mcp.js";
 import { registerFix } from "./commands/fix.js";
 import { registerDestination } from "./commands/destination.js";
 import { registerSuggest } from "./commands/suggest.js";
+import { registerEnrich } from "./commands/enrich.js";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -31,5 +32,6 @@ registerMcp(program);
 registerFix(program);
 registerDestination(program);
 registerSuggest(program);
+registerEnrich(program);
 
 program.parse(process.argv);

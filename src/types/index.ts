@@ -307,6 +307,20 @@ export interface DestinationConfigBase {
    * destination returning none just means the sync hasn't run yet.
    */
   latency_class?: LatencyClass;
+  /**
+   * How `emit enrich` should spawn this destination's own MCP server. Optional
+   * — for known destination types (bigquery), emit has a built-in default
+   * (`npx -y @toolbox-sdk/server --prebuilt bigquery --stdio`). Override here
+   * when using a different MCP for the same destination type, or specify here
+   * when the destination type has no built-in default. emit never reads
+   * destination credentials directly; the spawned MCP authenticates itself.
+   */
+  mcp?: {
+    /** argv to spawn (first element is the executable). */
+    command: string[];
+    /** Extra env vars merged on top of process.env when spawning. */
+    env?: Record<string, string>;
+  };
 }
 
 export interface MixpanelDestinationConfig extends DestinationConfigBase {

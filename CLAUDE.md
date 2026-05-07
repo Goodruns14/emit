@@ -53,6 +53,7 @@ node dist/cli.js status    # Catalog health report
 node dist/cli.js revert    # Restore event from git history
 node dist/cli.js mcp       # Start local MCP server (stdio)
 node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
+node dist/cli.js enrich --rescore  # Pull real values from destinations + upgrade confidence
 ```
 
 ### Flags reference
@@ -132,6 +133,23 @@ Every command runs headless (no TTY) — pass `--yes` and supply all decisions a
 | Flag | Description |
 |------|-------------|
 | `--catalog <path>` | Explicit path to `emit.catalog.yml`; overrides the path resolved from `emit.config.yml` |
+
+#### `emit enrich`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | Enrich a single event only |
+| `--events <names>` | Comma-separated list of events to enrich |
+| `--property <name>` | Enrich a single property (requires `--event`) |
+| `--destination <name>` | Enrich from a single destination only (match by `type` or custom `name`) |
+| `--limit <n>` | Max distinct values to fetch per query (default 100) |
+| `--keep-top <n>` | How many to write to `sample_values` after curation (default 5) |
+| `--curate` | Run LLM curation step to pick most representative values |
+| `--rescore` | Re-judge confidence where destination evidence resolves code-side ambiguity (only upgrades) |
+| `--force` | Overwrite existing `sample_values` (default: skip if already populated) |
+| `--dry-run` | Preview without API calls / catalog writes |
+| `--no-cache` | Skip plan cache, force fresh LLM calls |
+| `--format <format>` | Output format: `text` (default) or `json` |
 
 #### `emit destination add [name]`
 

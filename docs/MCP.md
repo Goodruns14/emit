@@ -135,4 +135,82 @@ The metadata tool surfaces this so AI clients can reason about "I queried but go
 Two scripts under `scripts/`:
 
 - `test-mode3-e2e.mjs` — deterministic end-to-end against real BigQuery. Spawns emit MCP + BigQuery MCP independently, simulates AI orchestration, verifies catalog write-back. Run after any change to the metadata or write-back paths.
+- `test-enrich-e2e.mjs` — deterministic end-to-end for `emit enrich` against real BigQuery. Verifies sample_values + cardinality population, `last_modified_by` tagging, --rescore upgrades, and plan-cache hit on second run.
 - `setup-mcp-demo.mjs` — one-shot to set up the demo dir for live AI testing.
+
+## Batch enrichment with `emit enrich`
+
+`emit enrich` is the deterministic, scheduleable counterpart to Mode 3. Where Mode 3 lets a human ask their AI client to enrich a single event mid-conversation, `emit enrich` runs the same orchestration across the whole catalog with no human in the loop. It uses an LLM internally as the universal translator between catalog metadata and destination MCP tool calls — same code path whether the destination is BigQuery or Mixpanel.
+
+### What it does
+
+For each (event × destination) pair:
+
+1. Builds the destination metadata (same helper Mode 3 uses).
+2. Asks the LLM to plan a tool call against the destination MCP (cached per `(destination_type × tool_surface × event_signature)`).
+3. Executes the planned call(s) against the destination MCP, which emit spawns as a child subprocess.
+4. Asks the LLM to extract per-property distinct values + cardinality from the response.
+5. Writes the result to `sample_values` and `cardinality` on the catalog event, and tags `last_modified_by: emit enrich:destination:<name>`.
+
+### The killer flag: `--rescore`
+
+`emit scan` rates confidence on **code evidence** alone. `emit enrich --rescore` adds a second pass that re-judges confidence when destination evidence resolves the gap that caused the original rating. Conservative — never downgrades, only upgrades when the new evidence directly addresses the existing `confidence_reason`. Run on cron and confidence climbs monotonically as more events fire.
+
+### Onboarding flow
+
+```yaml
+# emit.config.yml — add a destination block
+destinations:
+  - type: bigquery
+    project_id: my-gcp
+    dataset: analytics
+    schema_type: per_event
+    latency_class: hours
+```
+
+Set up auth for the destination MCP (gcloud ADC for BigQuery, OAuth for Mixpanel hosted, env vars for community MCPs — varies by MCP, not by destination). emit never holds destination credentials.
+
+```bash
+emit enrich --rescore     # initial backfill — populates sample_values + cardinality, upgrades confidence
+emit enrich               # subsequent runs — only events with empty sample_values are touched
+emit enrich --force       # overwrite existing values (use sparingly; protects manual curation by default)
+```
+
+### Spawn command
+
+For BigQuery, emit ships a built-in default (`npx -y @toolbox-sdk/server --prebuilt bigquery --stdio`). Override or specify per destination:
+
+```yaml
+destinations:
+  - type: mixpanel
+    project_id: 12345
+    mcp:
+      command: ["npx", "-y", "@dragonkhoi/mixpanel-mcp"]
+      env:
+        MIXPANEL_PROJECT_TOKEN_ENV: MIXPANEL_TOKEN
+```
+
+Destinations with no built-in default and no `mcp.command` are skipped with a clear log line.
+
+### Scheduled enrichment via GitHub Actions
+
+```yaml
+# .github/workflows/enrich-catalog.yml
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # Mondays at 3am UTC
+  workflow_dispatch:
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci && npm run build
+      - run: gcloud auth activate-service-account --key-file=${{ secrets.GCP_SA_KEY_FILE }}
+      - run: emit enrich --force --rescore --curate
+      - uses: peter-evans/create-pull-request@v5
+        with:
+          title: "chore: weekly catalog enrichment"
+```
+
+The bot opens a PR per week. Reviewers see the `sample_values` / `cardinality` / `confidence` diff and merge.

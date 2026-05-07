@@ -1,4 +1,5 @@
 import type { CodeContext, LiteralValues } from "../../types/index.js";
+import type { DestinationMetadata } from "../destinations/metadata.js";
 
 /**
  * Shared confidence-level definitions injected into every extraction prompt.
@@ -373,5 +374,286 @@ Return ONLY valid JSON, no preamble:
     }
   }
 }
+`.trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `emit enrich` prompt builders
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface EnrichPlannerToolDescriptor {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+export interface EnrichPlannerProperty {
+  name: string;
+  description?: string;
+  code_sample_values?: string[];
+}
+
+/**
+ * Build a prompt asking the LLM to produce ONE OR MORE tool calls against the
+ * destination's MCP that fetch distinct sample values + cardinality for the
+ * given properties of the given event. The planner does NOT execute anything;
+ * it returns JSON that the runner uses to drive `mcpClient.callTool(...)`.
+ *
+ * Output contract — strict JSON only, no prose:
+ *
+ *   {
+ *     "calls": [ { "tool": "<name>", "args": { ... } }, ... ],
+ *     "extractor_hint": "<short note describing the response shape>"
+ *   }
+ *
+ * Multi-call plans are supported — for warehouses, one SQL per property is
+ * usually fine; for product-analytics MCPs, a single batched call is usually
+ * available and preferred.
+ */
+export function buildQueryPlannerPrompt(
+  metadata: DestinationMetadata,
+  tools: EnrichPlannerToolDescriptor[],
+  eventName: string,
+  properties: EnrichPlannerProperty[],
+  limit: number,
+): string {
+  const toolBlock = tools
+    .map((t) => {
+      const schemaStr = t.inputSchema
+        ? JSON.stringify(t.inputSchema)
+        : "(no schema)";
+      const desc = t.description ? `: ${t.description}` : "";
+      return `- ${t.name}${desc}\n  inputSchema: ${schemaStr}`;
+    })
+    .join("\n");
+
+  const propBlock = properties
+    .map((p) => {
+      const desc = p.description ? ` — ${p.description}` : "";
+      const cs =
+        p.code_sample_values && p.code_sample_values.length > 0
+          ? `\n    code_sample_values: ${JSON.stringify(p.code_sample_values)}`
+          : "";
+      return `  - ${p.name}${desc}${cs}`;
+    })
+    .join("\n");
+
+  return `
+You are planning queries against a destination MCP server (a backing data store
+like BigQuery, Snowflake, Mixpanel, etc.) to enrich an analytics event catalog
+with REAL distinct sample values for each property.
+
+Your job: pick the right tool(s) from the destination MCP's surface and produce
+the literal JSON tool-call arguments to fetch, for each listed property, up to
+${limit} distinct values plus the total distinct count.
+
+Destination metadata:
+${JSON.stringify(metadata, null, 2)}
+
+Destination MCP tools available:
+${toolBlock}
+
+Event: ${eventName}
+Properties to fetch:
+${propBlock}
+
+Guidance:
+- Prefer the SMALLEST number of calls. If a single tool can return values for
+  all properties at once (e.g. Mixpanel's get_top_event_property_values), use it.
+- For SQL-passthrough tools, you may emit one call per property OR a single
+  call that returns multiple columns. Use SELECT DISTINCT and a LIMIT clause.
+  Cap LIMIT at ${limit}. Where the destination supports it (BigQuery,
+  Snowflake, Databricks), include a per-value count using GROUP BY for
+  cardinality. The exact SQL dialect should match the destination's type.
+- Use any ${"`query_hints`"} from metadata as a starting template — they encode
+  the right table reference and (for multi-event mode) the right WHERE filter.
+- DO NOT include credentials, project ids, or auth in the tool args unless the
+  tool's inputSchema requires them. The destination MCP handles its own auth.
+- DO NOT execute anything. Only return JSON describing the tool call(s).
+
+Return ONLY valid JSON in this exact shape (no prose, no fences):
+{
+  "calls": [
+    { "tool": "<one of the tool names above>", "args": { /* per inputSchema */ } }
+  ],
+  "extractor_hint": "<one short sentence describing how the response will be shaped — which fields hold the values, how cardinality is signaled>"
+}
+`.trim();
+}
+
+/**
+ * Build a prompt asking the LLM to extract per-property distinct values +
+ * cardinality from a destination MCP's raw tool response(s). Used after the
+ * planner's calls have been executed.
+ *
+ * Output contract — strict JSON only:
+ *
+ *   {
+ *     "properties": {
+ *       "<property_name>": { "values": ["..."], "distinct_count": <n> }
+ *     }
+ *   }
+ *
+ * `distinct_count` may be omitted if the response doesn't expose it. Values
+ * should be JSON-stringifiable scalars (strings, numbers, booleans).
+ */
+export function buildResponseExtractorPrompt(
+  responses: unknown[],
+  properties: EnrichPlannerProperty[],
+  limit: number,
+  extractorHint?: string,
+): string {
+  const hintBlock = extractorHint
+    ? `\nPlanner hint about the response shape: ${extractorHint}\n`
+    : "";
+
+  const propNames = properties.map((p) => p.name);
+
+  return `
+You are parsing raw MCP tool responses from a destination data store into a
+clean per-property mapping of distinct sample values + total distinct count.
+
+Properties to extract: ${JSON.stringify(propNames)}
+Max values to keep per property: ${limit}
+${hintBlock}
+Raw responses (one per planner call, in order):
+\`\`\`json
+${JSON.stringify(responses, null, 2)}
+\`\`\`
+
+Rules:
+- For each property, return the distinct VALUES the destination returned. Cap
+  at ${limit} entries. Convert all values to strings.
+- If the response includes counts per value, sum them to get distinct_count.
+  Otherwise, set distinct_count to the length of the values array.
+- If a property has no rows in the response, return values: [] and omit
+  distinct_count.
+- IGNORE auxiliary columns (timestamps, ids) that aren't one of the listed
+  properties.
+- Do NOT invent values. If you can't find a property in the response, return
+  an empty array for it.
+
+Return ONLY valid JSON in this exact shape (no prose, no fences):
+{
+  "properties": {
+    "<property_name>": { "values": ["v1", "v2"], "distinct_count": <integer> }
+  }
+}
+`.trim();
+}
+
+/**
+ * Build a prompt asking the LLM to pick the most representative N values from
+ * a longer list of distinct values. Run only when --curate is set.
+ */
+export function buildSampleValueCurationPrompt(
+  propertyName: string,
+  propertyDescription: string | undefined,
+  rawValues: string[],
+  keepTop: number,
+): string {
+  const descBlock = propertyDescription
+    ? `\nProperty description: ${propertyDescription}`
+    : "";
+
+  return `
+You are curating sample values for an analytics property to make a catalog
+entry presentable. Pick up to ${keepTop} values that are MOST representative
+of what this property carries — favor common, semantically meaningful values
+over noise like opaque ids, debug values, or near-duplicates.
+
+Property name: ${propertyName}${descBlock}
+
+Raw distinct values from the destination (already deduplicated):
+${JSON.stringify(rawValues, null, 2)}
+
+Rules:
+- Keep at most ${keepTop} values.
+- Strip values that are clearly opaque ids, tokens, hashes, internal markers,
+  or near-duplicate spellings of values you've already kept.
+- Preserve the original spelling/case of values you keep.
+- If the raw list is shorter than ${keepTop} or all values look meaningful,
+  return them all (still capped at ${keepTop}).
+
+Return ONLY valid JSON in this exact shape:
+{ "values": ["v1", "v2", "v3"] }
+`.trim();
+}
+
+/**
+ * Build a prompt asking the LLM whether destination evidence (newly-fetched
+ * sample_values + cardinality) resolves the original code-side ambiguity that
+ * caused a property/event to land below `high` confidence. CONSERVATIVE — the
+ * LLM is instructed to upgrade only when the destination evidence directly
+ * addresses the gap stated in the existing confidence_reason.
+ *
+ * Output contract:
+ *
+ *   { "confidence": "high" | "medium" | "low", "reason": "..." }
+ *   OR
+ *   { "unchanged": true }
+ *
+ * Caller still applies "never downgrade" enforcement after parsing.
+ */
+export function buildConfidenceRescorePrompt(args: {
+  eventName: string;
+  eventDescription: string;
+  firesWhen: string;
+  propertyName?: string;
+  propertyDescription?: string;
+  existingConfidence: "high" | "medium" | "low";
+  existingReason: string;
+  newSampleValues: string[];
+  newCardinality?: number;
+  originalCodeSampleValues: string[];
+  destinationName: string;
+}): string {
+  const subject = args.propertyName
+    ? `property "${args.propertyName}" on event "${args.eventName}"`
+    : `event "${args.eventName}"`;
+  const propDesc = args.propertyDescription
+    ? `\nProperty description: ${args.propertyDescription}`
+    : "";
+
+  return `
+You are deciding whether new evidence from a production data store
+("${args.destinationName}") resolves the gap that caused this ${subject}
+to be rated below "high" confidence at scan time.
+
+Be conservative: ONLY upgrade when the destination evidence directly addresses
+the specific gap stated in the existing confidence_reason. Do NOT upgrade
+based on "the destination has data" alone — the existing reason has to point
+to a gap (missing literal values, ambiguous trigger, etc.) that the new
+evidence concretely closes.
+
+Event: ${args.eventName}
+Event description: ${args.eventDescription}
+Fires when: ${args.firesWhen}${propDesc}
+
+Existing scan-time confidence: ${args.existingConfidence}
+Existing scan-time reason: ${args.existingReason}
+
+New destination evidence:
+- distinct sample values seen (top ${args.newSampleValues.length}): ${JSON.stringify(args.newSampleValues)}
+- total distinct count: ${args.newCardinality ?? "unknown"}
+- code_sample_values from emit scan (literal expressions, may differ from real values): ${JSON.stringify(args.originalCodeSampleValues)}
+
+${CONFIDENCE_DEFINITIONS}
+
+Rules:
+- If the existing reason was about a missing literal/value/type and the new
+  sample_values fills that in concretely → upgrade.
+- If the existing reason was about a missing or ambiguous trigger context (for
+  the EVENT) and the destination simply confirms the event fires →
+  upgrade ONE level (low→medium, medium→high), never two at once.
+- If the existing reason was about something the destination evidence does
+  NOT address (e.g. unrelated local variable suspected, no presence info
+  alone resolves that), return unchanged.
+- NEVER downgrade. If you'd downgrade, return unchanged.
+
+Return ONLY valid JSON in one of these two shapes:
+{ "confidence": "high" | "medium", "reason": "<short — what the destination evidence proved>" }
+OR
+{ "unchanged": true }
 `.trim();
 }

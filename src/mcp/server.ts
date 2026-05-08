@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createRequire } from "node:module";
 
+import type { DestinationConfig } from "../types/index.js";
 import { getEventTool } from "./tools/get-event.js";
 import { updateEventTool } from "./tools/update-event.js";
 import { getPropertyTool } from "./tools/get-property.js";
@@ -14,11 +15,26 @@ import { listNotFoundTool } from "./tools/list-not-found.js";
 import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
 import { listPropertiesTool } from "./tools/list-properties.js";
 import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
+import { getEventDestinationsTool } from "./tools/get-event-destinations.js";
+import { updatePropertySampleValuesTool } from "./tools/update-property-sample-values.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-export async function startMcpServer(catalogPath: string): Promise<void> {
+export interface McpServerOptions {
+  /**
+   * Destinations from emit.config.yml. Used by `get_event_destinations` to
+   * surface destination metadata to AI clients. Omit when no destinations are
+   * configured — the tool still registers but returns a helpful empty result.
+   */
+  destinations?: DestinationConfig[];
+}
+
+export async function startMcpServer(
+  catalogPath: string,
+  options: McpServerOptions = {},
+): Promise<void> {
+  const { destinations } = options;
   const server = new McpServer({
     name: "emit-catalog",
     version: pkg.version,
@@ -108,6 +124,16 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     async ({ file_path }) => getEventsBySourceFileTool(catalogPath, { file_path })
   );
 
+  server.tool(
+    "get_event_destinations",
+    "Get the destinations (BigQuery, Snowflake, Mixpanel, etc.) where an event lands, with the metadata needed to query each one. Use this BEFORE calling another destination's MCP (e.g. BigQuery MCP, Mixpanel MCP) to learn which table/endpoint holds the event, the expected sync latency, and a SQL hint when applicable. emit doesn't run the queries itself — it tells you what to ask the destination's own MCP.",
+    {
+      event_name: z.string().describe("The catalog event name (e.g. 'purchase_completed')"),
+    },
+    async ({ event_name }) =>
+      getEventDestinationsTool(catalogPath, destinations, { event_name }),
+  );
+
   // ── Write tools ─────────────────────────────────────────────────────────────
 
   server.tool(
@@ -135,6 +161,27 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     },
     async ({ event_name, property_name, description }) =>
       updatePropertyTool(catalogPath, { event_name, property_name, description })
+  );
+
+  server.tool(
+    "update_property_sample_values",
+    "Write sample values for a property to the catalog. Use this AFTER fetching real values from a destination's MCP (BigQuery, Mixpanel, etc.) to persist a representative subset to emit.catalog.yml. Pass `source: \"destination\"` (default) to write canonical sample_values; pass `source: \"code\"` to write code-extracted values; pass `source: \"manual\"` for hand-curated values. Capped at 50 items.",
+    {
+      event_name: z.string().describe("The catalog event name"),
+      property_name: z.string().describe("The property name"),
+      values: z.array(z.string()).describe("The sample values to persist (1-50 items)"),
+      source: z
+        .enum(["destination", "code", "manual"])
+        .optional()
+        .describe("Where the values came from. Default: 'destination'."),
+    },
+    async ({ event_name, property_name, values, source }) =>
+      updatePropertySampleValuesTool(catalogPath, {
+        event_name,
+        property_name,
+        values,
+        source,
+      }),
   );
 
   // ── Connect and serve ────────────────────────────────────────────────────────

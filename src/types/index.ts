@@ -210,6 +210,15 @@ export interface PushResult {
 }
 
 /**
+ * How quickly an event lands in this destination after firing on the client.
+ * Surfaced in destination metadata responses so AI clients can frame
+ * "not found" correctly: a realtime destination with no row probably means
+ * the event didn't fire, but a "hours" destination just means the sync
+ * hasn't run yet.
+ */
+export type LatencyClass = "realtime" | "minutes" | "hours" | "daily";
+
+/**
  * Interface every destination adapter must implement.
  *
  * Built-in adapters (Mixpanel, Snowflake, etc.) implement this class-style.
@@ -289,6 +298,15 @@ export interface DestinationConfigBase {
    * Omit to process every catalog event (existing behavior).
    */
   events?: string[];
+  /**
+   * How quickly events land in this destination after firing on the client.
+   * Pure metadata — surfaced through the MCP `get_event_destinations` tool so
+   * AI clients can frame "not found" answers correctly when querying the
+   * destination's own MCP. A "realtime" destination returning no rows for a
+   * just-fired event suggests the event didn't actually fire; a "hours"
+   * destination returning none just means the sync hasn't run yet.
+   */
+  latency_class?: LatencyClass;
 }
 
 export interface MixpanelDestinationConfig extends DestinationConfigBase {

@@ -12,7 +12,7 @@ Emit is an open-source CLI tool that automatically generates event metadata cata
 - **Phase 1 (CLI):** Complete — all commands built and working
 - **Phase 2 (GitHub Action):** Removed for MVP simplification
 - **Phase 3 (Hosted Platform + UI):** Not started
-- **Phase 4 (MCP Server):** Complete — local MCP server with 8 tools, `emit mcp` command
+- **Phase 4 (MCP Server):** Complete — local MCP server with 13 tools, `emit mcp` command. Includes Mode 3 destination-metadata pattern: emit exposes `get_event_destinations` so AI clients can compose with destination MCPs (BigQuery MCP, Mixpanel MCP, etc.) without emit proxying. See `docs/MCP.md`.
 - **Phase 5 (Implementation Agent):** Not started
 
 See `md files/emit-master-plan.md` for the full roadmap and architectural vision.
@@ -23,7 +23,7 @@ See `md files/emit-master-plan.md` for the full roadmap and architectural vision
 src/
   commands/          # CLI command handlers (init, scan, import, push, status, revert, mcp)
   mcp/
-    server.ts        # MCP server — registers all 8 tools, stdio transport
+    server.ts        # MCP server — registers all 13 tools, stdio transport
     tools/           # One file per tool (get-event, update-event, get-property, etc.)
   core/
     catalog/         # Catalog read/write, health scoring, search
@@ -161,8 +161,9 @@ Every command runs headless (no TTY) — pass `--yes` and supply all decisions a
 |------|---------|
 | `src/commands/scan.ts` | Core scan logic — event discovery, LLM extraction, catalog output |
 | `src/commands/mcp.ts` | `emit mcp` command — resolves catalog path, starts MCP server |
-| `src/mcp/server.ts` | MCP server — registers 8 tools, connects stdio transport |
-| `src/mcp/tools/` | One file per MCP tool (get-event, update-event, get-property, update-property, list-events, list-not-found, search-events, get-catalog-health) |
+| `src/mcp/server.ts` | MCP server — registers 13 tools, connects stdio transport |
+| `src/mcp/tools/` | One file per MCP tool. Catalog browsing: get-event, get-property, list-events, search-events, list-not-found, get-catalog-health, get-property-across-events, list-properties, get-events-by-source-file. Destination metadata: get-event-destinations. Catalog mutation: update-event, update-property, update-property-sample-values |
+| `src/core/destinations/metadata.ts` | Resolves event + destination config → destination metadata (table, latency, query hints) for the `get_event_destinations` MCP tool. Pure function, no I/O |
 | `src/core/extractor/index.ts` | LLM prompt construction and metadata extraction |
 | `src/core/extractor/claude.ts` | Multi-provider LLM routing (Claude Code, Anthropic, OpenAI, OpenAI-compatible) |
 | `src/core/scanner/index.ts` | Code search — finds tracking calls via grep |

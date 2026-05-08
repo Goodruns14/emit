@@ -446,7 +446,3 @@ Emit is open source. If your codebase has a pattern emit doesn't handle yet, the
 2. **Read the scanner source.** `src/core/scanner/` and `src/core/extractor/` are small and well-commented. If you need to extend something locally to unblock yourself, fine, but please open a PR so the next user with the same pattern doesn't have to do the same work.
 
 `emit.config.yml` is the contract. Source modification is the contribution path, not a workaround — forking and silently diverging will leave you stranded on upgrades. We'd rather hear about your case. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a dev environment, run the test suite, and open a PR.
-
-## License
-
-MIT

@@ -186,9 +186,12 @@ Valid providers are enforced at config load time. The `LlmProvider` type is defi
 
 ## Test Repos
 
-Test repos live in `test-repos/` (gitignored). Used for integration testing:
+Test repos live in `test-repos/` (gitignored). They're split by what they exercise:
 
-### Original repos
+- `test-repos/analytics/` — analytics SDK fixtures (Segment, PostHog, Amplitude, custom telemetry). Validates the original analytics catalog flow.
+- `test-repos/pubsub/` — pub/sub / event-driven architecture fixtures (Kafka, SNS/SQS, RabbitMQ, AWS CDK). Validates producer-mode and (eventually) consumer-side lineage. Each fixture exposes a distinct technical pattern; see `test-repos/pubsub/README.md` if present, otherwise the per-repo notes below.
+
+### Original repos (`test-repos/analytics/`)
 
 | Repo | SDK Pattern | Notes |
 |------|-------------|-------|
@@ -229,8 +232,26 @@ Added to stress-test emit across diverse real-world codebases:
 
 Each has its own `emit.config.yml`. Run tests against them with:
 ```bash
-cd test-repos/calcom && NODE_PATH=$(pwd)/../../node_modules node ../../dist/cli.js scan --format json
+cd test-repos/analytics/calcom && NODE_PATH=$(pwd)/../../../node_modules node ../../../dist/cli.js scan --format json
 ```
+
+### Pub/sub fixtures (`test-repos/pubsub/`)
+
+| Repo | SDK Pattern | Distinct test value |
+|------|-------------|---------------------|
+| `confluent-getting-started` | `kafkaTemplate.send`, `@KafkaListener`, raw `KafkaProducer.send(new ProducerRecord(...))` | Canonical Kafka. Same `purchases` event in 6 languages (Java, Spring, Go, Python, JS, .NET, C). Multi-language reference. |
+| `aleks-cqrs-eventsourcing` | `KafkaTemplate<String, byte[]>` + `@KafkaListener` consumer with `switch(event.getEventType())` | CQRS+ES with `_V1` versioning, event classes, discriminator-in-topic pattern, Spring `@Value("${...}")` config externalization. |
+| `ably-ticket-kafka` | Python `confluent_kafka.SerializingProducer.produce(topic, key, value)` | Has explicit Avro `.avsc` schema files — schema-as-source-of-truth case. Producer-only (consumer is external Ably). |
+| `aws-serverless-patterns` (sparse: `fargate-sns-sqs-cdk` + a few SNS/SQS dirs) | `sns.publish(params)`, `sqs.receiveMessage(params)`; topology in CDK | IaC-as-truth: topic ARN passed to app via `process.env`. Validates the gap that requires either IaC parsing or user-declared topic aliases. |
+| `golevelup-nestjs` | `@RabbitSubscribe({exchange, routingKey, queue})`, `@RabbitRPC(...)` | Routing-key wildcards (`hash-wildcard-rpc.#`, `star-wildcard-rpc.*.end`). Multiple decorated handlers per controller. |
+| `outbox-microservices-patterns` | Spring Boot outbox pattern: `OrderService.CreateOrder()` writes to outbox table; separate `@Scheduled` poller calls `kafkaTemplate.send("order-topic", ...)` | Outbox pattern. The grep for `kafkaTemplate.send` lands in the poller — but the *semantic* event is in `CreateOrder()` 50 lines away. Tests whether emit can recognize outbox split and expand context to whole-file. |
+| `kafka-protobuf` | `KafkaProtobufSerializer` + `producer.send(new ProducerRecord<>("protobuf-topic", null, simpleMessage))` | Protobuf `.proto` schema files (`SimpleMessage.proto`). Tests Phase-1 deliverable #5 (schema-file ingestion) for non-Avro formats. |
+| `mozilla-fxa` (sparse: `libs/shared/notifier`, `packages/fxa-event-broker`, `packages/fxa-auth-server/lib/notifier*`) | `@aws-sdk/client-sqs` Consumer + `@google-cloud/pubsub` `pubsub.topic(name).publishMessage(...)` + SQS notifier service | Real production at scale. Three things at once: SQS consumer via `sqs-consumer` lib (different from `@SqsMessageHandler`), Google Pub/Sub publish, **dynamic topic names** (`this.topicPrefix + clientId`), and cross-platform fan-out (one SQS message → N PubSub topics). |
+| `moleculer-go` | Go `transit` package, multi-transport (TCP, NATS) | Go pub/sub idioms. Validates that adding Go scanner support is the cost previously estimated (~200–400 LOC). |
+| `redhat-cloudevents` | `io.cloudevents.CloudEvent` + `OutboxEventEmitter.emitCloudEvent(ce)` translates envelope fields to outbox columns | **Envelope vs payload distinction**: `ce.getType()`, `ce.getSource()`, `ce.getTime()`, `ce.getExtension("aggregateid")` are envelope metadata, separate from `ce.getData()` (payload). Catalog must model these distinctly. Also: 3-layer outbox split (domain → emitter → poller). |
+| `misarch-dapr-inventory` | `daprClient.pubsub.publish(pubsubName, topic, data)` | **Broker abstraction**: Dapr's `pubsubName` refers to a YAML-configured component that maps to Kafka/Redis/RabbitMQ. Underlying broker is invisible to code. Same shape as IaC-as-truth gap. |
+| `temporal-samples` | `wf.defineSignal('unblock')`, `wf.setHandler(...)`, `workflowHandle.signal(...)` | **Out-of-scope confirmation**: Temporal signals are RPC-style targeted messages to specific workflow instances, not topic-broadcast events. emit's catalog model doesn't fit. Documented as known limitation, no Phase 1 work. |
+| `pipeshub-redis-streams` | `BaseRedisStreamsProducerConnection` wraps `ioredis` `xadd`/`xreadgroup` | Confirms wrapper-class pattern (same shape as custom analytics wrappers). User declares the wrapper as the `track_pattern`. No new code path. |
 
 ## Testing
 
@@ -308,6 +329,76 @@ button_click.signup_cta:
 | `src/commands/scan.ts` | Expansion → scanning → extraction → catalog assembly |
 | `src/core/catalog/index.ts` | Sub-event sorting + group comments in YAML |
 | `tests/discriminator.test.ts` | 16 unit tests |
+
+## Producer Mode (pub/sub)
+
+Set `mode: producer` to catalog *publish* call sites from event-driven code. Supported SDKs: **Kafka, RabbitMQ, SNS, SQS**. Additional brokers can be added by appending patterns to `src/core/scanner/backend-patterns.ts`. In producer mode, `manual_events` is optional — the scanner discovers publish sites and feeds them to extraction with `<discovered:file:line>` placeholders, then re-keys to topic names after the LLM returns.
+
+### Config
+
+```yaml
+mode: producer        # default is "analytics" — omit for existing behavior
+repo:
+  paths: [./]
+  sdk: kafka          # or rabbitmq, sns, sqs
+  # Multi-SDK service: sdk: [kafka, rabbitmq]
+
+llm:
+  provider: claude-code
+  model: claude-sonnet-4-6
+
+# Optional: resolve runtime-resolved topic names to stable catalog names
+topic_aliases:
+  index_24: order_placed       # "topic at file:24" → catalog name
+
+# Optional: filter out AMQP infrastructure queues
+rpc_exchanges:
+  - reply.*
+```
+
+### How it works
+
+1. Discovery (`scan.ts` → `findAllProducerCallSites()`): enumerates publish sites by SDK pattern, no `manual_events` required.
+2. Schema-file ingestion (`scanner/schema-files.ts`): pulls `.avsc` / `.proto` / JSON Schema into the LLM prompt (4 KiB × 4 files cap per call site).
+3. Event-class follow-through (`scanner/context.ts`): looks up `*Event` / `*Command` / `*Message` / `*Notification` class definitions across files.
+4. Outbox detection (`scanner/context.ts`): heuristic for write+delivery markers in the same file — expands context to whole-file.
+5. Discriminator-in-discovery: god-events get expanded in producer mode the same way as analytics mode.
+6. Producer-fix templates (`catalog/diagnostic.ts`): `topic_alias`, `track_pattern_wrapper`, `discriminator_config`, `rpc_exchange_filter`, `exclude_paths`, `producer_only_mode` — each feeds `emit fix`.
+7. Pre-flight rejection: rejects fix proposals that would hide already-cataloged events; writes `.emit/rejected-fix.yml` for review.
+
+### Catalog output
+
+Pre-alias:
+```yaml
+<discovered:./src/order/publish.ts:42>:
+  description: "Order placed event published when checkout completes"
+  call_sites: [...]
+```
+
+After `topic_aliases` resolves it:
+```yaml
+order_placed:
+  description: "Order placed event published when checkout completes"
+  ...
+```
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/commands/scan.ts` | `findAllProducerCallSites()` + discovery flow wiring |
+| `src/core/scanner/index.ts` | Multi-SDK pattern matching, `sdk: SdkType[]` array support |
+| `src/core/scanner/schema-files.ts` | Avro / Protobuf / JSON Schema ingestion |
+| `src/core/scanner/context.ts` | Event-class follow-through, outbox detection |
+| `src/core/extractor/prompts.ts` | Producer-mode prompt with schema context |
+| `src/core/catalog/diagnostic.ts` | Producer-fix template generation |
+| `src/commands/fix.ts` | Pre-flight rejection logic |
+| `scripts/e2e-pubsub-harness.ts` | Tier 1/2/3 fixture harness |
+
+### Common pitfalls
+
+- **Pre-flight rejects legitimate alias renames** — when `emit fix` applies a `topic_aliases:` entry, the placeholder key (`<discovered:...>`) is replaced by the canonical name. The pre-flight currently treats that as a "vanished event" and rolls back. Use `--force` or rerun `emit fix` to apply.
+- **Over-aggressive fix proposals** — Claude Code can occasionally widen `repo.paths` to include `.emit/cache/` or the catalog itself, producing phantom call sites. Pre-flight catches this, but the proposal could be narrower.
 
 ## Important Design Decisions
 

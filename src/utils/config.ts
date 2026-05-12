@@ -89,6 +89,9 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
   );
   return {
     ...raw,
+    // Default mode is `analytics` so existing analytics-only configs keep
+    // working byte-identically without specifying `mode`.
+    mode: raw.mode ?? "analytics",
     ...(discriminator ? { discriminator_properties: discriminator } : {}),
     repo: {
       paths: ["./"],
@@ -113,6 +116,8 @@ function applyDefaults(raw: Partial<EmitConfig>): EmitConfig {
   };
 }
 
+const VALID_MODES = new Set<string>(["analytics", "producer"]);
+
 const VALID_PROVIDERS = new Set<string>([
   "claude-code",
   "anthropic",
@@ -122,9 +127,64 @@ const VALID_PROVIDERS = new Set<string>([
 ]);
 
 function validate(config: EmitConfig): void {
-  if (!config.manual_events?.length) {
+  // Mode validation — fail fast on typos so producer-mode users get a clean error.
+  if (config.mode !== undefined && !VALID_MODES.has(config.mode)) {
     throw new Error(
-      "Config must include manual_events\n" +
+      `Unknown mode: "${config.mode}"\n` +
+        `  Valid options: analytics, producer`
+    );
+  }
+
+  // Producer-mode services validation
+  if (config.services !== undefined) {
+    if (!Array.isArray(config.services)) {
+      throw new Error("services: must be an array of { name, path } objects");
+    }
+    config.services.forEach((svc, i) => {
+      if (!svc || typeof svc !== "object") {
+        throw new Error(`services[${i}]: must be an object`);
+      }
+      if (typeof svc.name !== "string" || !svc.name) {
+        throw new Error(`services[${i}].name: required non-empty string`);
+      }
+      if (typeof svc.path !== "string" || !svc.path) {
+        throw new Error(`services[${i}].path: required non-empty string`);
+      }
+    });
+  }
+
+  // Producer-mode topic_aliases validation: must be a flat string→string map.
+  if (config.topic_aliases !== undefined) {
+    if (typeof config.topic_aliases !== "object" || Array.isArray(config.topic_aliases)) {
+      throw new Error("topic_aliases: must be a string-to-string map (placeholder → catalog name)");
+    }
+    for (const [k, v] of Object.entries(config.topic_aliases)) {
+      if (typeof v !== "string") {
+        throw new Error(`topic_aliases.${k}: value must be a string`);
+      }
+    }
+  }
+
+  // Producer-mode rpc_exchanges validation: must be string[].
+  if (config.rpc_exchanges !== undefined) {
+    if (!Array.isArray(config.rpc_exchanges)) {
+      throw new Error("rpc_exchanges: must be an array of strings");
+    }
+    config.rpc_exchanges.forEach((entry, i) => {
+      if (typeof entry !== "string") {
+        throw new Error(`rpc_exchanges[${i}]: must be a string`);
+      }
+    });
+  }
+
+  // manual_events is required for analytics mode (existing behavior).
+  // Producer mode discovers events from publish patterns — manual_events is
+  // optional. When provided in producer mode, it scopes the scan to those
+  // specific event names instead of running broad discovery.
+  const mode = config.mode ?? "analytics";
+  if (mode === "analytics" && !config.manual_events?.length) {
+    throw new Error(
+      "Config must include manual_events for mode: analytics\n" +
         "  Run `emit init` or add manual_events to your config."
     );
   }

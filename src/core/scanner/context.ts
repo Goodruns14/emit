@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import { execFileSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import type { LiteralValues } from "../../types/index.js";
 import { buildExcludeArgs } from "./search.js";
 
@@ -31,6 +31,120 @@ export function extractContext(
   } catch {
     return "";
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Event-class follow-through (Day 4.5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Pattern that captures references to event-class names in producer code.
+ * Matches PascalCase identifiers ending in Event/Command/Message/Notification —
+ * the conventional naming for domain events. Examples:
+ *   `new BalanceDepositedEvent(`     → BalanceDepositedEvent
+ *   `OrderCreatedCommand.builder()`  → OrderCreatedCommand
+ *   `instanceof InvoiceFinalizedEvent` → InvoiceFinalizedEvent
+ *
+ * We intentionally exclude generic Class<Event> usage and skip names that
+ * are too short to be meaningful (e.g. `Event` alone).
+ */
+const EVENT_CLASS_REF_PATTERN = /\b([A-Z][a-zA-Z0-9_]{4,}(?:Event|Command|Message|Notification))\b/g;
+
+const EVENT_CLASS_REF_BLOCKLIST = new Set([
+  "Event", "BaseEvent", "DomainEvent", "ApplicationEvent", "ContextEvent",
+  "MessageEvent", "Command", "BaseCommand", "Notification",
+]);
+
+/** Per-scan cache of event-class file lookups (className → fileContent). */
+const _eventClassCache = new Map<string, string | null>();
+
+/**
+ * Cap class-definition content per file. Keeps the LLM prompt bounded
+ * even if the user has very large event classes.
+ */
+const EVENT_CLASS_MAX_BYTES = 4 * 1024;
+
+/**
+ * Find event-class definitions referenced from the given context. For each
+ * unique PascalCase identifier ending in Event/Command/Message/Notification,
+ * search the configured paths for a file declaring that class and read it.
+ *
+ * Used by the producer-mode discovery flow: when the publish call site
+ * references typed event classes (CQRS, DDD-style), the LLM benefits from
+ * seeing the class definitions to extract proper payload schema.
+ *
+ * Returns up to `maxClasses` results to bound prompt size.
+ */
+export function findEventClassDefinitions(
+  contextSrc: string,
+  paths: string[],
+  maxClasses = 4,
+): { path: string; content: string }[] {
+  const matches = contextSrc.matchAll(EVENT_CLASS_REF_PATTERN);
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const m of matches) {
+    const name = m[1];
+    if (EVENT_CLASS_REF_BLOCKLIST.has(name)) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    candidates.push(name);
+  }
+  if (candidates.length === 0) return [];
+
+  const results: { path: string; content: string }[] = [];
+  for (const className of candidates.slice(0, maxClasses)) {
+    if (_eventClassCache.has(className)) {
+      const cached = _eventClassCache.get(className);
+      if (cached !== null && cached !== undefined) {
+        results.push({ path: `${className} (definition)`, content: cached });
+      }
+      continue;
+    }
+    // Cheap grep: look for `class ClassName` or `record ClassName` declarations
+    // in the configured paths. Restricted to source extensions to avoid noise.
+    const filePath = locateClassDefinition(className, paths);
+    if (!filePath) {
+      _eventClassCache.set(className, null);
+      continue;
+    }
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const trimmed = raw.length > EVENT_CLASS_MAX_BYTES
+        ? raw.slice(0, EVENT_CLASS_MAX_BYTES) + `\n... (truncated, ${raw.length} bytes total)`
+        : raw;
+      _eventClassCache.set(className, trimmed);
+      results.push({ path: filePath, content: trimmed });
+    } catch {
+      _eventClassCache.set(className, null);
+    }
+  }
+  return results;
+}
+
+/** Locate the file declaring a given event class name. Returns first match. */
+function locateClassDefinition(className: string, paths: string[]): string | null {
+  for (const root of paths) {
+    try {
+      // Use grep -l to find files containing the class declaration. This
+      // catches Java/Kotlin/Scala (`class X`, `record X`), TS/JS
+      // (`class X`, `interface X`, `type X`), and Python (`class X`).
+      // The ordering of regex alternatives matters: most specific first.
+      const out = execSync(
+        `grep -rlE "(class|record|interface|type)[[:space:]]+${className}\\b" ` +
+          `--include='*.java' --include='*.kt' --include='*.scala' ` +
+          `--include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' ` +
+          `--include='*.py' ` +
+          `--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build --exclude-dir=target ` +
+          `${root} 2>/dev/null | head -1`,
+        { encoding: "utf8" }
+      ).trim();
+      if (out) return out;
+    } catch {
+      // grep returned non-zero (no matches) — try next path
+    }
+  }
+  return null;
 }
 
 /**

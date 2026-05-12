@@ -43,6 +43,31 @@ export interface DiscriminatorGap {
   issueType: "not_found" | "low_confidence" | "mixed";
 }
 
+/**
+ * Producer-mode Tier 2 fix suggestion. Detected deterministically from
+ * catalog flags without LLM calls — these are well-defined patterns where
+ * the right config change is obvious. Each maps onto a config snippet
+ * that emit fix's existing Claude-Code-driven flow can apply.
+ */
+export interface ProducerFixSuggestion {
+  /** Internal kind, determines which template applies. */
+  kind:
+    | "topic_alias"           // topic_dynamic flag → declare runtime alias
+    | "track_pattern_wrapper" // 2+ low confidence in same file → wrapper class
+    | "discriminator_config"  // god-event detected without discriminator config
+    | "rpc_exchange_filter"   // RPC exchanges treated as events (golevelup)
+    | "producer_only_mode"    // both producer + consumer patterns visible
+    | "exclude_paths";        // false-positive directory (test fixtures, etc.)
+  /** Catalog entries affected. Empty for codebase-level suggestions. */
+  affectedEvents: string[];
+  /** Free-form description of what was detected. Surfaced to user. */
+  reason: string;
+  /** YAML-snippet hint for the fix instruction. Claude Code edits the
+   * config file accordingly; placeholders like <CHOOSE-NAME> ask for user
+   * input on values that aren't determinable from code. */
+  suggestedConfig: string;
+}
+
 export interface DiagnosticSignal {
   eventCount: number;
   propertyCount: number;
@@ -54,6 +79,14 @@ export interface DiagnosticSignal {
   callSiteAnomalies: CallSiteAnomaly[];
   repeatedConfidenceReasons: ReasonCluster[];
   discriminatorGaps: DiscriminatorGap[];
+
+  /**
+   * Producer-mode Tier 2 fix suggestions detected from catalog flags.
+   * Empty for analytics-mode catalogs; populated when
+   * collectDiagnosticSignal sees producer-mode entries with actionable
+   * flags (topic_dynamic, multi-low-confidence, etc.).
+   */
+  producerFixSuggestions: ProducerFixSuggestion[];
 
   /** Top-level events that couldn't be located in the codebase. Excludes
    *  sub-events already counted by discriminatorGaps. Surfaced to the
@@ -307,6 +340,9 @@ export function collectDiagnosticSignal(catalog: EmitCatalog): DiagnosticSignal 
     });
   }
 
+  // ── Producer-mode Tier 2 fix suggestions (deterministic) ─────────
+  const producerFixSuggestions = detectProducerFixSuggestions(catalog);
+
   // ── 6. Top-level not-found events ──────────────────────────────────
   // Exclude sub-events that already appear in a discriminatorGap — those
   // have a parent and a different fix shape (discriminator config, not
@@ -327,8 +363,157 @@ export function collectDiagnosticSignal(catalog: EmitCatalog): DiagnosticSignal 
     callSiteAnomalies,
     repeatedConfidenceReasons: reasonClusters,
     discriminatorGaps,
+    producerFixSuggestions,
     notFoundEvents,
   };
+}
+
+// ─────────────────────────────────────────────
+// PRODUCER-MODE TIER 2 DETECTION
+// ─────────────────────────────────────────────
+
+/**
+ * Walk a catalog and return Tier 2 fix suggestions — places where user
+ * config can resolve uncertainty the LLM correctly flagged but couldn't
+ * resolve from code alone.
+ *
+ * Deterministic — no LLM call. Each detected pattern maps onto a known
+ * config snippet that the user (via emit fix → Claude Code) can apply.
+ */
+function detectProducerFixSuggestions(catalog: EmitCatalog): ProducerFixSuggestion[] {
+  const suggestions: ProducerFixSuggestion[] = [];
+  const events = Object.entries(catalog.events);
+
+  // ── 1. topic_dynamic → topic_alias ──────────────────────────────
+  // Any catalog entry whose flags include "topic_dynamic" needs a user-
+  // declared alias. Group by source file so a single alias covers all
+  // events publishing through the same dynamic-topic resolver.
+  const dynamicTopicEvents = events.filter(([_, ev]) =>
+    ev.flags?.some((f) => f === "topic_dynamic" || f.toLowerCase().includes("topic_dynamic")),
+  );
+  if (dynamicTopicEvents.length > 0) {
+    const eventNames = dynamicTopicEvents.map(([n]) => n);
+    suggestions.push({
+      kind: "topic_alias",
+      affectedEvents: eventNames,
+      reason: `${eventNames.length} event${eventNames.length === 1 ? "" : "s"} publish to a topic resolved at runtime (process.env, config service, or string concatenation). Static analysis can't determine the resolved name.`,
+      suggestedConfig: [
+        "topic_aliases:",
+        "  # For each runtime-resolved topic, declare what catalog name to use.",
+        "  # Replace <ALIAS-NAME> with the canonical event name (e.g. 'invoices').",
+        ...eventNames.map((n) => `  ${shortNameHint(n)}: <CHOOSE-CATALOG-NAME>`),
+      ].join("\n"),
+    });
+  }
+
+  // ── 2. 2+ low-confidence events in same file → wrapper class ────
+  // When the same file produces multiple low-confidence entries via the
+  // same track_pattern, it's almost always a custom wrapper class (e.g.
+  // BaseRedisStreamsProducerConnection). User declares the wrapper as a
+  // first-class track_pattern and the LLM gets useful context.
+  const lowByFile = new Map<string, { name: string; pattern?: string }[]>();
+  for (const [name, ev] of events) {
+    if (ev.confidence !== "low") continue;
+    const file = ev.source_file;
+    if (!file) continue;
+    if (!lowByFile.has(file)) lowByFile.set(file, []);
+    lowByFile.get(file)!.push({ name, pattern: ev.track_pattern });
+  }
+  for (const [file, entries] of lowByFile) {
+    if (entries.length < 2) continue;
+    // Pick the most common track_pattern in this file as the wrapper hint
+    const patternCounts = new Map<string, number>();
+    for (const e of entries) {
+      if (!e.pattern) continue;
+      patternCounts.set(e.pattern, (patternCounts.get(e.pattern) ?? 0) + 1);
+    }
+    let dominantPattern: string | undefined;
+    let max = 0;
+    for (const [p, c] of patternCounts) {
+      if (c > max) { max = c; dominantPattern = p; }
+    }
+    suggestions.push({
+      kind: "track_pattern_wrapper",
+      affectedEvents: entries.map((e) => e.name),
+      reason: `${entries.length} low-confidence events in ${file} likely come from a custom wrapper class. Declaring the wrapper as a track_pattern lets emit treat it as a first-class producer.`,
+      suggestedConfig: [
+        "repo:",
+        "  track_pattern:",
+        `    - '${dominantPattern ?? "<wrapper.publishMethod("}'`,
+        `    # ${file} contains a wrapper class (e.g. BaseRedisStreamsProducerConnection).`,
+        `    # Replace the placeholder with the wrapper method invocation pattern.`,
+      ].join("\n"),
+    });
+  }
+
+  // ── 3. RPC exchanges treated as events ──────────────────────────
+  // Detected by flags containing 'amqp' / 'rpc' alongside event entries
+  // whose names look like exchange names (exchange1, exchange2, etc.).
+  const rpcSuspects = events.filter(([name, ev]) => {
+    const flagText = (ev.flags ?? []).join(" ").toLowerCase();
+    const nameIsExchangeLike = /^exchange[0-9]/i.test(name) || ev.track_pattern === "@RabbitRPC(";
+    return nameIsExchangeLike && (flagText.includes("rpc") || flagText.includes("amqp"));
+  });
+  if (rpcSuspects.length >= 2) {
+    suggestions.push({
+      kind: "rpc_exchange_filter",
+      affectedEvents: rpcSuspects.map(([n]) => n),
+      reason: `${rpcSuspects.length} catalog entries appear to be RabbitMQ RPC infrastructure (exchange names, not domain events). RPC requests are routing primitives — not the events your data team cares about.`,
+      suggestedConfig: [
+        "# Mark these exchanges as RPC infrastructure so emit excludes them",
+        "# from the catalog. Only events meaningful to consumers should be cataloged.",
+        "rpc_exchanges:",
+        ...rpcSuspects.map(([n]) => `  - ${n}`),
+      ].join("\n"),
+    });
+  }
+
+  // ── 4. God-event without discriminator config ───────────────────
+  // Heuristic: an event whose properties include a string-typed field
+  // named like 'type', 'eventType', or 'kind' AND whose discriminator
+  // config is absent. Suggest declaring discriminator_properties.
+  for (const [name, ev] of events) {
+    if (ev.parent_event) continue; // already a sub-event
+    const candidateProps = Object.keys(ev.properties).filter((p) =>
+      ["type", "eventType", "event_type", "kind", "messageType"].includes(p),
+    );
+    if (candidateProps.length === 0) continue;
+    // Only suggest if no discriminator config exists for this event
+    const hasConfig = (ev as any).discriminator_property !== undefined;
+    if (hasConfig) continue;
+    suggestions.push({
+      kind: "discriminator_config",
+      affectedEvents: [name],
+      reason: `'${name}' has a discriminator-shaped property ('${candidateProps[0]}') but no discriminator config. Declaring it expands one parent entry into one entry per event type.`,
+      suggestedConfig: [
+        "discriminator_properties:",
+        `  ${name}:`,
+        `    property: ${candidateProps[0]}`,
+        "    values:",
+        "      # List the distinct values this property takes. Run scan again",
+        "      # after declaring to expand this event into sub-events.",
+        "      - <VALUE_1>",
+        "      - <VALUE_2>",
+      ].join("\n"),
+    });
+  }
+
+  return suggestions;
+}
+
+/**
+ * For dynamic-topic events with placeholder names like
+ * '<discovered:./path/file.ts:123>', generate a short readable hint key
+ * that the user can rename to a real alias name in the YAML.
+ *
+ * Exported so the scan command can compute the same key when looking up
+ * topic_aliases — both sides MUST agree on the key shape, otherwise an
+ * alias declared in config will never match a discovered placeholder.
+ */
+export function shortNameHint(eventName: string): string {
+  const m = eventName.match(/<discovered:[^>]*\/([^/>]+):(\d+)>/);
+  if (m) return `${m[1].replace(/\.[a-z]+$/, "")}_${m[2]}`;
+  return eventName.replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
 // ─────────────────────────────────────────────

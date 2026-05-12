@@ -38,10 +38,14 @@ describe("wouldExclude", () => {
       expect(wouldExclude("src/foo/bar.test.ts", ["*.test.ts"])).toBe(true);
     });
 
-    it("matches **/-prefixed basename globs against the file basename", () => {
-      // **/ is stripped, leaving "*.module.css" as a basename glob.
-      // wouldExclude mirrors setExcludePaths classification.
+    it("**/ prefix is stripped and treated as a basename glob", () => {
+      // setExcludePaths and wouldExclude both strip the leading `**/` so
+      // that `**/*.module.css` behaves as a basename glob across any
+      // directory. Without the strip, the entry would land in the path-prefix
+      // branch and match nothing — that was a real bug, fixed in search.ts.
       expect(wouldExclude("a/b/c.module.css", ["**/*.module.css"])).toBe(true);
+      expect(wouldExclude("c.module.css", ["**/*.module.css"])).toBe(true);
+      expect(wouldExclude("a/b/c.css", ["**/*.module.css"])).toBe(false);
     });
 
     it("does not match if extension differs", () => {

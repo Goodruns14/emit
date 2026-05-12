@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { execa } from "execa";
 import type { SdkType } from "../../types/index.js";
+import { allPatterns as backendPatternsForSdk } from "./backend-patterns.js";
 
 export interface SearchMatch {
   file: string;
@@ -10,6 +11,7 @@ export interface SearchMatch {
 }
 
 export const SDK_PATTERNS: Record<SdkType, string[]> = {
+  // Analytics SDKs
   segment: [
     "analytics.track(",
     "analytics.identify(",
@@ -27,6 +29,13 @@ export const SDK_PATTERNS: Record<SdkType, string[]> = {
     "tracker.trackSelfDescribingEvent(",
     "snowplow('trackStructEvent'",
   ],
+  // Pub/sub SDKs (Phase 1 producer-mode). Patterns sourced from
+  // src/core/scanner/backend-patterns.ts which is the single source of truth.
+  kafka: backendPatternsForSdk("kafka"),
+  sns: backendPatternsForSdk("sns"),
+  sqs: backendPatternsForSdk("sqs"),
+  rabbitmq: backendPatternsForSdk("rabbitmq"),
+  // Catch-all
   custom: [],
 };
 
@@ -68,24 +77,25 @@ export function setExcludePaths(paths: string[]): void {
   extraExcludeFiles = [];
   extraExcludePathPrefixes = [];
   for (const entry of paths) {
-    // Strip a leading **/ first so basename globs like "**/*.test.ts" are
-    // classified as filename patterns rather than path prefixes.
-    const stripped = entry.replace(/^\*\*\//, "");
-    const isBasenameGlob = stripped.includes("*") && !stripped.includes("/");
+    // Strip leading `**/` first — it's a "match in any directory" marker, not
+    // a path component. e.g. `**/*.test.ts` is conceptually a basename glob,
+    // not a path-based pattern.
+    const cleaned = entry.replace(/^\*\*\//, "");
+    const isBasenameGlob = cleaned.includes("*") && !cleaned.includes("/");
     if (isBasenameGlob) {
       // Filename glob — grep --exclude matches basename only.
       // e.g. "**/*.module.css" → "*.module.css", "*.min.js" → "*.min.js"
-      extraExcludeFiles.push(stripped);
-    } else if (entry.includes("/")) {
+      extraExcludeFiles.push(cleaned);
+    } else if (cleaned.includes("/")) {
       // Path-based pattern — grep --exclude/--exclude-dir can't handle paths,
       // so store as a prefix for post-filtering of grep results.
       // Strip trailing wildcards and slashes: "backend/foo/**" → "backend/foo"
       // Also strip leading "./" so it matches normalized file paths from grep output.
-      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
+      const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
       if (prefix) extraExcludePathPrefixes.push(prefix);
     } else {
       // Plain directory name — pass as --exclude-dir
-      extraExcludeDirs.push(entry);
+      extraExcludeDirs.push(cleaned);
     }
   }
 }
@@ -114,23 +124,23 @@ export function wouldExclude(filePath: string, paths: string[]): boolean {
   const basename = segments[segments.length - 1];
 
   for (const entry of paths) {
-    // Mirror setExcludePaths: strip a leading **/ first and treat the result
-    // as a basename glob if it has no further `/`.
-    const stripped = entry.replace(/^\*\*\//, "");
-    const isBasenameGlob = stripped.includes("*") && !stripped.includes("/");
+    // Mirror the same `**/` strip used by setExcludePaths so wouldExclude and
+    // setExcludePaths agree on classification.
+    const cleaned = entry.replace(/^\*\*\//, "");
+    const isBasenameGlob = cleaned.includes("*") && !cleaned.includes("/");
     if (isBasenameGlob) {
       const regex = new RegExp(
-        "^" + stripped.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
+        "^" + cleaned.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
       );
       if (regex.test(basename)) return true;
-    } else if (entry.includes("/")) {
+    } else if (cleaned.includes("/")) {
       // Path prefix
-      const prefix = entry.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
+      const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
       if (!prefix) continue;
       if (normalized === prefix || normalized.startsWith(prefix + "/")) return true;
     } else {
       // Plain directory name anywhere in path
-      if (segments.slice(0, -1).includes(entry)) return true;
+      if (segments.slice(0, -1).includes(cleaned)) return true;
     }
   }
   return false;
@@ -283,10 +293,32 @@ export function filterExactEventMatches(
   return filtered.length > 0 ? filtered : matches;
 }
 
+/**
+ * Resolve a single SDK or array of SDKs to its pattern set, unioning
+ * across the input. `custom` always contributes the user-provided
+ * customPatterns; other SDKs contribute their `SDK_PATTERNS` entry.
+ */
+function resolvePatterns(
+  sdk: SdkType | SdkType[],
+  customPatterns?: string[]
+): string[] {
+  const sdks = Array.isArray(sdk) ? sdk : [sdk];
+  const collected: string[] = [];
+  for (const s of sdks) {
+    if (s === "custom") {
+      collected.push(...(customPatterns ?? []));
+    } else {
+      collected.push(...(SDK_PATTERNS[s] ?? []));
+    }
+  }
+  // Dedupe — multi-SDK can produce overlap (rare but possible).
+  return Array.from(new Set(collected));
+}
+
 export async function searchDirect(
   eventName: string,
   paths: string[],
-  sdk: SdkType,
+  sdk: SdkType | SdkType[],
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
@@ -297,6 +329,7 @@ export async function searchDirect(
   // falls through to its built-in regex covering common tracking verbs.
   void sdk;
   const patterns = customPatterns ?? [];
+
 
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 
@@ -515,7 +548,7 @@ export async function searchDiscriminatorValue(
 export async function searchConstant(
   constantName: string,
   paths: string[],
-  sdk: SdkType,
+  sdk: SdkType | SdkType[],
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {

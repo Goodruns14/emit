@@ -18,7 +18,7 @@ import { diffCatalogs } from "../core/diff/index.js";
 import { formatTerminalDiff } from "../core/diff/format.js";
 import { getCatalogHealth } from "../core/catalog/health.js";
 import { renderHealthSection } from "../utils/health-render.js";
-import { collectDiagnosticSignal, shouldRunDiagnostic, getFlaggedEvents } from "../core/catalog/diagnostic.js";
+import { collectDiagnosticSignal, shouldRunDiagnostic, getFlaggedEvents, shortNameHint } from "../core/catalog/diagnostic.js";
 import { expandDiscriminators } from "../core/discriminator/index.js";
 import type {
   CatalogEvent,
@@ -95,9 +95,23 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     return 1;
   }
 
-  // ── Build events list from manual_events ────────────────────────────
+  // ── Build events list ───────────────────────────────────────────────
+  // Three valid paths:
+  //   1. manual_events list (existing analytics + scoped producer flow)
+  //   2. producer-mode discovery (new in Day 2.5): scan publish patterns,
+  //      synthesize one placeholder event per discovered call site. The
+  //      LLM-extracted `topic` becomes the real catalog key after extraction.
+  //   3. analytics mode without manual_events (rejected above by validate)
   type EventEntry = { name: string };
   let events: EventEntry[];
+
+  // Discovery mode: producer mode + no manual_events + no --event/--events.
+  // We compute this once and use it as a fork point in a few places below.
+  const isProducerDiscovery =
+    config.mode === "producer" &&
+    (config.manual_events?.length ?? 0) === 0 &&
+    !opts.event &&
+    !opts.events;
 
   if ((config.manual_events?.length ?? 0) > 0) {
     if (!json) logger.info(`Using ${config.manual_events!.length} manually specified events`);
@@ -105,6 +119,11 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       const name = typeof nameOrObj === "string" ? nameOrObj : String(nameOrObj?.name ?? nameOrObj);
       return { name };
     });
+  } else if (isProducerDiscovery) {
+    // Defer events list construction until after the scanner exists. The
+    // discovery branch below populates `events` (and codeContextMap and
+    // located) directly from findAllProducerCallSites().
+    events = [];
   } else {
     logger.error("No events configured. Run `emit init` or add manual_events to config.");
     return 1;
@@ -226,43 +245,77 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     backendPatterns: config.repo.backend_patterns,
   });
 
-  if (!json) {
-    logger.blank();
-    logger.line(`  Searching for ${events.length} event${events.length === 1 ? "" : "s"} in your codebase...`);
-    logger.blank();
-  }
-
   const located: EventEntry[] = [];
   const notFound: string[] = [];
   const codeContextMap = new Map<string, Awaited<ReturnType<RepoScanner["findEvent"]>>>();
 
-  // Run grep searches concurrently, capped to avoid spawning too many
-  // child processes at once (each findEvent can spawn multiple greps).
-  const SCAN_CONCURRENCY = 20;
-  const scanResults: { event: EventEntry; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
-  let scanIdx = 0;
-  let scanCompleted = 0;
-  async function scanWorker() {
-    while (scanIdx < events.length) {
-      const i = scanIdx++;
-      const event = events[i];
-      const subInfo = subEventMap.get(event.name);
-      const ctx = subInfo
-        ? await scanner.findDiscriminatorValue(subInfo.value)
-        : await scanner.findEvent(event.name);
-      scanResults[i] = { event, ctx };
-      scanCompleted++;
-      if (!json) logger.progress(scanCompleted, events.length);
+  if (isProducerDiscovery) {
+    // ── Producer-mode discovery branch ────────────────────────────────
+    // Enumerate all publish call sites for the configured SDK (via patterns
+    // from backend-patterns.ts), then synthesize one placeholder event per
+    // call site. The LLM-extracted `topic` will become the real catalog key
+    // after the extraction loop.
+    if (!json) {
+      logger.blank();
+      logger.line(`  Discovering publish call sites (mode: producer, sdk: ${Array.isArray(config.repo.sdk) ? config.repo.sdk.join(" + ") : config.repo.sdk})...`);
+      logger.blank();
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, events.length) }, scanWorker));
+    const callSites = await scanner.findAllProducerCallSites();
+    if (callSites.length === 0) {
+      if (!json) {
+        logger.warn(
+          `No publish call sites found for sdk: ${Array.isArray(config.repo.sdk) ? config.repo.sdk.join(" + ") : config.repo.sdk} in ${config.repo.paths.join(", ")}.`,
+        );
+        logger.line("  Check repo.sdk and repo.paths in your emit.config.yml.");
+      }
+      // Continue — catalog will be empty, but that's a signal not a crash.
+    }
+    for (const ctx of callSites) {
+      const placeholder = `<discovered:${ctx.file_path}:${ctx.line_number}>`;
+      const entry: EventEntry = { name: placeholder };
+      events.push(entry);
+      codeContextMap.set(placeholder, ctx);
+      located.push(entry);
+    }
+    if (!json) {
+      logger.info(`Discovered ${callSites.length} publish call site${callSites.length === 1 ? "" : "s"}`);
+    }
+  } else {
+    // ── Existing manual-events scan loop ──────────────────────────────
+    if (!json) {
+      logger.blank();
+      logger.line(`  Searching for ${events.length} event${events.length === 1 ? "" : "s"} in your codebase...`);
+      logger.blank();
+    }
 
-  for (const { event, ctx } of scanResults) {
-    codeContextMap.set(event.name, ctx);
-    if (ctx.match_type === "not_found") {
-      notFound.push(event.name);
-    } else {
-      located.push(event);
+    // Run grep searches concurrently, capped to avoid spawning too many
+    // child processes at once (each findEvent can spawn multiple greps).
+    const SCAN_CONCURRENCY = 20;
+    const scanResults: { event: EventEntry; ctx: Awaited<ReturnType<RepoScanner["findEvent"]>> }[] = new Array(events.length);
+    let scanIdx = 0;
+    let scanCompleted = 0;
+    async function scanWorker() {
+      while (scanIdx < events.length) {
+        const i = scanIdx++;
+        const event = events[i];
+        const subInfo = subEventMap.get(event.name);
+        const ctx = subInfo
+          ? await scanner.findDiscriminatorValue(subInfo.value)
+          : await scanner.findEvent(event.name);
+        scanResults[i] = { event, ctx };
+        scanCompleted++;
+        if (!json) logger.progress(scanCompleted, events.length);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, events.length) }, scanWorker));
+
+    for (const { event, ctx } of scanResults) {
+      codeContextMap.set(event.name, ctx);
+      if (ctx.match_type === "not_found") {
+        notFound.push(event.name);
+      } else {
+        located.push(event);
+      }
     }
   }
 
@@ -295,7 +348,10 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     ...(opts.provider ? { provider: opts.provider } : {}),
     ...(opts.model ? { model: opts.model } : {}),
   };
-  const extractor = new MetadataExtractor(llmCfg);
+  // Mode dispatch — config.mode (default "analytics") drives which extraction
+  // prompt the LLM sees. Producer mode triggers buildProducerExtractionPrompt
+  // and the dynamic-topic fallback in extractor/index.ts.
+  const extractor = new MetadataExtractor(llmCfg, config.mode ?? "analytics");
 
   if (!json) {
     const providerLabel = llmCfg.provider === "claude-code"
@@ -393,7 +449,6 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         );
       }
     }
-
     const reconciled: CatalogEvent = {
       description: meta.event_description,
       fires_when: meta.fires_when,
@@ -407,6 +462,14 @@ export async function runScan(opts: ScanOptions): Promise<number> {
       all_call_sites: ctx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
       properties: mergedProperties,
       flags: eventFlags,
+      // Producer-mode fields — only populated when extractor returns them,
+      // i.e. when scan ran in producer (or both) mode. Analytics scans leave
+      // these undefined so the YAML output stays byte-identical.
+      ...(meta.topic !== undefined && { topic: meta.topic }),
+      ...(meta.event_version !== undefined && meta.event_version !== null && { event_version: meta.event_version }),
+      ...(meta.envelope_spec !== undefined && meta.envelope_spec !== null && { envelope_spec: meta.envelope_spec }),
+      ...(meta.partition_key_field !== undefined && meta.partition_key_field !== null && { partition_key_field: meta.partition_key_field }),
+      ...(meta.delivery !== undefined && meta.delivery !== null && { delivery: meta.delivery }),
     };
     reconciled.context_hash = contextHash;
     const modifier = getLastModifier(ctx.file_path, ctx.line_number);
@@ -428,6 +491,201 @@ export async function runScan(opts: ScanOptions): Promise<number> {
   if (!json) {
     logger.blank();
     logger.succeed("Extraction complete");
+  }
+
+  // ── Producer-discovery re-keying ──────────────────────────────────
+  // The discovery branch entered the extraction loop with placeholder names
+  // like `<discovered:file:line>`. Now that extraction has handed back a
+  // real topic per entry, replace the placeholder keys with topic names.
+  // When two call sites publish to the same topic, merge them (union the
+  // call sites) instead of having one overwrite the other — that's the
+  // honest representation: "this event has N publish locations."
+  if (isProducerDiscovery) {
+    const rekeyed: Record<string, CatalogEvent> = {};
+    let topicCollisions = 0;
+    let aliasResolutions = 0;
+    // Set of resolved topic names the user has declared in topic_aliases
+    // (values, not keys). If the LLM extracts one of these, the user has
+    // acknowledged the dynamic-resolution case and the topic_dynamic flag
+    // should be cleared even though the discovery placeholder didn't match
+    // any alias key directly.
+    const declaredTopicValues = new Set(
+      Object.values(config.topic_aliases ?? {}),
+    );
+    const stripDynamicFlags = (entry: CatalogEvent) => {
+      if (Array.isArray(entry.flags)) {
+        entry.flags = entry.flags.filter(
+          (f) => !f.toLowerCase().includes("topic_dynamic"),
+        );
+      }
+    };
+    for (const [placeholder, entry] of Object.entries(catalog)) {
+      // Resolution priority for the catalog entry's key:
+      //   1. user-declared topic_aliases (the most explicit signal — emit fix
+      //      writes these here when topic_dynamic was flagged)
+      //   2. LLM-extracted topic (when it's not <unresolved>)
+      //   3. placeholder (extraction ceiling — preserved as honest signal)
+      const aliasKey = shortNameHint(placeholder);
+      const userAlias = config.topic_aliases?.[aliasKey];
+      let topicKey: string;
+      if (userAlias) {
+        topicKey = userAlias;
+        aliasResolutions++;
+        // Also normalize the entry's topic field — if the LLM left it as
+        // <unresolved>, replace with the user-declared alias so downstream
+        // tools (MCP, push adapters) see a stable name.
+        if (!entry.topic || entry.topic === "<unresolved>") {
+          entry.topic = userAlias;
+        }
+        // Drop topic_dynamic flags once an alias resolves the case — the
+        // catalog now has a stable name. Use the same substring predicate
+        // as detectProducerFixSuggestions() so verbose flags like
+        // "topic_dynamic: dynamically resolved at runtime via Spring @Value"
+        // also get stripped. Without this the diagnostic re-fires the same
+        // suggestion on every subsequent run, even though the alias is
+        // already in config.
+        stripDynamicFlags(entry);
+      } else if (entry.topic && entry.topic !== "<unresolved>") {
+        topicKey = entry.topic;
+        // The LLM extracted a stable topic name. If the user has separately
+        // declared that same topic in topic_aliases (e.g. they aliased the
+        // shortNameHint of the extracted topic to itself), they've
+        // acknowledged the dynamic resolution — strip the flag so the
+        // diagnostic doesn't re-fire on every subsequent run.
+        if (declaredTopicValues.has(entry.topic)) {
+          stripDynamicFlags(entry);
+        }
+      } else {
+        topicKey = placeholder;
+      }
+      const existing = rekeyed[topicKey];
+      if (existing) {
+        // Merge call_sites (dedupe by file:line)
+        const seen = new Set(existing.all_call_sites.map((cs) => `${cs.file}:${cs.line}`));
+        for (const cs of entry.all_call_sites) {
+          const k = `${cs.file}:${cs.line}`;
+          if (!seen.has(k)) {
+            existing.all_call_sites.push(cs);
+            seen.add(k);
+          }
+        }
+        // Keep the higher-confidence entry's metadata; otherwise first wins
+        const rank = (c: CatalogEvent["confidence"]) => (c === "high" ? 2 : c === "medium" ? 1 : 0);
+        if (rank(entry.confidence) > rank(existing.confidence)) {
+          existing.description = entry.description;
+          existing.fires_when = entry.fires_when;
+          existing.confidence = entry.confidence;
+          existing.confidence_reason = entry.confidence_reason;
+          existing.properties = entry.properties;
+        }
+        topicCollisions++;
+      } else {
+        rekeyed[topicKey] = entry;
+      }
+    }
+    // Replace the placeholder-keyed catalog with the topic-keyed one.
+    for (const k of Object.keys(catalog)) delete catalog[k];
+    Object.assign(catalog, rekeyed);
+    if (!json && topicCollisions > 0) {
+      logger.info(
+        `Merged ${topicCollisions} call site${topicCollisions === 1 ? "" : "s"} into existing topic entries`,
+      );
+    }
+    if (!json && aliasResolutions > 0) {
+      logger.info(
+        `Resolved ${aliasResolutions} placeholder${aliasResolutions === 1 ? "" : "s"} via topic_aliases config`,
+      );
+    }
+
+    // ── RPC-exchange filter ────────────────────────────────────────────
+    // Drop entries the user has marked as AMQP RPC infrastructure (golevelup
+    // amqpConnection.request() exchange names etc.) — these are routing
+    // primitives, not domain events meaningful to consumers.
+    if (config.rpc_exchanges?.length) {
+      const rpcSet = new Set(config.rpc_exchanges);
+      let filtered = 0;
+      for (const name of Object.keys(catalog)) {
+        const entry = catalog[name];
+        if (rpcSet.has(name) || (entry.topic && rpcSet.has(entry.topic))) {
+          delete catalog[name];
+          filtered++;
+        }
+      }
+      if (!json && filtered > 0) {
+        logger.info(
+          `Filtered ${filtered} RPC infrastructure ${filtered === 1 ? "entry" : "entries"} (rpc_exchanges config)`,
+        );
+      }
+    }
+
+    // ── Discovery-mode discriminator expansion ─────────────────────────
+    // When a discovered topic matches a discriminator_properties config key,
+    // expand it into sub-events. Reuses the existing scanner.findDiscriminatorValue
+    // and extractor.extractDiscriminatorMetadata machinery — same as what
+    // manual_events mode does at line ~158, just triggered post-discovery
+    // because we don't know the topics until extraction returns them.
+    //
+    // Example: aleks-cqrs-eventsourcing publishes to bank-account-event-store
+    // which carries 4 event types (BANK_ACCOUNT_CREATED_V1, EMAIL_CHANGED_V1,
+    // ADDRESS_UPDATED_V1, BALANCE_DEPOSITED_V1) discriminated by getEventType().
+    // Without expansion: 1 catalog entry. With expansion: 1 parent + 4 children.
+    if (config.discriminator_properties) {
+      const expansionsForDiscovered: { topic: string; property: string; values: string[] }[] = [];
+      for (const exp of await expandDiscriminators(config)) {
+        // Only fire expansion for topics actually discovered. Discriminator
+        // configs that don't match any discovered topic are ignored — the
+        // user may have stale config entries; don't surface them as errors.
+        if (catalog[exp.parentEvent]) {
+          expansionsForDiscovered.push({
+            topic: exp.parentEvent,
+            property: exp.property,
+            values: exp.values,
+          });
+        }
+      }
+      if (expansionsForDiscovered.length > 0 && !json) {
+        const totalSubs = expansionsForDiscovered.reduce((sum, e) => sum + e.values.length, 0);
+        logger.info(
+          `Expanding ${expansionsForDiscovered.length} discriminator${expansionsForDiscovered.length === 1 ? "" : "s"} → ${totalSubs} sub-events...`,
+        );
+      }
+      for (const exp of expansionsForDiscovered) {
+        const parentEntry = catalog[exp.topic];
+        for (const value of exp.values) {
+          const subKey = `${exp.topic}.${value}`;
+          if (catalog[subKey]) continue; // already expanded (incremental scan)
+          const subCtx = await scanner.findDiscriminatorValue(value);
+          if (subCtx.match_type === "not_found") continue;
+          const subMeta = await extractor.extractDiscriminatorMetadata(
+            exp.topic,
+            exp.property,
+            value,
+            subCtx,
+            parentEntry.description,
+          );
+          catalog[subKey] = {
+            description: subMeta.event_description,
+            fires_when: subMeta.fires_when,
+            confidence: subMeta.confidence,
+            confidence_reason: subMeta.confidence_reason,
+            review_required: subMeta.confidence === "low",
+            source_file: subCtx.file_path,
+            source_line: subCtx.line_number,
+            all_call_sites: subCtx.all_call_sites.map((cs) => ({ file: cs.file_path, line: cs.line_number })),
+            properties: {},
+            flags: subMeta.flags ?? [],
+            parent_event: exp.topic,
+            discriminator_property: exp.property,
+            discriminator_value: value,
+            // Inherit producer-mode envelope/topic from parent so the sub-event
+            // carries the right routing metadata even though it's keyed by value.
+            ...(parentEntry.topic !== undefined && { topic: parentEntry.topic }),
+            ...(parentEntry.envelope_spec !== undefined && { envelope_spec: parentEntry.envelope_spec }),
+          };
+          stats[subMeta.confidence]++;
+        }
+      }
+    }
   }
 
   // ── Guard: refuse to write an empty catalog when events were configured ──
@@ -683,7 +941,32 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     } catch {
       logger.stop();
     }
+  }
 
+  // ── Producer-mode Tier 2 fix suggestions (deterministic, no LLM) ──
+  // Append after any LLM diagnostic so emit fix's existing flow picks
+  // them up via last-fix.json. Empty for analytics-mode catalogs.
+  if (signal.producerFixSuggestions && signal.producerFixSuggestions.length > 0) {
+    const producerInstructions = signal.producerFixSuggestions
+      .map((s) => `- ${s.reason}\n  Suggested addition to emit.config.yml:\n${s.suggestedConfig.replace(/^/gm, "    ")}`)
+      .join("\n\n");
+    diagnosis.fixInstruction = diagnosis.fixInstruction
+      ? `${diagnosis.fixInstruction}\n\nAdditional producer-mode fixes:\n\n${producerInstructions}`
+      : `Producer-mode fixes detected:\n\n${producerInstructions}`;
+    if (!json && !diagnosisShown) {
+      logger.blank();
+      logger.line(chalk.bold("  ── Producer-mode fix suggestions ") + chalk.bold("─".repeat(28)));
+      logger.blank();
+      for (const s of signal.producerFixSuggestions) {
+        logger.warn(s.reason);
+      }
+      logger.blank();
+    }
+  }
+
+  // Re-open the diagnostic-driven save path if we now have a fix instruction
+  // from any source (analytics LLM + producer deterministic).
+  if (runDiag) {
     if (diagnosisShown) {
       const flagged = getFlaggedEvents(signal);
       const allEventNames = Object.keys(output.events);
@@ -826,6 +1109,34 @@ export async function runScan(opts: ScanOptions): Promise<number> {
     renderHealthSection(getCatalogHealth(output));
     logger.blank();
     logger.info(`Written to ${outputPath}`);
+  }
+
+  // Normal save flow: if a producer-mode fix instruction was generated (the
+  // diagnostic-driven save path didn't fire because no LLM-diagnostic
+  // anomalies surfaced), still write last-fix.json so emit fix can apply
+  // the producer-mode suggestions. Mirrors the diagnostic-driven write.
+  if (!opts.dryRun && diagnosis.fixInstruction && !diagnosisShown) {
+    const emitDir = path.resolve(process.cwd(), ".emit");
+    fs.mkdirSync(emitDir, { recursive: true });
+    const lastFixData = {
+      timestamp: new Date().toISOString(),
+      fixInstruction: diagnosis.fixInstruction,
+      skippedCount: 0,
+      findings: diagnosis.findings,
+      flaggedEvents: [],
+    };
+    fs.writeFileSync(path.join(emitDir, "last-fix.json"), JSON.stringify(lastFixData, null, 2));
+    const gitignorePath = path.join(emitDir, ".gitignore");
+    if (!fs.existsSync(gitignorePath) || !fs.readFileSync(gitignorePath, "utf8").includes("last-fix.json")) {
+      fs.appendFileSync(gitignorePath, "# Auto-generated by emit\nlast-fix.json\n");
+    }
+    if (!json) {
+      logger.blank();
+      logger.line(chalk.bold("  What's next"));
+      logger.line(chalk.gray("  " + "─".repeat(40)));
+      logger.line(`  ${chalk.cyan("emit fix")}        ${chalk.gray("Apply detected producer-mode fixes via Claude Code")}`);
+      logger.blank();
+    }
   }
 
   const hasLowOrNotFound = stats.low > 0 || finalNotFound.length > 0;

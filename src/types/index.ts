@@ -59,6 +59,16 @@ export interface ExtractedMetadata {
     }
   >;
   flags: string[];
+
+  // ─────────────────────────────────────────────
+  // Producer-mode fields (Phase 1)
+  // Populated by buildProducerExtractionPrompt; absent for analytics scans.
+  // ─────────────────────────────────────────────
+  topic?: string;
+  event_version?: number | string | null;
+  envelope_spec?: string | null;
+  partition_key_field?: string | null;
+  delivery?: "at-most-once" | "at-least-once" | "exactly-once" | "fire-and-forget" | null;
 }
 
 // ─────────────────────────────────────────────
@@ -100,6 +110,29 @@ export interface CatalogEvent {
   flags: string[];
   context_hash?: string;
   last_modified_by?: string;
+
+  // ─────────────────────────────────────────────
+  // Producer-mode fields (Phase 1)
+  // All optional and only populated when scan runs with mode: 'producer' or 'both'.
+  // For analytics-mode scans, these remain undefined (backwards compatible).
+  // ─────────────────────────────────────────────
+
+  /** Topic / channel / queue name the event is published to. May be `<unresolved>` when computed at runtime. */
+  topic?: string;
+  /** Explicit event version (e.g. 1, 2). Surfaced when event name carries `_V1`/`_V2` suffix or payload includes a version field. */
+  event_version?: number | string;
+  /** Delivery semantics declared or inferred from code. */
+  delivery?: "at-most-once" | "at-least-once" | "exactly-once" | "fire-and-forget";
+  /** Same-repo consumer locations discovered by scanner (Phase 1: scan-only, no extraction). Phase 2 adds expects/drift. */
+  consumers?: { service: string; file: string; line: number }[];
+  /** Envelope spec wrapping the event, e.g. "cloudevents/1.0", "asyncapi/3.0". */
+  envelope_spec?: string;
+  /** Path to schema file (`.avsc`, `.proto`, `.json`) that defines this event's payload, if found near the publish call site. */
+  schema_file_path?: string;
+  /** Property name used as the partition / routing key when publishing. */
+  partition_key_field?: string;
+  /** Service that publishes this event. Sourced from the `services` config block at init time, falling back to the repo name. */
+  producer_service?: string;
 }
 
 export interface CatalogStats {
@@ -230,7 +263,31 @@ export interface DestinationAdapter {
 // CONFIG TYPES
 // ─────────────────────────────────────────────
 
-export type SdkType = "segment" | "rudderstack" | "snowplow" | "custom";
+export type SdkType =
+  // Analytics SDKs
+  | "segment"
+  | "rudderstack"
+  | "snowplow"
+  // Pub/sub SDKs (Phase 1 producer-mode)
+  | "kafka"
+  | "sns"
+  | "sqs"
+  | "rabbitmq"
+  // Catch-all
+  | "custom";
+
+/**
+ * Operating mode for emit. Controls which patterns are detected and which
+ * extraction prompt is used.
+ *
+ * - `analytics` (default): tracks analytics events (Segment, PostHog, etc.)
+ * - `producer`: catalogs events published to message brokers (Kafka, SNS, RabbitMQ, etc.)
+ *
+ * Phase 1 is single-mode-per-scan. A monorepo with both event types runs two
+ * scans with two configs. Multi-mode aggregation across services lives in the
+ * paid hosted reconciler (Phase 3+), not the OSS layer.
+ */
+export type EmitMode = "analytics" | "producer";
 
 // ─────────────────────────────────────────────
 // LLM PROVIDER TYPES
@@ -549,9 +606,61 @@ export type DiscriminatorPropertyConfig = string | {
   values?: string[];
 };
 
+/**
+ * One service the user owns. In producer mode, scan paths derive from the
+ * services list and every event found under a service's path is tagged
+ * with `producer_service: <name>`.
+ */
+export interface ServiceConfig {
+  name: string;
+  path: string;
+}
+
 export interface EmitConfig {
+  /**
+   * Operating mode. Defaults to `analytics` for backwards compatibility.
+   * `producer` enables pub/sub patterns and the producer-mode extraction prompt.
+   */
+  mode?: EmitMode;
   manual_events?: string[];
   discriminator_properties?: Record<string, DiscriminatorPropertyConfig>;
+  /**
+   * Producer-mode services config. Each entry maps a service name to a path
+   * (relative to the repo root or absolute). Events found under a service's
+   * path get `producer_service: <name>` automatically. Optional — if not set,
+   * `repo.paths` is used directly and `producer_service` falls back to the
+   * directory name.
+   */
+  services?: ServiceConfig[];
+
+  /**
+   * Producer-mode topic aliases. Maps a placeholder key (derived from the
+   * source file basename + line number, e.g. `index_27`) to a stable
+   * catalog name (e.g. `invoices`). Used when discovery surfaces a publish
+   * call site whose topic resolves at runtime (process.env, Spring @Value,
+   * config service, string concatenation) — without an alias the entry
+   * would be keyed by the placeholder `<discovered:./path/file.ts:27>`,
+   * which is correct but not useful for queries.
+   *
+   * `emit fix` proposes entries here when it detects `topic_dynamic` flags
+   * in the catalog. Users edit the alias values to choose the canonical
+   * name they want in the catalog.
+   */
+  topic_aliases?: Record<string, string>;
+
+  /**
+   * Producer-mode RPC exchange filter. Entries listed here are treated as
+   * AMQP routing infrastructure (e.g. golevelup `@RabbitRPC` exchange names)
+   * rather than domain events meaningful to consumers. Catalog entries whose
+   * resolved name matches an entry in this list are excluded from the
+   * written catalog — keeping the catalog focused on events the data team
+   * cares about.
+   *
+   * `emit fix` proposes entries here when it detects 2+ events that look
+   * like exchange names alongside RPC patterns.
+   */
+  rpc_exchanges?: string[];
+
   /** Optional purpose tag per tracking wrapper. Used by `emit suggest` to
    *  disambiguate which wrapper to use when multiple wrappers coexist (often
    *  in the same files) — e.g. `posthog.capture(` for product analytics vs
@@ -576,7 +685,13 @@ export interface EmitConfig {
   wrapper_purposes?: Record<string, string>;
   repo: {
     paths: string[];
-    sdk: SdkType;
+    /**
+     * SDK family (or families). Single value for the common case; an array
+     * is supported for multi-broker services like a transformer that consumes
+     * from SQS and republishes to Google Pub/Sub. emit unions the patterns
+     * from each SDK at scan time.
+     */
+    sdk: SdkType | SdkType[];
     track_pattern?: string | string[];
     /**
      * Additional patterns for backend tracking (e.g. Java audit helpers,

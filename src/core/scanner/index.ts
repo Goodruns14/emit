@@ -1,14 +1,23 @@
 import * as fs from "fs";
+import { execa } from "execa";
 import type { BackendPatternConfig, CodeContext, CallSite, SdkType } from "../../types/index.js";
-import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall } from "./search.js";
-import { extractContext, resolveEnumStringValue } from "./context.js";
+import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, parseCallSites, buildExcludeArgs, SDK_PATTERNS } from "./search.js";
+import { producerPatterns } from "./backend-patterns.js";
+import { extractContext, resolveEnumStringValue, findEventClassDefinitions } from "./context.js";
+import { findSchemaFiles } from "./schema-files.js";
 
 /** Cap per reference-file body so the LLM prompt never explodes. */
 const CONTEXT_FILE_MAX_BYTES = 8 * 1024;
 
 export class RepoScanner {
   private paths: string[];
-  private sdk: SdkType;
+  /**
+   * SDK families this scanner is configured for. Stored as an array so
+   * multi-broker services (e.g. SQS-in / Google-Pub/Sub-out transformers)
+   * can union patterns from multiple SDKs in one scan. Single-SDK callers
+   * still pass a string — the constructor normalizes.
+   */
+  private sdks: SdkType[];
   private customPatterns: string[];
   private backendPatterns: string[];
   /** pattern → list of reference-file paths to attach when it matches. */
@@ -16,14 +25,24 @@ export class RepoScanner {
   /** Per-scan cache of loaded file contents (path → content, trimmed). */
   private contextFileCache: Map<string, string>;
 
+  /**
+   * Primary SDK — used by call sites that still expect a single value
+   * (legacy paths, log messages). For multi-SDK configs this is the first
+   * entry; the full set is used internally for pattern enumeration.
+   */
+  get sdk(): SdkType {
+    return this.sdks[0] ?? "custom";
+  }
+
   constructor(opts: {
     paths: string[];
-    sdk: SdkType;
+    sdk: SdkType | SdkType[];
     trackPattern?: string | string[];
     backendPatterns?: BackendPatternConfig[];
   }) {
     this.paths = opts.paths;
-    this.sdk = opts.sdk;
+    this.sdks = Array.isArray(opts.sdk) ? opts.sdk : [opts.sdk];
+    if (this.sdks.length === 0) this.sdks = ["custom"];
     if (!opts.trackPattern) {
       this.customPatterns = [];
     } else if (Array.isArray(opts.trackPattern)) {
@@ -124,7 +143,7 @@ export class RepoScanner {
     const directMatches = await searchDirect(
       eventName,
       this.paths,
-      this.sdk,
+      this.sdks,
       this.customPatterns,
       this.backendPatterns
     );
@@ -162,7 +181,7 @@ export class RepoScanner {
       const constantMatches = await searchConstant(
         variant,
         this.paths,
-        this.sdk,
+        this.sdks,
         this.customPatterns,
         this.backendPatterns
       );
@@ -238,6 +257,136 @@ export class RepoScanner {
       match_type: "not_found",
       all_call_sites: [],
     };
+  }
+
+  /**
+   * Producer-mode discovery: enumerate all publish call sites in scope by
+   * grepping for each producer-kind pattern from backend-patterns.ts (filtered
+   * by the configured SDK), then extracting a context window around each
+   * match.
+   *
+   * Returns one CodeContext per call site. The caller (scan command) then
+   * runs producer-mode extraction on each context — the LLM derives the topic
+   * name and payload schema from the surrounding code.
+   *
+   * Unlike findEvent, this method does NOT require an event name upfront —
+   * it's the entry point for the "discover what events this service publishes"
+   * UX. findEvent stays the manual-loop entry point.
+   *
+   * Custom track patterns (from config.repo.track_pattern) and user-declared
+   * backend_patterns are also scanned, treated as producer patterns. This
+   * lets a user with a custom EventBus wrapper class declare the wrapper
+   * name in track_pattern and have it discovered alongside Kafka/SNS/etc.
+   */
+  async findAllProducerCallSites(): Promise<CodeContext[]> {
+    // Pull producer-kind patterns for each configured SDK from
+    // backend-patterns.ts and union them. Multi-SDK configs (e.g. a service
+    // that both consumes from SQS and publishes to Google Pub/Sub) get all
+    // patterns from each SDK in one scan. Custom and user-declared patterns
+    // are also included — when a user declares
+    // track_pattern: "eventBus.fire(", that wrapper gets discovered.
+    const sdkPatterns = this.sdks.flatMap((s) =>
+      s === "custom" ? [] : producerPatterns(s),
+    );
+    const allPatterns = Array.from(
+      new Set([...sdkPatterns, ...this.customPatterns, ...this.backendPatterns]),
+    ).filter(Boolean);
+
+    if (allPatterns.length === 0) {
+      // Misconfigured: producer mode with sdk=custom and no patterns. Caller
+      // should surface a clearer error; we return empty to keep the scanner
+      // pure.
+      return [];
+    }
+
+    // Run one grep per pattern, in parallel across paths. Aggregate matches.
+    const matchTasks: Promise<{ file: string; line: number; rawLine: string; matchedPattern: string }[]>[] = [];
+    for (const pattern of allPatterns) {
+      for (const searchPath of this.paths) {
+        matchTasks.push(
+          execa(
+            "grep",
+            [
+              "-rn",
+              "--fixed-strings",
+              pattern,
+              searchPath,
+              ...buildExcludeArgs(),
+            ],
+            { reject: false },
+          )
+            .then(({ stdout }) => {
+              if (!stdout.trim()) return [];
+              return parseCallSites(stdout).map((m) => ({
+                ...m,
+                matchedPattern: pattern,
+              }));
+            })
+            .catch(() => []),
+        );
+      }
+    }
+
+    const allHits = (await Promise.all(matchTasks)).flat();
+    if (allHits.length === 0) return [];
+
+    // Dedupe by file:line — a line containing two patterns (e.g. a generic
+    // wrapper that calls into a specific SDK) shouldn't produce two contexts.
+    // First pattern wins for the matched_pattern label.
+    const byFileLine = new Map<string, { file: string; line: number; rawLine: string; matchedPattern: string }>();
+    for (const hit of allHits) {
+      const key = `${hit.file}:${hit.line}`;
+      if (!byFileLine.has(key)) byFileLine.set(key, hit);
+    }
+
+    // Build a CodeContext per unique call site. Each context becomes the
+    // input to one extraction LLM call.
+    const contexts: CodeContext[] = [];
+    for (const hit of byFileLine.values()) {
+      const contextSrc = extractContext(hit.file, hit.line, 50);
+
+      // Event-class follow-through (Day 4.5): when the publish call references
+      // typed event classes (CQRS, DDD-style), find their definitions and
+      // attach them so the LLM can extract proper payload schema. This is
+      // what unlocks high-confidence extraction on event-class fixtures
+      // like aleks-cqrs-eventsourcing.
+      const declaredExtras = this.loadContextFilesFor(hit.matchedPattern, hit.file, hit.line) ?? [];
+      const discoveredEventClasses = findEventClassDefinitions(contextSrc, this.paths);
+
+      // Schema-file ingestion (Day 3): locate .avsc / .proto / .json schema
+      // files near the call site (explicit paths in code, schemas/ directory,
+      // or .proto files declaring referenced message types) and attach them
+      // as authoritative payload schema. Tier 1 — no user config required
+      // for the standard layouts (schemas/, src/main/protobuf/, etc.).
+      const discoveredSchemas = findSchemaFiles(contextSrc, this.paths);
+
+      const extraContextFiles = [...declaredExtras, ...discoveredEventClasses, ...discoveredSchemas];
+
+      contexts.push({
+        file_path: hit.file,
+        line_number: hit.line,
+        context: contextSrc,
+        match_type: "direct",
+        track_pattern: hit.matchedPattern,
+        all_call_sites: [
+          {
+            file_path: hit.file,
+            line_number: hit.line,
+            context: extractContext(hit.file, hit.line, 15),
+          },
+        ],
+        extra_context_files: extraContextFiles.length > 0 ? extraContextFiles : undefined,
+      });
+    }
+
+    // Sort for stable output: file path then line number. Keeps the harness
+    // and downstream catalogs deterministic across runs.
+    contexts.sort((a, b) => {
+      if (a.file_path !== b.file_path) return a.file_path.localeCompare(b.file_path);
+      return a.line_number - b.line_number;
+    });
+
+    return contexts;
   }
 
   async findDiscriminatorValue(value: string): Promise<CodeContext> {

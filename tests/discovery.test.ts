@@ -14,6 +14,7 @@ describe("DISCOVERY_REGEXES — bare function patterns", () => {
     expect(matches(re, "captureEntityCRUDEvent(")).toBe(true);
     expect(matches(re, "captureQueryEvent(")).toBe(true);
     expect(matches(re, "captureApiEvent(")).toBe(true);
+    expect(matches(re, "captureMaterialCalcAccessEvent(")).toBe(true);
     // Without Event suffix should NOT match (reduces noise from captureException etc.)
     expect(matches(re, "captureMaterialCalcAccess(")).toBe(false);
     expect(matches(re, "captureException(")).toBe(false);
@@ -21,8 +22,10 @@ describe("DISCOVERY_REGEXES — bare function patterns", () => {
 
   it("track[A-Z]\\w*Event\\( requires Event suffix", () => {
     const re = DISCOVERY_REGEXES.find((r) => r.startsWith("track[A-Z]"))!;
-    expect(matches(re, "trackAnalyticsEvent(")).toBe(true);
     expect(matches(re, "trackPageViewEvent(")).toBe(true);
+    expect(matches(re, "trackUserActionEvent(")).toBe(true);
+    expect(matches(re, "trackAnalyticsCustomEvent(")).toBe(true);
+    expect(matches(re, "trackAnalyticsEvent(")).toBe(true);
     // Without Event suffix should NOT match
     expect(matches(re, "trackPageView(")).toBe(false);
     expect(matches(re, "trackUserAction(")).toBe(false);
@@ -38,9 +41,13 @@ describe("DISCOVERY_REGEXES — bare function patterns", () => {
   });
 
   it("audit[A-Z]\\w*Event\\( requires Event suffix", () => {
+    // The audit[A-Z]\w*Event\( regex requires Event suffix; the loose
+    // auditLog\( exists separately for the bare auditLog( case.
     const re = DISCOVERY_REGEXES.find((r) => r.startsWith("audit[A-Z]"))!;
     expect(matches(re, "auditLogEvent(")).toBe(true);
+    expect(matches(re, "auditCreateEvent(")).toBe(true);
     expect(matches(re, "auditUserEvent(")).toBe(true);
+    expect(matches(re, "auditUserAccessEvent(")).toBe(true);
     // Without Event suffix should NOT match (auditLog itself has its own pattern)
     expect(matches(re, "auditCreate(")).toBe(false);
     expect(matches(re, "auditUserAccess(")).toBe(false);
@@ -65,6 +72,13 @@ describe("DISCOVERY_REGEXES — bare function patterns", () => {
     expect(matches(re, "sendEmail(")).toBe(false);
     expect(matches(re, "sendRequest(")).toBe(false);
   });
+
+  // Note: there is no fire[A-Z]\w*Event\( regex in DISCOVERY_REGEXES — fire
+  // patterns are intentionally excluded because they're ambiguous (DOM fireEvent,
+  // lifecycle hooks, etc.). BACKEND_NOISE in src/core/scanner/discovery.ts also
+  // explicitly filters fire-prefixed lifecycle calls. If a fire-Event-suffixed
+  // pattern is needed in the future, add it to DISCOVERY_REGEXES and re-enable
+  // a test here.
 });
 
 describe("DISCOVERY_REGEXES — dot-notation patterns", () => {

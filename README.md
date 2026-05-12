@@ -402,6 +402,42 @@ button_click.signup_cta:
 
 Partial scans respect the relationship: `--event button_click` re-scans the parent and all its sub-events, while `--event button_click.signup_cta` re-scans just that one.
 
+#### Producer mode (pub/sub)
+
+For event-driven codebases, set `mode: producer` and emit will catalog *publish call sites* directly from source, without needing a `manual_events` list. The scanner discovers each publish, the LLM extracts semantics, and topic names become the catalog keys.
+
+**Supported SDKs in this release:** Kafka, RabbitMQ, SNS, SQS. More brokers will be added based on real-world demand — [file an issue](https://github.com/Goodruns14/emit/issues) if you need one prioritized.
+
+```yaml
+mode: producer
+repo:
+  paths: [./]
+  sdk: kafka              # or rabbitmq, sns, sqs
+  # sdk: [kafka, rabbitmq] # multi-SDK services
+llm:
+  provider: claude-code
+  model: claude-sonnet-4-6
+```
+
+**Runtime-resolved topics.** When the topic name comes from `process.env`, a config service, or string concatenation, emit can't determine it statically. The catalog uses a `<discovered:file:line>` placeholder and surfaces a fix suggestion. Resolve with `topic_aliases`:
+
+```yaml
+topic_aliases:
+  index_24: order_placed        # "publish at file:24" → catalog name
+```
+
+Or just run `emit fix` and Claude Code will pick a sensible name for you. The fix loop has a pre-flight safety check that reverts if the proposal would lose any already-cataloged event.
+
+**Filtering noise.** AMQP reply queues and infrastructure exchanges can be filtered with `rpc_exchanges`:
+
+```yaml
+rpc_exchanges:
+  - reply.*
+  - amq.*
+```
+
+`mode: producer` is opt-in. Existing analytics-mode setups are unaffected — leave `mode` unset and emit behaves exactly as before.
+
 ### Push destinations
 
 Two built-ins are tested against real APIs: **Mixpanel** and **Snowflake** (per-event or multi-event table layouts). Everything else uses `type: custom` — you write a small adapter file (~100 lines) that implements the `DestinationAdapter` interface. See [`docs/DESTINATIONS.md`](docs/DESTINATIONS.md) for the authoring guide + Mixpanel reference implementation.

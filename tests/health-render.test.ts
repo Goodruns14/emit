@@ -45,10 +45,9 @@ const baseHealth: CatalogHealth = {
 // ─────────────────────────────────────────────
 
 describe("renderHealthSection — legend & framing visibility", () => {
-  it("hides legend and framing when all events are high (clean catalog)", () => {
+  it("shows the legend even when all events are high (always-on legend)", () => {
     renderHealthSection(baseHealth);
-    expect(output()).not.toContain("✓ High = verified");
-    expect(output()).not.toContain("Focus iteration on Low");
+    expect(output()).toContain("✓ High = verified");
   });
 
   it("shows legend and framing when at least one medium event exists", () => {

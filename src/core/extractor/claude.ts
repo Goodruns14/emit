@@ -1,5 +1,6 @@
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
+import * as os from "os";
 import Anthropic from "@anthropic-ai/sdk";
 import type { LlmCallConfig } from "../../types/index.js";
 
@@ -49,6 +50,15 @@ async function callClaudeCode(prompt: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     // Pipe prompt via stdin instead of as a CLI argument to avoid
     // arg-length limits and the "no stdin data" warning.
+    //
+    // Spawn from os.tmpdir() instead of inheriting emit's cwd. The Claude
+    // Code CLI is project-aware: from a directory that looks like a project,
+    // it answers as a coding agent ("there are untracked files in your
+    // repo...") instead of responding to the prompt. From /tmp it has no
+    // project context and behaves as a pure LLM endpoint, returning clean
+    // JSON. This was the root cause of the "claude-code JSON parse
+    // reliability issues" noted in CLAUDE.md.
+    //
     // Timeout is 120s by default; long-running calls (complex prompts, large
     // outputs) can exceed this. Opt-in override via EMIT_CLAUDE_CODE_TIMEOUT_MS
     // for dev/debug use without changing the default for existing commands.
@@ -57,6 +67,7 @@ async function callClaudeCode(prompt: string): Promise<string> {
     const child = spawn(bin, ["-p", "-"], {
       stdio: ["pipe", "pipe", "pipe"],
       timeout: timeoutMs,
+      cwd: os.tmpdir(),
     });
 
     child.stdin!.end(prompt);
@@ -201,16 +212,39 @@ export async function callLLM(
 }
 
 export function parseJsonResponse<T>(text: string, fallback: T): T {
+  // Try strict parse first — happy path.
   try {
     return JSON.parse(text) as T;
   } catch {
-    const stripped = text.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
+    // ignore
+  }
+
+  // Strip markdown fences and retry. Handles `\`\`\`json\n{...}\n\`\`\``.
+  const stripped = text.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
+  try {
+    return JSON.parse(stripped) as T;
+  } catch {
+    // ignore
+  }
+
+  // Last-resort extraction: find the first { and the matching last }, parse
+  // the substring. This rescues cases where the LLM (or wrapping CLI like
+  // claude-code) appends trailing chatter — e.g. "Shell cwd was reset..." —
+  // after a perfectly valid JSON block. Without this, the trailing line
+  // breaks both fence-stripping and strict parsing, sending the whole
+  // extraction to the fallback path.
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = text.slice(firstBrace, lastBrace + 1);
     try {
-      return JSON.parse(stripped) as T;
+      return JSON.parse(candidate) as T;
     } catch {
-      return fallback;
+      // ignore
     }
   }
+
+  return fallback;
 }
 
 export class JsonParseError extends Error {

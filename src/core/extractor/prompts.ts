@@ -123,6 +123,106 @@ Rules:
 `.trim();
 }
 
+/**
+ * Producer-mode extraction prompt for pub/sub events.
+ *
+ * Parallel to buildExtractionPrompt() but tuned for the different mental
+ * model of pub/sub: events flow through topics/queues/exchanges with
+ * structured envelopes, payloads, and routing metadata. The shape of the
+ * code is also different — publish calls take a topic argument plus a
+ * payload object/struct, sometimes wrapped in an envelope (CloudEvents),
+ * sometimes constructed via an event-class factory.
+ *
+ * Returned JSON includes producer-mode fields (topic, event_version,
+ * envelope_spec, partition_key_field, delivery) that map directly onto
+ * the optional fields added to CatalogEvent in src/types/index.ts.
+ */
+export function buildProducerExtractionPrompt(
+  eventName: string,
+  codeContext: CodeContext,
+  literalValues: LiteralValues,
+): string {
+  const additionalSites = codeContext.all_call_sites.slice(1);
+  const additionalContext =
+    additionalSites.length > 0
+      ? additionalSites
+          .map(
+            (cs, i) =>
+              `Call site ${i + 2} (${cs.file_path}:${cs.line_number}):\n\`\`\`\n${cs.context}\n\`\`\``
+          )
+          .join("\n\n")
+      : "";
+
+  const literalSection =
+    Object.keys(literalValues).length > 0
+      ? `\nKnown literal property values extracted statically from call site code (these are certain — use them when writing property descriptions):\n${Object.entries(
+          literalValues
+        )
+          .map(([prop, values]) => `  ${prop}: ${values.map((v) => `"${v}"`).join(", ")}`)
+          .join("\n")}\n`
+      : "";
+
+  const extraContextSection =
+    codeContext.extra_context_files && codeContext.extra_context_files.length > 0
+      ? `\nReference helper sources — schema files (.avsc Avro / .proto Protobuf / JSON Schema) and event class definitions located near the publish call. These are AUTHORITATIVE for payload structure: when a schema file is present, prefer its field names and types over what's inferable from the call site code. Use it to populate the properties{} block precisely.\n\n${codeContext.extra_context_files
+          .map((f) => `Reference file (${f.path}):\n\`\`\`\n${f.content}\n\`\`\``)
+          .join("\n\n")}\n`
+      : "";
+
+  return `
+You are analyzing pub/sub instrumentation code to extract semantic metadata
+about a domain event published to a message broker (Kafka, SNS, RabbitMQ,
+Dapr, Google Pub/Sub, Redis Streams, NATS, etc.).
+
+Your job is to understand what this event MEANS in business terms and where
+it travels — both the semantic shape (description, payload fields) and the
+routing shape (topic, version, envelope, partition key).
+
+Event identifier: ${eventName}
+Call sites found: ${codeContext.all_call_sites.length}
+${literalSection}
+Primary call site (${codeContext.file_path}:${codeContext.line_number}):
+\`\`\`
+${codeContext.context}
+\`\`\`
+${additionalContext ? `\nAdditional call sites:\n${additionalContext}` : ""}
+${extraContextSection}
+${CONFIDENCE_DEFINITIONS}
+
+Return ONLY a valid JSON object with this exact structure. No preamble, no markdown, no explanation:
+{
+  "event_description": "One sentence. What this event means in business terms (e.g. 'A customer completed a purchase').",
+  "fires_when": "One sentence. The exact business condition that triggers publishing this event.",
+  "topic": "The topic / channel / queue / exchange the event is published to. If statically resolvable from a string literal or a constant, use the resolved value. If the topic is computed at runtime (e.g. from process.env, a config service, or string concatenation), set this to '<unresolved>' and add a 'topic_dynamic' flag.",
+  "event_version": "Explicit version if visible in the code (e.g. 1, 2, 'V1', 'v2'). Set to null if no version is declared.",
+  "envelope_spec": "If the event payload is wrapped in a known envelope spec, name it (e.g. 'cloudevents/1.0', 'asyncapi/3.0'). If the publish uses io.cloudevents.CloudEvent, ce.getType(), ce.getSource(), ce.getExtension('aggregateid'), etc., this is CloudEvents — return 'cloudevents/1.0'. Otherwise null.",
+  "partition_key_field": "Name of the property used as a partition / routing key, if visible (e.g. for kafkaTemplate.send(topic, key, value), the source of 'key'). Otherwise null.",
+  "delivery": "One of: 'at-most-once', 'at-least-once', 'exactly-once', 'fire-and-forget'. Only set if explicitly visible in code (acks config, transactional producer, etc.). Otherwise null.",
+  "confidence": "high | medium | low",
+  "confidence_reason": "Why you rated confidence this way.",
+  "properties": {
+    "[property_name]": {
+      "description": "One sentence definition.",
+      "edge_cases": ["Edge case visible in code"],
+      "confidence": "high | medium | low"
+    }
+  },
+  "flags": ["Anything unusual or worth human review. Use 'topic_dynamic' if topic is unresolved at scan time."]
+}
+
+Rules:
+- CRITICAL: Only extract properties that belong to THIS event's payload. Distinguish carefully between:
+    1. ENVELOPE metadata — fields like cloudEvent.getType(), getSource(), getTime(), getSpecVersion(), getExtension(...), or fields named 'specversion', 'type', 'source', 'time', 'datacontenttype' under a CloudEvents wrapper. These describe the message wrapper, NOT the business event payload. Do NOT include them in properties{} — they're captured by envelope_spec.
+    2. PAYLOAD — the actual business data, typically inside ce.getData(), the second argument to publish(), or a typed event-class instance's fields. THIS is what goes in properties{}.
+- If you see Java's CloudEventBuilder.create() / ce.withType() / ce.getExtension(...), the event uses CloudEvents envelope. Return envelope_spec='cloudevents/1.0' and ONLY include payload fields in properties.
+- If the publish call references an event class (e.g. 'new InvoiceFinalized({...})' or 'OrderCreatedEvent'), the class definition (if shown in additional context) defines the payload schema. Use those fields as the properties.
+- For partition_key_field: only set if you can identify which property is used as the partition/routing key (e.g. for kafkaTemplate.send(topic, partitionKey, payload), the value passed as partitionKey usually maps to a payload property like 'orderId' or 'aggregateId').
+- Dynamic topics: if the topic argument is process.env.X, this.config.get(...), or a computed string like \`\${prefix}\${tenant}\`, set topic='<unresolved>' and add 'topic_dynamic' flag. Do NOT guess what the topic name might be at runtime.
+- If you cannot determine something confidently, say so explicitly. Never guess. Low confidence is better than wrong confidence.
+- Edge cases must be visible in the code — do not invent them.
+`.trim();
+}
+
 export function buildResolveMissingPrompt(
   eventName: string,
   candidateMatches: { file: string; line: number; rawLine: string; context: string }[]

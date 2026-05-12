@@ -219,15 +219,10 @@ export class RepoScanner {
     // least one match to sit near a real tracking call; otherwise treat as
     // not_found rather than saddling the catalog with a phantom event.
     const broadMatchesRaw = await searchBroad(eventName, this.paths);
-    // Multi-SDK aware — collect patterns from each configured SDK and union.
-    const sdkPatterns = this.sdks.flatMap((s) =>
-      s === "custom" ? this.customPatterns : (SDK_PATTERNS[s] ?? [])
-    );
-    const allTrackingPatterns = Array.from(new Set([
-      ...sdkPatterns,
-      ...this.customPatterns,
-      ...this.backendPatterns,
-    ]));
+    // Patterns come from explicit config only — no SDK default inheritance.
+    // When the user hasn't configured patterns, broad search returns hits
+    // unfiltered so events from unfamiliar tracking shapes still surface.
+    const allTrackingPatterns = [...this.customPatterns, ...this.backendPatterns];
     const broadMatches = allTrackingPatterns.length > 0
       ? broadMatchesRaw.filter((m) => hasNearbyTrackingCall(m.file, m.line, allTrackingPatterns))
       : broadMatchesRaw;

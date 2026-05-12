@@ -261,7 +261,7 @@ function buildConfig(
       yml += `    - "${p}"\n`;
     }
   }
-  yml += `\noutput:\n  file: .emit/catalog.yml\n  confidence_threshold: low\n`;
+  yml += `\noutput:\n  file: emit.catalog.yml\n  confidence_threshold: low\n`;
   yml += `\nllm:\n  provider: ${llmProvider}\n  model: claude-sonnet-4-6\n  max_tokens: 1000\n`;
 
   if (discriminators && discriminators.length > 0) {
@@ -293,7 +293,7 @@ function writeBlankConfig(configPath: string): void {
     '  track_pattern: "analytics.track("',
     "",
     "output:",
-    "  file: .emit/catalog.yml",
+    "  file: emit.catalog.yml",
     "  confidence_threshold: low",
     "",
     "llm:",
@@ -608,9 +608,8 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
   logger.blank();
 
   const eventChoice = await arrowSelect([
-    { label: "Type them in now", value: "inline" as const },
     { label: "Load from a file  (CSV, plain text, or JSON)", value: "file" as const },
-    { label: "Skip — I'll do it later", value: "skip" as const },
+    { label: "Type them in now", value: "inline" as const },
   ]);
 
   let collectedEvents: string[] = [];
@@ -850,7 +849,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
   logger.line("  " + chalk.bold("Discriminator properties") + chalk.gray(" (optional)"));
   logger.blank();
   logger.line(chalk.gray("  Some events act as containers for many distinct actions."));
-  logger.line(chalk.gray("  For example, a ") + chalk.cyan("button_click") + chalk.gray(" event where the property ") + chalk.cyan("button_id"));
+  logger.line(chalk.gray("  For example, a ") + chalk.cyan("button_click") + chalk.gray(" event where the property ") + chalk.cyan("button_type"));
   logger.line(chalk.gray("  tells you ") + chalk.italic("which") + chalk.gray(" button was clicked (signup_cta, add_to_cart, etc.)."));
   logger.line(chalk.gray("  Emit can expand each value into its own catalog entry."));
   logger.blank();
@@ -871,7 +870,7 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
       const dp = createPrompter();
       logger.blank();
       logger.line(chalk.gray("  CSV format: 3 columns — event name, property, values"));
-      logger.line(chalk.gray("  Example row: ") + chalk.cyan('button_click,button_id,"signup_cta,add_to_cart,checkout"'));
+      logger.line(chalk.gray("  Example row: ") + chalk.cyan('button_click,button_type,"signup_cta,add_to_cart,checkout"'));
       logger.blank();
       const filePath = await dp.ask("  File path: ");
 
@@ -1051,15 +1050,21 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
 
   const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../cli.js");
 
+  // Track whether we invoked scan — scan prints its own "What's next" footer
+  // (with conditional `emit fix` hint when noise is detected), so init should
+  // skip its own footer to avoid rendering two adjacent identical blocks.
+  let scanInvoked = false;
+
   if (hasDataSource) {
     // Events are ready — run scan automatically, no prompt needed
     logger.line("  You're all set. Running your first scan now...");
     logger.blank();
     try {
-      await execa("node", [cliPath, "scan", "--confirm"], { stdio: "inherit", cwd: repoDir });
+      await execa("node", [cliPath, "scan", "--yes"], { stdio: "inherit", cwd: repoDir });
     } catch {
       // scan handles its own error output
     }
+    scanInvoked = true;
   } else {
     // No events yet — let the user choose
     logger.line("  Run a scan once you've added events?");
@@ -1074,23 +1079,27 @@ export async function runInit(dir?: string, opts: InitOptions = {}): Promise<num
 
     if (scanChoice === "yes") {
       try {
-        await execa("node", [cliPath, "scan", "--confirm"], { stdio: "inherit", cwd: repoDir });
+        await execa("node", [cliPath, "scan", "--yes"], { stdio: "inherit", cwd: repoDir });
       } catch {
         // scan handles its own error output
       }
+      scanInvoked = true;
     } else {
       logger.line(chalk.gray("  Add events with ") + chalk.cyan("emit import <file>") + chalk.gray(", then run ") + chalk.cyan("emit scan") + chalk.gray("."));
       logger.blank();
     }
   }
 
-  logger.blank();
-  logger.line(chalk.bold("  What's next"));
-  logger.line(chalk.gray("  " + "─".repeat(40)));
-  logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
-  logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
-  logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to Segment, Amplitude, etc.")}`);
-  logger.blank();
+  if (!scanInvoked) {
+    logger.blank();
+    logger.line(chalk.bold("  What's next"));
+    logger.line(chalk.gray("  " + "─".repeat(40)));
+    logger.line(`  ${chalk.cyan("emit status")}     ${chalk.gray("Catalog health report")}`);
+    logger.line(`  ${chalk.cyan("emit scan")}       ${chalk.gray("Re-scan after code changes")}`);
+    logger.line(`  ${chalk.cyan("emit import")}     ${chalk.gray("Add more events from a CSV/JSON file")}`);
+    logger.line(`  ${chalk.cyan("emit push")}       ${chalk.gray("Push catalog to your warehouse, Amplitude, Segment, etc.")}`);
+    logger.blank();
+  }
 
   return 0;
 }

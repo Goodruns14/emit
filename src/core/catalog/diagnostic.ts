@@ -87,6 +87,12 @@ export interface DiagnosticSignal {
    * flags (topic_dynamic, multi-low-confidence, etc.).
    */
   producerFixSuggestions: ProducerFixSuggestion[];
+
+  /** Top-level events that couldn't be located in the codebase. Excludes
+   *  sub-events already counted by discriminatorGaps. Surfaced to the
+   *  diagnosis so the LLM can suggest pattern/path fixes — not just
+   *  exclude_paths additions — when discovery is the actual problem. */
+  notFoundEvents: string[];
 }
 
 // ─────────────────────────────────────────────
@@ -337,6 +343,16 @@ export function collectDiagnosticSignal(catalog: EmitCatalog): DiagnosticSignal 
   // ── Producer-mode Tier 2 fix suggestions (deterministic) ─────────
   const producerFixSuggestions = detectProducerFixSuggestions(catalog);
 
+  // ── 6. Top-level not-found events ──────────────────────────────────
+  // Exclude sub-events that already appear in a discriminatorGap — those
+  // have a parent and a different fix shape (discriminator config, not
+  // patterns/paths).
+  const subEventsInGaps = new Set<string>();
+  for (const gap of discriminatorGaps) {
+    for (const sub of gap.affectedSubEvents) subEventsInGaps.add(sub);
+  }
+  const notFoundEvents = notFoundList.filter((n) => !subEventsInGaps.has(n));
+
   return {
     eventCount: eventEntries.length,
     propertyCount,
@@ -348,6 +364,7 @@ export function collectDiagnosticSignal(catalog: EmitCatalog): DiagnosticSignal 
     repeatedConfidenceReasons: reasonClusters,
     discriminatorGaps,
     producerFixSuggestions,
+    notFoundEvents,
   };
 }
 
@@ -558,6 +575,11 @@ export function shouldRunDiagnostic(signal: DiagnosticSignal): boolean {
 
   // Discriminator gap: 2+ affected sub-events from the same parent
   if (signal.discriminatorGaps.some((g) => g.affectedSubEvents.length >= 2)) return true;
+
+  // Top-level not-found: 2+ events that couldn't be located. Below 2 we
+  // assume noise/legacy; at 2+ it's worth asking the LLM whether the config
+  // (paths, patterns, blocking excludes) is the cause.
+  if (signal.notFoundEvents.length >= 2) return true;
 
   return false;
 }

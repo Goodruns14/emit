@@ -58,9 +58,15 @@ async function callClaudeCode(prompt: string): Promise<string> {
     // project context and behaves as a pure LLM endpoint, returning clean
     // JSON. This was the root cause of the "claude-code JSON parse
     // reliability issues" noted in CLAUDE.md.
+    //
+    // Timeout is 120s by default; long-running calls (complex prompts, large
+    // outputs) can exceed this. Opt-in override via EMIT_CLAUDE_CODE_TIMEOUT_MS
+    // for dev/debug use without changing the default for existing commands.
+    const timeoutMs =
+      Number(process.env.EMIT_CLAUDE_CODE_TIMEOUT_MS) || 120_000;
     const child = spawn(bin, ["-p", "-"], {
       stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120_000,
+      timeout: timeoutMs,
       cwd: os.tmpdir(),
     });
 
@@ -240,3 +246,30 @@ export function parseJsonResponse<T>(text: string, fallback: T): T {
 
   return fallback;
 }
+
+export class JsonParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JsonParseError";
+  }
+}
+
+// Returns parsed JSON, or null if both raw and fence-stripped parses fail.
+export function tryParseJson<T>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const stripped = text.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
+    try {
+      return JSON.parse(stripped) as T;
+    } catch {
+      return null;
+    }
+  }
+}
+
+// Appended to the original prompt on retry when the first response was
+// unparseable — callers do the actual retry inline so callLLM stays the only
+// LLM-invocation seam (keeps test mocking simple).
+export const JSON_RETRY_NUDGE =
+  "\n\nIMPORTANT: Respond with ONLY valid JSON. No prose before or after, no markdown fences, no explanations.";

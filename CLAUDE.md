@@ -15,7 +15,7 @@ Emit is an open-source CLI tool that automatically generates event metadata cata
 - **Phase 4 (MCP Server):** Complete — local MCP server with 8 tools, `emit mcp` command
 - **Phase 5 (Implementation Agent):** Not started
 
-See `md files/emit-master-plan.md` for the full roadmap, business model, competitive landscape, and architectural vision.
+See `md files/emit-master-plan.md` for the full roadmap and architectural vision.
 
 ## Architecture
 
@@ -55,49 +55,105 @@ node dist/cli.js mcp       # Start local MCP server (stdio)
 node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
 ```
 
-### Non-interactive / agentic use
+### Flags reference
 
-Every command below can run headless (no TTY). Use these when an agent drives emit:
+Every command runs headless (no TTY) — pass `--yes` and supply all decisions as flags. Below is the complete flag surface for every command.
 
-```bash
-# init — two non-interactive shapes
-emit init --yes --llm-provider anthropic --events signup,purchase     # inline
-emit init --yes --llm-provider anthropic --skip-events                  # no events seeded
-emit init --yes --config-file ./emit.config.yml --force                 # validate + copy YAML
-# Flag rules: --yes is required; --config-file conflicts with --llm-provider/--events/--skip-events.
-# Valid --llm-provider: claude-code | anthropic | openai | openai-compatible
+#### `emit init`
 
-# scan — auto-answer any diagnostic prompts
-emit scan --yes --dry-run
-emit scan --yes --events foo,bar --fresh
+| Flag | Description |
+|------|-------------|
+| `-y, --yes` | Non-interactive mode — requires `--config-file`, `--llm-provider`, `--events`, or `--skip-events` |
+| `--config-file <path>` | Validate and copy a pre-written `emit.config.yml`. Conflicts with `--llm-provider`, `--events`, `--skip-events` |
+| `--llm-provider <name>` | LLM provider: `claude-code` \| `anthropic` \| `openai` \| `openai-compatible` |
+| `--events <csv>` | Comma-separated event names to seed `manual_events` |
+| `--skip-events` | Create the config with no events seeded |
+| `--force` | Overwrite an existing `emit.config.yml` without confirming |
 
-# import — fully flag-driven
-emit import events.csv --column event_name --replace
+#### `emit scan`
 
-# push — fully flag-driven
-emit push --destination mixpanel --dry-run
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview output without writing the catalog file |
+| `--confirm` | Prompt whether to save after showing results |
+| `--fresh` | Force full re-extraction, ignoring cached results |
+| `--yes` | Non-interactive: auto-save without prompting (useful for CI) |
+| `--event <name>` | Scan a single specific event |
+| `--events <names>` | Scan multiple events (comma-separated) |
+| `--top-n <number>` | Override config `top_n` — number of events to scan |
+| `--resolve-missing [events]` | Use the LLM to locate renamed or missing events. Pass comma-separated names to target specific ones, or omit to target all not-found events |
+| `--provider <name>` | Override LLM provider for this run: `claude-code` \| `anthropic` \| `openai` \| `openai-compatible` |
+| `--model <name>` | Override LLM model for this run (e.g. `claude-opus-4-6`, `gpt-4o`) |
+| `--format <format>` | Output format: `text` (default) or `json` |
 
-# status — no prompts
-emit status --format json
+#### `emit fix`
 
-# revert — --yes skips confirm, --commit is REQUIRED in non-interactive mode
-emit revert --event signup_completed --commit <sha> --yes
-# Optional AI-safety guard: refuse unless historical description matches
-emit revert --event signup_completed --commit <sha> --yes \
-  --expect-description "user finished signup"
+| Flag | Description |
+|------|-------------|
+| `--yes` | Run headlessly (no interactive session); auto-run rescan after the fix |
+| `--force` | Skip the pre-flight check that rejects fixes which would hide already-cataloged events |
 
-# mcp — always non-interactive
-emit mcp --catalog ./emit.catalog.yml
+#### `emit import <file>`
 
-# destination — add requires --yes + explicit --auth (no silent default)
-emit destination add Statsig --yes --auth custom-header --header-name X-API-Key
-emit destination list --format json
-emit destination test Mixpanel
-emit destination remove Statsig
+| Flag | Description |
+|------|-------------|
+| `--column <name>` | Column header containing event names (for multi-column CSVs) |
+| `--dry-run` | Show what would be imported without writing |
+| `--replace` | Replace existing `manual_events` instead of merging |
 
-# fix — --yes skips rescan confirm
-emit fix --yes
-```
+#### `emit push`
+
+| Flag | Description |
+|------|-------------|
+| `--destination <name>` | Push to a single destination only (match by `type` or custom `name` field) |
+| `--dry-run` | Preview what would be pushed without making API calls |
+| `--event <name>` | Push a single specific event only |
+| `--verbose` | Dump every HTTP request/response (for debugging custom adapters) |
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+#### `emit status`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | Show full flag details for a specific event |
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+#### `emit revert`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | **(required)** Event name to restore |
+| `--commit <sha>` | Commit SHA to restore from (prompted if omitted) |
+| `-y, --yes` | Skip the confirmation prompt; `--commit` is required in non-interactive mode |
+| `--expect-description <substr>` | Safety guard: refuse the revert unless the historical description contains this substring (case-insensitive) |
+
+#### `emit mcp`
+
+| Flag | Description |
+|------|-------------|
+| `--catalog <path>` | Explicit path to `emit.catalog.yml`; overrides the path resolved from `emit.config.yml` |
+
+#### `emit destination add [name]`
+
+| Flag | Description |
+|------|-------------|
+| `--auth <style>` | Auth style: `custom-header` \| `bearer` \| `basic` \| `none` |
+| `--env-var <name>` | Env var holding the credential |
+| `--header-name <name>` | HTTP header name (required when `--auth=custom-header`) |
+| `--docs-url <url>` | API docs URL — rendered as a TODO comment in the scaffolded adapter |
+| `-y, --yes` | Non-interactive: error instead of prompting for missing info |
+
+#### `emit destination list`
+
+| Flag | Description |
+|------|-------------|
+| `--format <format>` | Output format: `text` (default) or `json` |
+
+#### `emit destination test <name>`
+
+| Flag | Description |
+|------|-------------|
+| `--event <name>` | Override the catalog event used for the test (defaults to the first event in the catalog) |
 
 ## Key Files
 
@@ -173,7 +229,6 @@ Added to stress-test emit across diverse real-world codebases:
 - Scanner achieves **100% discovery** for repos with standard `trackFn("event_name")` patterns
 - **Enum/constant resolution** improved: now tries PascalCase, camelCase, UPPER_SNAKE_CASE variants + broad search fallback
 - Repos with **object-param tracking** (twenty), **server-side only** (mattermost, directus), or **aggregate telemetry** (prisma) are intentionally hard edge cases
-- The `claude-code` LLM provider has JSON parse reliability issues — `anthropic` provider recommended for production
 
 Each has its own `emit.config.yml`. Run tests against them with:
 ```bash
@@ -353,7 +408,7 @@ order_placed:
 - **Partial scan merges** — `--event`/`--events` flags merge results into existing catalog (don't overwrite)
 - **Confidence signals uncertainty** — Low confidence is better than wrong confidence. The reconciler downgrades when signals conflict.
 - **Provider validation at config load** — Invalid LLM providers fail fast with clear error messages, not at extraction time
-- **MCP write path goes to file** — `update_event_description` and `update_property_description` write directly to `emit.catalog.yml`. No warehouse write path exists in the local MCP (remote MCP with Snowflake write-through is Phase 4 paid tier, not yet built)
+- **MCP write path goes to file** — `update_event_description` and `update_property_description` write directly to `emit.catalog.yml`. No warehouse write path exists in the local MCP.
 - **MCP uses `loadConfigLight()`** — The MCP server skips warehouse and LLM credential validation at startup. It only needs to resolve the catalog file path. Pass `--catalog <path>` to bypass config lookup entirely.
 - **`track_pattern` is optional when events are provided** — When `emit init` collects events (inline or from file), it skips pattern detection entirely. The scanner's broad search path finds event call sites without needing `track_pattern`. Pattern detection only runs in the no-events init path.
 
@@ -372,7 +427,7 @@ These files are gitignored but contain important context:
 
 | File | Contents |
 |------|----------|
-| `md files/emit-master-plan.md` | Full roadmap, business model, phases, competitive landscape |
+| `md files/emit-master-plan.md` | Full roadmap, phases, architectural vision |
 | `md files/emit-user-tests.md` | 21 detailed real-user simulation test scripts |
 | `md files/emit-test-results.md` | Test execution results and findings |
 | `md files/emit-phase1-plan.md` | Original Phase 1 implementation plan |

@@ -81,17 +81,18 @@ export function setExcludePaths(paths: string[]): void {
     // a path component. e.g. `**/*.test.ts` is conceptually a basename glob,
     // not a path-based pattern.
     const cleaned = entry.replace(/^\*\*\//, "");
-    if (cleaned.includes("/")) {
+    const isBasenameGlob = cleaned.includes("*") && !cleaned.includes("/");
+    if (isBasenameGlob) {
+      // Filename glob — grep --exclude matches basename only.
+      // e.g. "**/*.module.css" → "*.module.css", "*.min.js" → "*.min.js"
+      extraExcludeFiles.push(cleaned);
+    } else if (cleaned.includes("/")) {
       // Path-based pattern — grep --exclude/--exclude-dir can't handle paths,
       // so store as a prefix for post-filtering of grep results.
       // Strip trailing wildcards and slashes: "backend/foo/**" → "backend/foo"
       // Also strip leading "./" so it matches normalized file paths from grep output.
       const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
       if (prefix) extraExcludePathPrefixes.push(prefix);
-    } else if (cleaned.includes("*")) {
-      // Pure filename glob (no path separator) — passed as --exclude.
-      // Already had the leading **/ stripped above.
-      extraExcludeFiles.push(cleaned);
     } else {
       // Plain directory name — pass as --exclude-dir
       extraExcludeDirs.push(cleaned);
@@ -126,17 +127,17 @@ export function wouldExclude(filePath: string, paths: string[]): boolean {
     // Mirror the same `**/` strip used by setExcludePaths so wouldExclude and
     // setExcludePaths agree on classification.
     const cleaned = entry.replace(/^\*\*\//, "");
-    if (cleaned.includes("/")) {
-      // Path prefix
-      const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
-      if (!prefix) continue;
-      if (normalized === prefix || normalized.startsWith(prefix + "/")) return true;
-    } else if (cleaned.includes("*")) {
-      // Basename glob
+    const isBasenameGlob = cleaned.includes("*") && !cleaned.includes("/");
+    if (isBasenameGlob) {
       const regex = new RegExp(
         "^" + cleaned.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"
       );
       if (regex.test(basename)) return true;
+    } else if (cleaned.includes("/")) {
+      // Path prefix
+      const prefix = cleaned.replace(/[/*]+$/, "").replace(/\/$/, "").replace(/^\.\//, "");
+      if (!prefix) continue;
+      if (normalized === prefix || normalized.startsWith(prefix + "/")) return true;
     } else {
       // Plain directory name anywhere in path
       if (segments.slice(0, -1).includes(cleaned)) return true;
@@ -145,10 +146,19 @@ export function wouldExclude(filePath: string, paths: string[]): boolean {
   return false;
 }
 
-export function buildExcludeArgs(): string[] {
+/**
+ * Build grep --exclude args. With `ignoreUserExcludes`, the hard-coded
+ * EXCLUDE_DIRS (node_modules, .git, dist, etc.) still apply, but user-
+ * configured `repo.exclude_paths` entries are bypassed. Used by
+ * `--resolve-missing` and the diagnostic prober so a too-narrow user
+ * exclude list doesn't hide events from the recovery path.
+ */
+export function buildExcludeArgs(opts?: { ignoreUserExcludes?: boolean }): string[] {
+  const userDirs = opts?.ignoreUserExcludes ? [] : extraExcludeDirs;
+  const userFiles = opts?.ignoreUserExcludes ? [] : extraExcludeFiles;
   return [
-    ...[...EXCLUDE_DIRS, ...extraExcludeDirs].flatMap((d) => ["--exclude-dir", d]),
-    ...extraExcludeFiles.flatMap((f) => ["--exclude", f]),
+    ...[...EXCLUDE_DIRS, ...userDirs].flatMap((d) => ["--exclude-dir", d]),
+    ...userFiles.flatMap((f) => ["--exclude", f]),
   ];
 }
 
@@ -218,7 +228,8 @@ export function hasNearbyTrackingCall(
   }
 }
 
-export function parseCallSites(output: string): SearchMatch[] {
+export function parseCallSites(output: string, opts?: { ignoreUserExcludes?: boolean }): SearchMatch[] {
+  const skipPathFilter = opts?.ignoreUserExcludes ?? false;
   return output
     .split("\n")
     .filter(Boolean)
@@ -232,7 +243,7 @@ export function parseCallSites(output: string): SearchMatch[] {
       if (isNaN(lineNum)) return null;
       return { file, line: lineNum, rawLine };
     })
-    .filter((m): m is SearchMatch => m !== null && !isPathExcluded(m.file))
+    .filter((m): m is SearchMatch => m !== null && (skipPathFilter || !isPathExcluded(m.file)))
     .slice(0, 10);
 }
 
@@ -311,7 +322,15 @@ export async function searchDirect(
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
-  const patterns = resolvePatterns(sdk, customPatterns);
+  // Patterns come from explicit config only. The `sdk` field is metadata —
+  // we don't inherit defaults from SDK_PATTERNS at runtime, since that
+  // silently filters out events from unfamiliar tracking shapes (backend
+  // helpers, custom wrappers). When patterns are empty, isTrackingCallLine
+  // falls through to its built-in regex covering common tracking verbs.
+  void sdk;
+  const patterns = customPatterns ?? [];
+
+
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 
   for (const searchPath of paths) {
@@ -369,7 +388,8 @@ export async function searchDirect(
  */
 export async function searchBroad(
   eventName: string,
-  paths: string[]
+  paths: string[],
+  opts?: { ignoreUserExcludes?: boolean }
 ): Promise<SearchMatch[]> {
   // Generate casing variants: snake_case, camelCase, Title Case, UPPER_CASE
   const variants = generateCasingVariants(eventName);
@@ -386,14 +406,14 @@ export async function searchBroad(
             variant,
             searchPath,
             ...FILE_EXTENSIONS.flatMap((e) => ["--include", e]),
-            ...buildExcludeArgs(),
+            ...buildExcludeArgs(opts),
           ],
           { reject: false }
         );
 
         if (!stdout.trim()) continue;
 
-        const parsed = parseCallSites(stdout);
+        const parsed = parseCallSites(stdout, opts);
         for (const match of parsed) {
           match.matchedPattern = extractPatternFromLine(match.rawLine);
           // Deduplicate by file:line
@@ -532,7 +552,10 @@ export async function searchConstant(
   customPatterns?: string[],
   backendPatterns?: string[]
 ): Promise<SearchMatch[]> {
-  const patterns = resolvePatterns(sdk, customPatterns);
+  // See searchDirect: `sdk` is metadata only; patterns come from explicit
+  // config. Empty patterns → isTrackingCallLine regex fallback applies.
+  void sdk;
+  const patterns = customPatterns ?? [];
 
   const allPatterns = [...patterns, ...(backendPatterns ?? [])];
 

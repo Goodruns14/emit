@@ -27,6 +27,11 @@ interface LastFix {
     source_file: string;
     all_call_sites: { file: string; line: number }[];
   }>;
+  /** Top-level events that were targeted but not found in the codebase.
+   *  Surfaced separately from flaggedEvents because they have no source
+   *  evidence — the fix loop must investigate (grep without filters) and
+   *  propose pattern/path/exclude-removal changes to surface them. */
+  notFoundEvents?: string[];
 }
 
 /**
@@ -36,7 +41,25 @@ interface LastFix {
  * tie to specific events).
  */
 export function buildFlaggedEventsArg(lastFix: LastFix): string {
-  return (lastFix.flaggedEvents ?? []).map((e) => e.name).join(",");
+  return collectRescanEventNames(lastFix).join(",");
+}
+
+/**
+ * Combined list of events the rescan should re-target: flagged (noisy) events
+ * plus not-found events. Both want verification after the fix — the flagged
+ * ones to confirm the noise is gone, the not-found ones to confirm the
+ * pattern/path change actually surfaced them.
+ */
+function collectRescanEventNames(lastFix: LastFix): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ev of lastFix.flaggedEvents ?? []) {
+    if (!seen.has(ev.name)) { seen.add(ev.name); out.push(ev.name); }
+  }
+  for (const name of lastFix.notFoundEvents ?? []) {
+    if (!seen.has(name)) { seen.add(name); out.push(name); }
+  }
+  return out;
 }
 
 /**
@@ -61,7 +84,7 @@ export function buildFlaggedEventsArg(lastFix: LastFix): string {
  * fragments.
  */
 export function buildRescanCommand(lastFix: LastFix): string {
-  const names = (lastFix.flaggedEvents ?? []).map((e) => e.name);
+  const names = collectRescanEventNames(lastFix);
   if (names.length === 0) return `emit scan --fresh`;
   const arg = names.join(",");
   const needsQuoting = /[\s"]/.test(arg);
@@ -77,7 +100,7 @@ export function buildRescanCommand(lastFix: LastFix): string {
  * buildRescanCommand.
  */
 export function buildRescanArgs(lastFix: LastFix): string[] {
-  const names = (lastFix.flaggedEvents ?? []).map((e) => e.name);
+  const names = collectRescanEventNames(lastFix);
   if (names.length === 0) return ["scan", "--fresh"];
   const flag = names.length === 1 ? "--event" : "--events";
   return ["scan", flag, names.join(","), "--fresh"];
@@ -96,9 +119,33 @@ export function buildFixPrompt(lastFix: LastFix): string {
   }).join("\n");
   const findingsText = (lastFix.findings ?? []).join("\n\n");
   const rescanCmd = buildRescanCommand(lastFix);
+  const notFound = lastFix.notFoundEvents ?? [];
+
+  const notFoundSection = notFound.length > 0
+    ? [
+      ``,
+      `NOT-FOUND EVENTS (${notFound.length}) — targeted but not located by the scanner:`,
+      `  ${notFound.join(", ")}`,
+      ``,
+      `These have no source evidence in the catalog because the scanner couldn't find`,
+      `them. Investigate before proposing a config change:`,
+      `  - Run \`grep -rn "<event_name>" .\` (or ripgrep) for a few of these names to see`,
+      `    where they actually live in the repo. Do NOT pre-filter by track_pattern.`,
+      `  - If hits cluster in a directory not covered by \`paths\` → narrow/extend \`paths\`.`,
+      `  - If hits use a different call shape (server-side helper, wrapped SDK) → add a`,
+      `    \`backend_patterns\` entry. Use \`context_files\` when the event payload is built`,
+      `    in a helper file separate from the call site.`,
+      `  - If hits exist but live under an entry currently in \`exclude_paths\` → REMOVE`,
+      `    that entry. Existing excludes are often what's blocking discovery.`,
+      `  - If grep returns zero hits anywhere in the repo → the event may genuinely be`,
+      `    retired. Tell the user; do not fabricate a fix.`,
+      ``,
+      `Prefer broadening discovery over adding exclude_paths when not-found events exist.`,
+    ].join("\n")
+    : "";
 
   return [
-    `Fix emit.config.yml to resolve scanner noise detected by emit scan.`,
+    `Fix emit.config.yml to resolve issues detected by emit scan.`,
     ``,
     `Config fix needed: ${lastFix.fixInstruction}`,
     ``,
@@ -107,6 +154,7 @@ export function buildFixPrompt(lastFix: LastFix): string {
     ``,
     `Flagged events and their source locations:`,
     callSiteLines || "  (none recorded)",
+    notFoundSection,
     ``,
     `The diagnosis above flags events worth attention. Medium-confidence events`,
     `are acceptable on their own, but the user may still want to push them to`,
@@ -126,7 +174,10 @@ export function buildFixPrompt(lastFix: LastFix): string {
     `   excluding it will send the event to not_found on rescan. Skip that exclude and`,
     `   note the concern for the user. Only exclude such a file if you have explicit`,
     `   evidence the event is dead/legacy.`,
-    `2. One change per turn by default. You may bundle multiple changes in one turn`,
+    `2. Do not add exclude_paths that would cover any file you discover holds a`,
+    `   not-found event (per your investigation above). Those files are the only`,
+    `   evidence those events exist — excluding them re-creates the original problem.`,
+    `3. One change per turn by default. You may bundle multiple changes in one turn`,
     `   ONLY when BOTH of these hold:`,
     `   a. The changes share a clear common root cause (e.g., all flagged events have`,
     `      the same wrapper pattern, or all noise comes from one excluded directory).`,

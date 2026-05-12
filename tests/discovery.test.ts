@@ -9,27 +9,26 @@ function matches(regex: string, input: string): boolean {
 }
 
 describe("DISCOVERY_REGEXES — bare function patterns", () => {
-  it("capture[A-Z]\\w*Event\\( matches expected tracking methods", () => {
-    // Regex requires "Event" suffix to reduce false positives from
-    // captureException/captureMessage etc.
+  it("capture[A-Z]\\w*Event\\( requires Event suffix", () => {
     const re = DISCOVERY_REGEXES.find((r) => r.startsWith("capture[A-Z]"))!;
     expect(matches(re, "captureEntityCRUDEvent(")).toBe(true);
     expect(matches(re, "captureQueryEvent(")).toBe(true);
     expect(matches(re, "captureApiEvent(")).toBe(true);
     expect(matches(re, "captureMaterialCalcAccessEvent(")).toBe(true);
-    // Without Event suffix should NOT match
+    // Without Event suffix should NOT match (reduces noise from captureException etc.)
+    expect(matches(re, "captureMaterialCalcAccess(")).toBe(false);
     expect(matches(re, "captureException(")).toBe(false);
   });
 
-  it("track[A-Z]\\w*Event\\( matches expected tracking methods", () => {
-    // Regex requires "Event" suffix to disambiguate analytics from generic
-    // trackPageView/trackUserAction utility methods.
+  it("track[A-Z]\\w*Event\\( requires Event suffix", () => {
     const re = DISCOVERY_REGEXES.find((r) => r.startsWith("track[A-Z]"))!;
     expect(matches(re, "trackPageViewEvent(")).toBe(true);
     expect(matches(re, "trackUserActionEvent(")).toBe(true);
     expect(matches(re, "trackAnalyticsCustomEvent(")).toBe(true);
+    expect(matches(re, "trackAnalyticsEvent(")).toBe(true);
     // Without Event suffix should NOT match
     expect(matches(re, "trackPageView(")).toBe(false);
+    expect(matches(re, "trackUserAction(")).toBe(false);
   });
 
   it("log[A-Z]\\w*Event\\( matches event logging methods", () => {
@@ -41,15 +40,22 @@ describe("DISCOVERY_REGEXES — bare function patterns", () => {
     expect(matches(re, "logWarning(")).toBe(false);
   });
 
-  it("audit[A-Z]\\w*Event\\( matches audit event methods", () => {
+  it("audit[A-Z]\\w*Event\\( requires Event suffix", () => {
     // The audit[A-Z]\w*Event\( regex requires Event suffix; the loose
     // auditLog\( exists separately for the bare auditLog( case.
     const re = DISCOVERY_REGEXES.find((r) => r.startsWith("audit[A-Z]"))!;
     expect(matches(re, "auditLogEvent(")).toBe(true);
     expect(matches(re, "auditCreateEvent(")).toBe(true);
+    expect(matches(re, "auditUserEvent(")).toBe(true);
     expect(matches(re, "auditUserAccessEvent(")).toBe(true);
-    // Bare auditLog( is covered by the separate auditLog\( regex, not this one
+    // Without Event suffix should NOT match (auditLog itself has its own pattern)
     expect(matches(re, "auditCreate(")).toBe(false);
+    expect(matches(re, "auditUserAccess(")).toBe(false);
+  });
+
+  it("auditLog\\( matches the bare auditLog call", () => {
+    const re = DISCOVERY_REGEXES.find((r) => r === "auditLog\\(")!;
+    expect(matches(re, "auditLog(")).toBe(true);
   });
 
   it("record[A-Z]\\w*Event\\( requires Event suffix", () => {

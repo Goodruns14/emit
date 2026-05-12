@@ -341,7 +341,7 @@ describe("parseDiscriminatorCsv", () => {
   it("throws with helpful example on no valid entries", () => {
     const f = write("disc.csv", "event,,\n,prop,\n,,vals\n");
     expect(() => parseDiscriminatorCsv(f)).toThrow(/No discriminator entries/);
-    expect(() => parseDiscriminatorCsv(f)).toThrow(/button_click,button_id/);
+    expect(() => parseDiscriminatorCsv(f)).toThrow(/button_click,button_type/);
   });
 });
 

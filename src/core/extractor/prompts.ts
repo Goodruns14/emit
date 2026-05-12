@@ -1,5 +1,9 @@
 import type { CodeContext, LiteralValues } from "../../types/index.js";
 
+// Bump whenever the wording or output schema of any prompt changes — included
+// in the extraction cache key so edits invalidate stale entries automatically.
+export const PROMPT_VERSION = "1";
+
 /**
  * Shared confidence-level definitions injected into every extraction prompt.
  *
@@ -381,13 +385,29 @@ export function buildDiagnosticPrompt(signal: import("../catalog/diagnostic.js")
     );
   }
 
+  if (signal.notFoundEvents.length >= 2) {
+    const sample = signal.notFoundEvents.slice(0, 20).join(", ");
+    const more = signal.notFoundEvents.length > 20 ? ` (+${signal.notFoundEvents.length - 20} more)` : "";
+    sections.push(
+      `NOT-FOUND EVENTS — ${signal.notFoundEvents.length} events could not be located in the configured paths\n` +
+      `with the configured tracking patterns:\n` +
+      `  Events: ${sample}${more}\n` +
+      `  These may be missing because (a) the events are in code paths not covered by\n` +
+      `  \`paths\`, (b) they use a tracking pattern not covered by \`track_pattern\` /\n` +
+      `  \`backend_patterns\` (e.g. server-side helpers, wrapped SDKs), or (c) existing\n` +
+      `  \`exclude_paths\` entries are blocking discovery. The fix is rarely to ignore\n` +
+      `  them — it's almost always a discovery-broadening config change.`
+    );
+  }
+
   return `
 You are analyzing the results of an emit catalog scan of ${signal.eventCount} events.
 The following structural anomalies were detected. For each anomaly, you are given
 raw evidence: property names, code_sample_values, file paths, and/or confidence reasons.
 
 For each anomaly, write one short paragraph identifying the root cause — what
-non-analytics code or data is appearing in the catalog and why.
+non-analytics code or data is appearing in the catalog and why, OR why expected
+events aren't being found.
 
 Do not explain what emit is. Do not address single-event issues. Only address the
 cross-cutting patterns below.
@@ -395,9 +415,25 @@ cross-cutting patterns below.
 ${sections.join("\n\n")}
 
 Valid emit.config.yml options you may suggest in fix_instruction:
-- exclude_paths: string[] — glob patterns to exclude from scanning
-- track_pattern: string — the function call pattern to match (e.g., "analytics.track(")
-- discriminator_properties: object — maps parent event to property + values for sub-event expansion
+- paths: string[] — directories to scan; narrowing scope (e.g. ["./apps/web", "./backend"])
+  often beats blanket excludes
+- track_pattern: string | string[] — function call pattern(s) to match (e.g., "analytics.track(")
+- backend_patterns: array — additional patterns for server-side / wrapped helpers
+  (e.g. "captureEntityCRUDEvent("). Each entry can also declare \`context_files\` to
+  load helper source into the LLM prompt when the event payload is built downstream
+  from the call site.
+- exclude_paths: string[] — glob patterns to exclude. May be ADDED to suppress real
+  noise, or REMOVED when an existing entry is blocking discovery of not-found events.
+- discriminator_properties: object — maps parent event to property + values for
+  sub-event expansion.
+
+Bias rules:
+- When NOT-FOUND EVENTS are present, prefer narrowing \`paths\` or adding
+  \`track_pattern\` / \`backend_patterns\` over adding new \`exclude_paths\`.
+  If existing \`exclude_paths\` entries plausibly cover where the missing events
+  live, suggest REMOVING them.
+- \`exclude_paths\` additions are a last resort and only appropriate when the
+  evidence is pure noise (build artifacts, test fixtures) with no not-found pressure.
 
 Do NOT suggest any other config options. Options like \`context_lines\`, \`window_size\`,
 \`max_context\`, or similar DO NOT EXIST. The context window size is hardcoded.
@@ -407,9 +443,9 @@ fix_instruction and describe the problem rather than inventing a solution.
 Return ONLY a valid JSON object. No preamble, no markdown fences:
 {
   "findings": [
-    "One or two sentences per anomaly — what is leaking in and why. Be concise."
+    "One or two sentences per anomaly — what is leaking in (or what is missing) and why. Be concise."
   ],
-  "fix_instruction": "A single short clause, MAX 80 characters, no period. Imperative. E.g. \\"add backend/stacktraces/test-files/** to exclude_paths in emit.config.yml\\". If multiple fixes, combine into one clause with \\"and\\"."
+  "fix_instruction": "A single short clause, MAX 100 characters, no period. Imperative. E.g. \\"narrow paths to apps/web and add backend_patterns for captureEntityCRUDEvent\\" or \\"remove src/audit/** from exclude_paths to surface backend events\\". If multiple fixes, combine with \\"and\\"."
 }
 `.trim();
 }

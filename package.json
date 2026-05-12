@@ -10,7 +10,16 @@
     "snowflake",
     "cli"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0",
+  "author": "Goodruns14",
+  "homepage": "https://github.com/Goodruns14/emit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Goodruns14/emit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Goodruns14/emit/issues"
+  },
   "bin": {
     "emit": "dist/cli.js"
   },
@@ -39,7 +48,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.20.0",
+    "@anthropic-ai/sdk": "^0.92.0",
     "@databricks/sql": "^1.13.0",
     "@google-cloud/bigquery": "^8.1.1",
     "@modelcontextprotocol/sdk": "^1.27.1",

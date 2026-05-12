@@ -5,13 +5,18 @@ import type { CodeContext, ExtractedMetadata, LiteralValues } from "../src/types
 vi.mock("../src/core/extractor/claude.js", () => ({
   callLLM: vi.fn(),
   parseJsonResponse: vi.fn(),
+  tryParseJson: vi.fn(),
+  JsonParseError: class JsonParseError extends Error {},
+  JSON_RETRY_NUDGE: "",
 }));
 
 import { MetadataExtractor } from "../src/core/extractor/index.js";
-import { callLLM, parseJsonResponse } from "../src/core/extractor/claude.js";
+import { callLLM, parseJsonResponse, tryParseJson } from "../src/core/extractor/claude.js";
 
 const mockCallLLM = vi.mocked(callLLM);
-const mockParseJson = vi.mocked(parseJsonResponse);
+const mockParseJson = vi.mocked(tryParseJson);
+// Keep the old name available for any tests that haven't been migrated yet.
+void parseJsonResponse;
 
 const llmCfg = {
   provider: "anthropic" as const,
@@ -41,6 +46,8 @@ describe("MetadataExtractor — producer-mode dispatch", () => {
   beforeEach(() => {
     mockCallLLM.mockReset();
     mockParseJson.mockReset();
+    // Default: cache disabled by giving each test a fresh extractor + non-null
+    // tryParseJson stub return (mocks below override with fakeExtraction).
   });
 
   it("uses the analytics prompt by default", async () => {

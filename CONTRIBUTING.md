@@ -7,8 +7,8 @@ Thanks for your interest in contributing. This guide covers how to set up locall
 **Prerequisites:** Node.js >= 18.0.0, an LLM provider (see below)
 
 ```bash
-git clone https://github.com/emit-io/emit-cli.git
-cd emit-cli
+git clone https://github.com/Goodruns14/emit.git
+cd emit
 npm install
 npm run build
 ```

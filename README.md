@@ -5,9 +5,9 @@ Give your analytics events definitions and meaning so your team (and AI) can do 
 Emit scans your event instrumentation code (CDPs like Segment or your own custom pipelines) and writes a structured catalog of every event and property in `emit.catalog.yml`. Commit it, review it in PRs, and feed it to whoever needs it.
 
 **What you get:**
-- **A tracking plan that actually stays current.** The catalog lives in git and moves with every PR.
-- **Faster, more trustworthy analysis.** Every property has a description, edge cases, and a link to the exact source line that fires it.
-- **AI agents that don't hallucinate column meanings.** Your agents query the warehouse with real semantic context instead of guessing.
+- **A tracking plan that actually stays current.**
+- **Faster, more trustworthy analysis.**
+- **AI agents that don't hallucinate column meanings.**
 
 ## Prerequisites
 

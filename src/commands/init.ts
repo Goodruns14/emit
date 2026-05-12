@@ -69,10 +69,6 @@ const PACKAGE_TO_PATTERN: Record<string, string> = {
   "aws-sdk": "sns.publish(",
   "@golevelup/nestjs-rabbitmq": "amqpConnection.publish(",
   "amqplib": "channel.publish(",
-  "@dapr/dapr": "daprClient.pubsub.publish(",
-  "@google-cloud/pubsub": ".publishMessage({",
-  "ioredis": "redis.xadd(",
-  "nats": "nc.publish(",
 };
 
 // Maps npm package names to SDK types for config generation
@@ -90,10 +86,6 @@ const PACKAGE_TO_SDK: Record<string, string> = {
   "@aws-sdk/client-sqs": "sqs",
   "@golevelup/nestjs-rabbitmq": "rabbitmq",
   "amqplib": "rabbitmq",
-  "@dapr/dapr": "dapr",
-  "@google-cloud/pubsub": "google-pubsub",
-  "ioredis": "redis-streams",
-  "nats": "nats",
 };
 
 // Set of SDK types that should trigger producer mode when detected.
@@ -103,10 +95,6 @@ const PUBSUB_SDK_TYPES = new Set([
   "sns",
   "sqs",
   "rabbitmq",
-  "dapr",
-  "google-pubsub",
-  "redis-streams",
-  "nats",
 ]);
 
 const LLM_DISPLAY_LABELS: Record<string, string> = {

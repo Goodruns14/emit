@@ -275,6 +275,76 @@ button_click.signup_cta:
 | `src/core/catalog/index.ts` | Sub-event sorting + group comments in YAML |
 | `tests/discriminator.test.ts` | 16 unit tests |
 
+## Producer Mode (pub/sub)
+
+Set `mode: producer` to catalog *publish* call sites from event-driven code. Supported SDKs: **Kafka, RabbitMQ, SNS, SQS**. Additional brokers can be added by appending patterns to `src/core/scanner/backend-patterns.ts`. In producer mode, `manual_events` is optional — the scanner discovers publish sites and feeds them to extraction with `<discovered:file:line>` placeholders, then re-keys to topic names after the LLM returns.
+
+### Config
+
+```yaml
+mode: producer        # default is "analytics" — omit for existing behavior
+repo:
+  paths: [./]
+  sdk: kafka          # or rabbitmq, sns, sqs
+  # Multi-SDK service: sdk: [kafka, rabbitmq]
+
+llm:
+  provider: claude-code
+  model: claude-sonnet-4-6
+
+# Optional: resolve runtime-resolved topic names to stable catalog names
+topic_aliases:
+  index_24: order_placed       # "topic at file:24" → catalog name
+
+# Optional: filter out AMQP infrastructure queues
+rpc_exchanges:
+  - reply.*
+```
+
+### How it works
+
+1. Discovery (`scan.ts` → `findAllProducerCallSites()`): enumerates publish sites by SDK pattern, no `manual_events` required.
+2. Schema-file ingestion (`scanner/schema-files.ts`): pulls `.avsc` / `.proto` / JSON Schema into the LLM prompt (4 KiB × 4 files cap per call site).
+3. Event-class follow-through (`scanner/context.ts`): looks up `*Event` / `*Command` / `*Message` / `*Notification` class definitions across files.
+4. Outbox detection (`scanner/context.ts`): heuristic for write+delivery markers in the same file — expands context to whole-file.
+5. Discriminator-in-discovery: god-events get expanded in producer mode the same way as analytics mode.
+6. Producer-fix templates (`catalog/diagnostic.ts`): `topic_alias`, `track_pattern_wrapper`, `discriminator_config`, `rpc_exchange_filter`, `exclude_paths`, `producer_only_mode` — each feeds `emit fix`.
+7. Pre-flight rejection: rejects fix proposals that would hide already-cataloged events; writes `.emit/rejected-fix.yml` for review.
+
+### Catalog output
+
+Pre-alias:
+```yaml
+<discovered:./src/order/publish.ts:42>:
+  description: "Order placed event published when checkout completes"
+  call_sites: [...]
+```
+
+After `topic_aliases` resolves it:
+```yaml
+order_placed:
+  description: "Order placed event published when checkout completes"
+  ...
+```
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/commands/scan.ts` | `findAllProducerCallSites()` + discovery flow wiring |
+| `src/core/scanner/index.ts` | Multi-SDK pattern matching, `sdk: SdkType[]` array support |
+| `src/core/scanner/schema-files.ts` | Avro / Protobuf / JSON Schema ingestion |
+| `src/core/scanner/context.ts` | Event-class follow-through, outbox detection |
+| `src/core/extractor/prompts.ts` | Producer-mode prompt with schema context |
+| `src/core/catalog/diagnostic.ts` | Producer-fix template generation |
+| `src/commands/fix.ts` | Pre-flight rejection logic |
+| `scripts/e2e-pubsub-harness.ts` | Tier 1/2/3 fixture harness |
+
+### Common pitfalls
+
+- **Pre-flight rejects legitimate alias renames** — when `emit fix` applies a `topic_aliases:` entry, the placeholder key (`<discovered:...>`) is replaced by the canonical name. The pre-flight currently treats that as a "vanished event" and rolls back. Use `--force` or rerun `emit fix` to apply.
+- **Over-aggressive fix proposals** — Claude Code can occasionally widen `repo.paths` to include `.emit/cache/` or the catalog itself, producing phantom call sites. Pre-flight catches this, but the proposal could be narrower.
+
 ## Important Design Decisions
 
 - **Read-only from Snowflake** — Emit never writes to your warehouse in Phase 1 (file output only)

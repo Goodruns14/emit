@@ -62,42 +62,6 @@ export const DEFAULT_BACKEND_PATTERNS: BackendPatternDef[] = [
   { pattern: "channel.publish(",               kind: "producer", sdk: "rabbitmq",       description: "amqplib channel publish" },
   { pattern: "channel.sendToQueue(",           kind: "producer", sdk: "rabbitmq",       description: "amqplib channel sendToQueue" },
   { pattern: "channel.consume(",               kind: "consumer", sdk: "rabbitmq",       description: "amqplib channel consume" },
-
-  // ─── Dapr ─────────────────────────────────────────
-  { pattern: "daprClient.pubsub.publish(",     kind: "producer", sdk: "dapr",           description: "Dapr pub/sub publish (TS/JS)" },
-  { pattern: ".publishEvent(",                 kind: "producer", sdk: "dapr",           description: "Dapr Java/Python publishEvent" },
-  { pattern: "@Topic(",                        kind: "consumer", sdk: "dapr",           description: "Dapr subscribe annotation" },
-
-  // ─── Google Pub/Sub ───────────────────────────────
-  { pattern: ".publishMessage({",              kind: "producer", sdk: "google-pubsub",  description: "@google-cloud/pubsub topic.publishMessage" },
-  { pattern: "pubsub.topic(",                  kind: "producer", sdk: "google-pubsub",  description: "@google-cloud/pubsub topic accessor" },
-  { pattern: "subscription.on('message'",      kind: "consumer", sdk: "google-pubsub",  description: "@google-cloud/pubsub subscription handler" },
-
-  // ─── Redis Streams ────────────────────────────────
-  { pattern: "redis.xadd(",                    kind: "producer", sdk: "redis-streams",  description: "ioredis XADD" },
-  { pattern: ".xadd(",                         kind: "producer", sdk: "redis-streams",  description: "Redis client XADD (generic)" },
-  { pattern: "redis.xreadgroup(",              kind: "consumer", sdk: "redis-streams",  description: "ioredis XREADGROUP" },
-  { pattern: ".xreadgroup(",                   kind: "consumer", sdk: "redis-streams",  description: "Redis client XREADGROUP (generic)" },
-
-  // ─── NATS ─────────────────────────────────────────
-  { pattern: "nc.publish(",                    kind: "producer", sdk: "nats",           description: "NATS JS publish" },
-  { pattern: "nats.Publish(",                  kind: "producer", sdk: "nats",           description: "NATS Go publish" },
-  { pattern: "nc.subscribe(",                  kind: "consumer", sdk: "nats",           description: "NATS JS subscribe" },
-  { pattern: "nats.Subscribe(",                kind: "consumer", sdk: "nats",           description: "NATS Go subscribe" },
-
-  // ─── Outbox + CDC ─────────────────────────────────
-  // Patterns that mark "an event was written to a database outbox table for
-  // an external CDC process (Debezium etc.) to pick up and publish." The
-  // publish-to-broker call does NOT appear in app code; the outbox write IS
-  // the producer signal. Compose with another SDK in multi-SDK configs:
-  // sdk: ["kafka", "outbox"]
-  { pattern: ".emitCloudEvent(",               kind: "producer", sdk: "outbox",         description: "OutboxEventEmitter.emitCloudEvent — Debezium-style CloudEvent outbox" },
-  { pattern: "outboxRepository.save(",         kind: "producer", sdk: "outbox",         description: "Spring outbox table write (camelCase)" },
-  { pattern: "outBoxRepository.save(",         kind: "producer", sdk: "outbox",         description: "Spring outbox table write (variant casing)" },
-  { pattern: "outboxRepo.save(",               kind: "producer", sdk: "outbox",         description: "Spring outbox table write (short name)" },
-  { pattern: "outboxEventRepository.save(",    kind: "producer", sdk: "outbox",         description: "Spring outbox event repo write" },
-  { pattern: "OutboxEvent.builder()",          kind: "producer", sdk: "outbox",         description: "Lombok builder for OutboxEvent" },
-  { pattern: "new OutboxEvent(",               kind: "producer", sdk: "outbox",         description: "OutboxEvent constructor" },
 ];
 
 /** Producer-only patterns for an SDK. Used when caller wants publish-side only. */

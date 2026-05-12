@@ -56,28 +56,15 @@ const MANIFEST: FixtureManifestEntry[] = [
   { name: "golevelup-nestjs",          tier: 1, notes: "NestJS RabbitMQ with routing-key wildcards. Multiple decorated handlers." },
   { name: "aws-serverless-patterns",   tier: 1, scan_subpath: "fargate-sns-sqs-cdk",
     notes: "SNS publish via process.env (IaC-as-truth gap). Topic resolved at runtime — emit fix should suggest topic_alias." },
-  { name: "misarch-dapr-inventory",    tier: 1, notes: "Dapr broker abstraction. pubsubName resolves via YAML config." },
+  { name: "rabbitmq-tutorials",        tier: 1, scan_subpath: "javascript-nodejs/src",
+    notes: "Official RabbitMQ amqplib tutorials — exchanges, queues, RPC, fanout. Multi-pattern coverage." },
+  { name: "learn-kafka-courses",       tier: 1, scan_subpath: "transactional-producer",
+    notes: "Confluent Kafka transactional-producer (Java)." },
   // ── Tier 2 ─────────────────────────────────────────────────────────────
   { name: "aleks-cqrs-eventsourcing",  tier: 2,
     notes: "CQRS+ES with _V1 versioning, event classes, discriminator-in-topic, Spring @Value." },
   { name: "ably-ticket-kafka",         tier: 2,
     notes: "Python confluent_kafka SerializingProducer with Avro .avsc schema files." },
-  { name: "outbox-microservices-patterns", tier: 2,
-    notes: "Spring outbox pattern: domain method writes outbox; @Scheduled poller publishes." },
-  { name: "redhat-cloudevents",        tier: 2,
-    notes: "CloudEvents envelope + 3-layer outbox+CDC architecture (Debezium publishes externally)." },
-  // ── Tier 3 ─────────────────────────────────────────────────────────────
-  { name: "mozilla-fxa",               tier: 3,
-    notes: "Real production: sqs-consumer + Google Pub/Sub + dynamic topics + cross-platform fan-out." },
-  { name: "pipeshub-redis-streams",    tier: 3,
-    notes: "Redis Streams via custom BaseRedisStreamsProducerConnection wrapper class — emit fix should suggest track_pattern." },
-  // ── Out of scope ───────────────────────────────────────────────────────
-  { name: "moleculer-go", tier: 3, out_of_scope: true,
-    out_of_scope_reason: "Go scanner support is a separate project; emit currently scans TS/JS/Python/Java.",
-    notes: "Go pub/sub framework — patterns confirmed but extraction would require Go scanner." },
-  { name: "temporal-samples", tier: 3, out_of_scope: true,
-    out_of_scope_reason: "Workflow signals are RPC-style targeted to specific instances, not topic-broadcast events.",
-    notes: "Workflow signals — different mental model." },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

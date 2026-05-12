@@ -436,13 +436,6 @@ export async function runScan(opts: ScanOptions): Promise<number> {
         );
       }
     }
-    // Deterministic outbox flag: set by the scanner when the source file
-    // matches the outbox-pattern heuristic (write + delivery markers in the
-    // same file). Independent of whether the LLM noticed.
-    if (ctx.outbox_detected && !eventFlags.includes("outbox_pattern")) {
-      eventFlags.push("outbox_pattern");
-    }
-
     const reconciled: CatalogEvent = {
       description: meta.event_description,
       fires_when: meta.fires_when,

@@ -57,10 +57,10 @@ describe.skipIf(!fixtureExists("confluent-getting-started"))(
 describe.skipIf(!fixtureExists("aws-serverless-patterns/fargate-sns-sqs-cdk"))(
   "RepoScanner.findAllProducerCallSites — dynamic-topic SNS case",
   () => {
-    it("discovers sns.publish call site even when topic is process.env-derived", async () => {
+    it("discovers SNS publish call site even when topic is process.env-derived", async () => {
       // This fixture's topic is process.env.snsTopicArn — there is no string
       // literal to grep for. Discovery must find the call site purely by
-      // pattern (sns.publish), independent of the topic identity.
+      // pattern (AWS SDK v3 PublishCommand), independent of the topic identity.
       const scanner = new RepoScanner({
         paths: [
           path.join(FIXTURE_ROOT, "aws-serverless-patterns", "fargate-sns-sqs-cdk", "cdk", "src"),
@@ -71,26 +71,8 @@ describe.skipIf(!fixtureExists("aws-serverless-patterns/fargate-sns-sqs-cdk"))(
       const sites = await scanner.findAllProducerCallSites();
 
       expect(sites.length).toBeGreaterThan(0);
-      const publishSite = sites.find((s) => s.context.includes("sns.publish"));
+      const publishSite = sites.find((s) => s.context.includes("PublishCommand"));
       expect(publishSite).toBeDefined();
-      expect(publishSite?.track_pattern).toContain("sns.publish(");
-    });
-  },
-);
-
-describe.skipIf(!fixtureExists("misarch-dapr-inventory"))(
-  "RepoScanner.findAllProducerCallSites — Dapr broker abstraction",
-  () => {
-    it("discovers daprClient.pubsub.publish call site", async () => {
-      const scanner = new RepoScanner({
-        paths: [path.join(FIXTURE_ROOT, "misarch-dapr-inventory", "src")],
-        sdk: "dapr",
-      });
-
-      const sites = await scanner.findAllProducerCallSites();
-      expect(sites.length).toBeGreaterThan(0);
-      const daprSite = sites.find((s) => s.context.includes("daprClient.pubsub.publish"));
-      expect(daprSite).toBeDefined();
     });
   },
 );

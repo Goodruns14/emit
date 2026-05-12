@@ -35,11 +35,6 @@ export const SDK_PATTERNS: Record<SdkType, string[]> = {
   sns: backendPatternsForSdk("sns"),
   sqs: backendPatternsForSdk("sqs"),
   rabbitmq: backendPatternsForSdk("rabbitmq"),
-  dapr: backendPatternsForSdk("dapr"),
-  "google-pubsub": backendPatternsForSdk("google-pubsub"),
-  "redis-streams": backendPatternsForSdk("redis-streams"),
-  nats: backendPatternsForSdk("nats"),
-  outbox: backendPatternsForSdk("outbox"),
   // Catch-all
   custom: [],
 };

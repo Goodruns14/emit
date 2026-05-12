@@ -162,7 +162,7 @@ describe("MetadataExtractor — producer-mode dispatch", () => {
     mockParseJson.mockReturnValue(
       fakeExtraction({
         topic: "<unresolved>",
-        flags: ["topic_dynamic", "outbox_pattern"],
+        flags: ["topic_dynamic"],
       }),
     );
 
@@ -173,7 +173,6 @@ describe("MetadataExtractor — producer-mode dispatch", () => {
     );
 
     expect(result.flags.filter((f) => f === "topic_dynamic")).toHaveLength(1);
-    expect(result.flags).toContain("outbox_pattern");
   });
 
   it("CloudEvents prompt mentions envelope vs payload distinction", async () => {
@@ -196,20 +195,4 @@ describe("MetadataExtractor — producer-mode dispatch", () => {
     expect(prompt).toContain("PAYLOAD");
   });
 
-  it("Outbox guidance is present in the producer prompt", async () => {
-    const extractor = new MetadataExtractor(llmCfg, "producer");
-    mockCallLLM.mockResolvedValue("{}");
-    mockParseJson.mockReturnValue(fakeExtraction({}));
-
-    await extractor.extractMetadata(
-      "order-topic",
-      fakeContext("OrderService.java", 64, 'kafkaTemplate.send("order-topic", payload).get();'),
-      {} as LiteralValues,
-    );
-
-    const prompt = mockCallLLM.mock.calls[0][0];
-    expect(prompt).toContain("Outbox pattern");
-    expect(prompt).toContain("OutboxRepository");
-    expect(prompt).toContain("outbox_pattern");
-  });
 });

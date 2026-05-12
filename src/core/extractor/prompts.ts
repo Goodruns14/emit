@@ -203,7 +203,7 @@ Return ONLY a valid JSON object with this exact structure. No preamble, no markd
       "confidence": "high | medium | low"
     }
   },
-  "flags": ["Anything unusual or worth human review. Use 'topic_dynamic' if topic is unresolved at scan time. Use 'outbox_pattern' if the publish is via a transactional outbox poller (the publish call site is in a scheduled poller, not the domain code)."]
+  "flags": ["Anything unusual or worth human review. Use 'topic_dynamic' if topic is unresolved at scan time."]
 }
 
 Rules:
@@ -212,7 +212,6 @@ Rules:
     2. PAYLOAD — the actual business data, typically inside ce.getData(), the second argument to publish(), or a typed event-class instance's fields. THIS is what goes in properties{}.
 - If you see Java's CloudEventBuilder.create() / ce.withType() / ce.getExtension(...), the event uses CloudEvents envelope. Return envelope_spec='cloudevents/1.0' and ONLY include payload fields in properties.
 - If the publish call references an event class (e.g. 'new InvoiceFinalized({...})' or 'OrderCreatedEvent'), the class definition (if shown in additional context) defines the payload schema. Use those fields as the properties.
-- Outbox pattern: if the call site looks like a scheduled poller reading from an OutboxRepository / OutboxEvent table and publishing to Kafka/SNS, the SEMANTIC event was created elsewhere (in domain code that wrote to the outbox). The publish here is just the delivery mechanism. Add 'outbox_pattern' to flags. Use the eventType column / outbox event class to derive description and properties; the topic is still the broker target the poller publishes to.
 - For partition_key_field: only set if you can identify which property is used as the partition/routing key (e.g. for kafkaTemplate.send(topic, partitionKey, payload), the value passed as partitionKey usually maps to a payload property like 'orderId' or 'aggregateId').
 - Dynamic topics: if the topic argument is process.env.X, this.config.get(...), or a computed string like \`\${prefix}\${tenant}\`, set topic='<unresolved>' and add 'topic_dynamic' flag. Do NOT guess what the topic name might be at runtime.
 - If you cannot determine something confidently, say so explicitly. Never guess. Low confidence is better than wrong confidence.

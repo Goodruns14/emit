@@ -3,7 +3,7 @@ import { execa } from "execa";
 import type { BackendPatternConfig, CodeContext, CallSite, SdkType } from "../../types/index.js";
 import { searchDirect, searchConstant, searchBroad, searchDiscriminatorValue, generateCasingVariants, filterExactEventMatches, hasNearbyTrackingCall, parseCallSites, buildExcludeArgs, SDK_PATTERNS } from "./search.js";
 import { producerPatterns } from "./backend-patterns.js";
-import { extractContext, resolveEnumStringValue, isOutboxFile, findEventClassDefinitions } from "./context.js";
+import { extractContext, resolveEnumStringValue, findEventClassDefinitions } from "./context.js";
 import { findSchemaFiles } from "./schema-files.js";
 
 /** Cap per reference-file body so the LLM prompt never explodes. */
@@ -348,19 +348,6 @@ export class RepoScanner {
     // input to one extraction LLM call.
     const contexts: CodeContext[] = [];
     for (const hit of byFileLine.values()) {
-      // Outbox detection happens inside extractContext (it widens the
-      // window to whole-file when both halves of the pattern are present).
-      // We also flag it on the CodeContext so the catalog reconciler can
-      // add a deterministic outbox_pattern flag to the entry — independent
-      // of whether the LLM noticed.
-      let isOutbox = false;
-      try {
-        const fileContent = fs.readFileSync(hit.file, "utf8");
-        isOutbox = isOutboxFile(fileContent);
-      } catch {
-        // file unreadable — leave as false
-      }
-
       const contextSrc = extractContext(hit.file, hit.line, 50);
 
       // Event-class follow-through (Day 4.5): when the publish call references
@@ -394,7 +381,6 @@ export class RepoScanner {
           },
         ],
         extra_context_files: extraContextFiles.length > 0 ? extraContextFiles : undefined,
-        outbox_detected: isOutbox,
       });
     }
 

@@ -13,18 +13,6 @@ export function extractContext(
     const lines = content.split("\n");
     const idx = lineNumber - 1;
 
-    // Outbox-pattern detection: if the file contains BOTH an outbox-write
-    // marker AND a publisher pattern (or @Scheduled annotation), the
-    // semantic event lives in domain code that may be 50+ lines from the
-    // publish call. Expand context to whole-file so the LLM sees the
-    // CreateOrder() that wrote to the outbox and the publishEvents()
-    // poller that publishes from it. This is what unlocks meaningful
-    // descriptions on outbox-pattern fixtures (outbox-microservices-patterns,
-    // aleks-cqrs-eventsourcing).
-    if (isOutboxFile(content)) {
-      return content;
-    }
-
     // Try to find the enclosing function boundaries for tighter scoping.
     // This prevents cross-contamination when multiple tracking calls are in the same file.
     const funcBounds = findEnclosingFunction(lines, idx);
@@ -43,44 +31,6 @@ export function extractContext(
   } catch {
     return "";
   }
-}
-
-/**
- * Heuristic outbox-pattern detection. Returns true when a file contains
- * both an outbox-table-write marker AND a publish/scheduled marker — i.e.,
- * the classic Spring outbox split where a domain method writes to an outbox
- * table and a separate scheduled poller publishes from it. Used to widen
- * context to whole-file so the LLM can see both halves of the chain.
- *
- * Conservative on purpose — looks for a pair of markers, not just one.
- * Single mention of "Outbox" in a class name (e.g. an unrelated DTO) won't
- * trigger the expansion.
- */
-const OUTBOX_WRITE_MARKERS = [
-  "outboxRepository.save(",
-  "outBoxRepository.save(",
-  "OutBoxRepository.save(",
-  "outboxRepo.save(",
-  "outboxEventRepository.save(",
-  "OutboxEvent.builder()",
-  "new OutboxEvent(",
-  ".emitCloudEvent(",
-];
-
-const OUTBOX_DELIVERY_MARKERS = [
-  "@Scheduled",
-  "kafkaTemplate.send(",
-  "producer.send(",
-  "sns.publish(",
-  "snsClient.send(",
-  "sqs.sendMessage(",
-];
-
-export function isOutboxFile(fileContent: string): boolean {
-  const hasWrite = OUTBOX_WRITE_MARKERS.some((m) => fileContent.includes(m));
-  if (!hasWrite) return false;
-  const hasDelivery = OUTBOX_DELIVERY_MARKERS.some((m) => fileContent.includes(m));
-  return hasDelivery;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

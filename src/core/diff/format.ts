@@ -7,13 +7,26 @@ import type { CatalogDiff, EventChange } from "../../types/index.js";
 export function formatTerminalDiff(
   diff: CatalogDiff,
   isPartialScan = false,
-  unchangedCount?: number
+  unchangedCount?: number,
+  previousTotal?: number
 ): string {
   const lines: string[] = [];
 
   const newCount = diff.added.length;
   const updatedCount = diff.modified.length;
   const removedCount = diff.removed.length;
+
+  // Headline count comparison — surfaces regressions like "was 25, now 24"
+  // even when the per-event chips don't make the overall change obvious.
+  if (!isPartialScan && previousTotal != null && unchangedCount != null) {
+    const newTotal = unchangedCount + newCount + updatedCount;
+    if (newTotal !== previousTotal) {
+      const delta = newTotal - previousTotal;
+      const sign = delta > 0 ? "+" : "";
+      const color = delta < 0 ? chalk.red : chalk.green;
+      lines.push(`  Located ${newTotal} events (was ${previousTotal}, ${color(`${sign}${delta}`)})`);
+    }
+  }
 
   // Header line
   const headerParts: string[] = [];
@@ -25,7 +38,7 @@ export function formatTerminalDiff(
   }
 
   if (headerParts.length === 0) {
-    lines.push(chalk.gray("  No catalog changes"));
+    if (lines.length === 0) lines.push(chalk.gray("  No catalog changes"));
     return lines.join("\n");
   }
 

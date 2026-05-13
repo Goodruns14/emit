@@ -53,6 +53,7 @@ node dist/cli.js status    # Catalog health report
 node dist/cli.js revert    # Restore event from git history
 node dist/cli.js mcp       # Start local MCP server (stdio)
 node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
+node dist/cli.js suggest --ask "instrument signup drop-off" --yes  # Propose events via Claude Code
 ```
 
 ### Flags reference
@@ -92,6 +93,16 @@ Every command runs headless (no TTY) — pass `--yes` and supply all decisions a
 |------|-------------|
 | `--yes` | Run headlessly (no interactive session); auto-run rescan after the fix |
 | `--force` | Skip the pre-flight check that rejects fixes which would hide already-cataloged events |
+
+#### `emit suggest`
+
+| Flag | Description |
+|------|-------------|
+| `--ask <text>` | The ask in plain text (e.g. "measure where users drop off during signup"). Required with `--yes`. File paths embedded in the text are auto-detected and loaded as feature context. |
+| `-y, --yes` | Headless mode — launches Claude Code via `-p --permission-mode acceptEdits`, skips all prompts, auto-runs `emit scan --fresh --yes` after. Requires `--ask`. |
+| `--debug-context` | Print the deterministic LLM context bundle (catalog summary, exemplars, naming style) as JSON and exit. Requires `--ask`. No LLM call. |
+| `--debug-prompt` | Print the full agent brief that would be handed to Claude Code, and exit. Requires `--ask`. No LLM call. |
+| `--format <format>` | Reserved for future use. |
 
 #### `emit import <file>`
 
@@ -161,6 +172,9 @@ Every command runs headless (no TTY) — pass `--yes` and supply all decisions a
 |------|---------|
 | `src/commands/scan.ts` | Core scan logic — event discovery, LLM extraction, catalog output |
 | `src/commands/mcp.ts` | `emit mcp` command — resolves catalog path, starts MCP server |
+| `src/commands/suggest.ts` | `emit suggest` command — builds context, drives Claude Code subprocess, post-exit verification scan |
+| `src/core/suggest/context.ts` | Context bundle builder — naming style, exemplar selection, feature-file loading |
+| `src/core/suggest/prompts.ts` | Agent brief — naming/governance rules, workflow steps, forbidden git ops |
 | `src/mcp/server.ts` | MCP server — registers 8 tools, connects stdio transport |
 | `src/mcp/tools/` | One file per MCP tool (get-event, update-event, get-property, update-property, list-events, list-not-found, search-events, get-catalog-health) |
 | `src/core/extractor/index.ts` | LLM prompt construction and metadata extraction |
@@ -399,6 +413,37 @@ order_placed:
 
 - **Pre-flight rejects legitimate alias renames** — when `emit fix` applies a `topic_aliases:` entry, the placeholder key (`<discovered:...>`) is replaced by the canonical name. The pre-flight currently treats that as a "vanished event" and rolls back. Use `--force` or rerun `emit fix` to apply.
 - **Over-aggressive fix proposals** — Claude Code can occasionally widen `repo.paths` to include `.emit/cache/` or the catalog itself, producing phantom call sites. Pre-flight catches this, but the proposal could be narrower.
+
+## Suggest Mode
+
+`emit suggest` proposes new events/properties to instrument from a plain-text ask. It builds a deterministic context bundle (catalog summary, exemplar call sites, inferred naming style, wrapper patterns, optional feature files parsed from the ask) and hands it to Claude Code as a subprocess. Claude Code edits source files in place and writes a reasoning doc to `.emit/suggestions/<branch-slug>.md`.
+
+### Contract
+
+- **Changes are left uncommitted.** The user reviews with `git diff` and owns git workflow entirely.
+- **Claude Code never runs git ops.** No `git add`/`commit`/`checkout`/`stash`/`push` or `gh pr create` — enforced by the brief and verified via HEAD SHA + branch checks.
+- **Reasoning doc is required.** `.emit/suggestions/<slug>.md` records the ask, any Q&A, proposed events with rationale + confidence, file placements.
+- **Headless mode auto-verifies** by running `emit scan --fresh --yes` after Claude Code exits.
+
+### Requirements
+
+- Non-empty catalog (run `emit scan` first). Empty catalog fails fast with actionable message — suggest learns from existing patterns.
+- Claude Code CLI on PATH.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/commands/suggest.ts` | Command entry, orchestration, pre-flight checks, Claude Code subprocess |
+| `src/core/suggest/context.ts` | Context bundle builder — naming style, exemplar selection, feature-file loading |
+| `src/core/suggest/prompts.ts` | Agent brief — naming/governance rules, workflow steps, forbidden git ops |
+| `.claude/skills/e2e-suggest/` | End-to-end harness; tier-based contract verification |
+
+### Common pitfalls
+
+- **Dirty working tree** — interactive mode prompts; headless mode warns to stderr but proceeds. Stage or stash beforehand if you want a clean diff to review.
+- **Empty catalog** — fails fast; bypassable only via `--debug-context` / `--debug-prompt` (no-LLM dev affordances).
+- **Brief temp file location** — written to `.emit/emit-brief-<slug>-<timestamp>.md` inside the repo (not `os.tmpdir()`), because `--permission-mode acceptEdits` only grants access within the workspace.
 
 ## Important Design Decisions
 

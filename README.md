@@ -124,6 +124,7 @@ Today only the event-level score gates `review_required` and the high/medium/low
 | `emit import <file>` | Import event names from a CSV or JSON file |
 | `emit push` | Push catalog to destinations (Mixpanel, Snowflake built-ins; `type: custom` for everything else) |
 | `emit fix` | Apply the config fix suggested by the last scan diagnosis |
+| `emit suggest` | Propose new events/properties to instrument from a plain-text ask (delegates implementation to Claude Code) |
 | `emit destination <add\|list\|test\|remove>` | Manage push destinations (scaffold custom adapters, list, test, remove) |
 | `emit status` | Show catalog health report |
 | `emit revert` | Restore an event definition from git history |
@@ -166,6 +167,16 @@ Run `emit <command> --help` for a quick reminder inline.
 |------|-------------|
 | `--yes` | Run headlessly (no interactive session); auto-run rescan after the fix |
 | `--force` | Skip the pre-flight check that rejects fixes which would hide already-cataloged events |
+
+### `emit suggest`
+
+| Flag | Description |
+|------|-------------|
+| `--ask <text>` | The ask in plain text (e.g. "measure where users drop off during signup"). Required with `--yes`. File paths embedded in the text are auto-detected and loaded as feature context. |
+| `-y, --yes` | Headless mode — launches Claude Code via `-p --permission-mode acceptEdits`, skips all prompts, auto-runs `emit scan --fresh --yes` after. Requires `--ask`. |
+| `--debug-context` | Print the deterministic LLM context bundle (catalog summary, exemplars, naming style) as JSON and exit. Requires `--ask`. No LLM call. |
+| `--debug-prompt` | Print the full agent brief that would be handed to Claude Code, and exit. Requires `--ask`. No LLM call. |
+| `--format <format>` | Reserved for future use. |
 
 ### `emit import <file>`
 
@@ -247,6 +258,11 @@ emit scan --yes --events foo,bar --fresh --format json
 
 # fix — apply the config fix the last scan suggested
 emit fix --yes
+
+# suggest — headless requires --ask; leaves changes uncommitted for review
+emit suggest --yes --ask "instrument where users drop off during signup"
+# Claude Code edits source files and writes .emit/suggestions/<branch-slug>.md
+# Run `git diff` to review; emit never commits.
 
 # import — fully flag-driven
 emit import events.csv --column event_name --replace

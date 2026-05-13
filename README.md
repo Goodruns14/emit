@@ -1,8 +1,8 @@
 # Emit
 
-**Three commands. Your event catalog, in git, generated from your code.**
+**Three commands. Your event catalog in git generated from your code.**
 
-Your `analytics.track()` calls already contain the property names, types, and business logic. Emit reads them, asks an LLM for the semantics, and writes a structured catalog you review in PRs — instead of maintaining a tracking plan that drifts from reality within weeks.
+Your `analytics.track()` calls already contain the property names, types, and business logic. Emit reads them, asks an LLM for the semantics, and writes a structured catalog you review in PRs.
 
 ```
    ┌──────────────────┐                       ┌──────────────────┐
@@ -11,7 +11,8 @@ Your `analytics.track()` calls already contain the property names, types, and bu
    └──────────────────┘                       └────────┬─────────┘
                                                        │
    ┌──────────────────┐         cross-ref              │
-   │  warehouse data  │  ──────────────────────────────┤
+   │  warehouse /     |
+      destinations    │  ──────────────────────────────┤
    └──────────────────┘                                ▼
                                             ┌──────────────────┐
                                             │ emit.catalog.yml │
@@ -20,8 +21,8 @@ Your `analytics.track()` calls already contain the property names, types, and bu
                                                      │  push
               ┌──────────────┬─────────────┬─────────┴──────────┐
               ▼              ▼             ▼                    ▼
-          Mixpanel       Snowflake    custom adapter         MCP server
-          Lexicon        comments     (any HTTP API)         → AI agents
+          Amplitude       Snowflake    custom adapter         MCP server
+                          comments     (any HTTP API)         
 ```
 
 ## What you get back

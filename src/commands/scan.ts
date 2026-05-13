@@ -916,7 +916,8 @@ export async function runScan(opts: ScanOptions): Promise<number> {
   }
 
   // ── Always show diff ──────────────────────────────────────────────
-  const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged);
+  const previousTotal = previousCatalog ? Object.keys(previousCatalog.events).length : undefined;
+  const diffSummary = formatTerminalDiff(diffCatalogs(previousCatalog, output), isPartialScan, unchanged, previousTotal);
   logger.blank();
   logger.line(diffSummary);
   logger.blank();

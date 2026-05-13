@@ -243,6 +243,21 @@ function validate(config: EmitConfig): void {
     }
   }
 
+  if (config.repo?.exclude_paths) {
+    for (const entry of config.repo.exclude_paths) {
+      if (typeof entry !== "string" || !entry) continue;
+      const cleaned = entry.replace(/^\*\*\//, "");
+      const isBasenameGlob = cleaned.includes("*") && !cleaned.includes("/");
+      if (!isBasenameGlob && cleaned.includes("/")) {
+        console.warn(
+          `[emit] repo.exclude_paths entry "${entry}" contains a slash. ` +
+            `Slash-containing entries POST-FILTER grep results — they do NOT skip directory traversal. ` +
+            `If you meant to skip a directory, use just its name (e.g. "worktrees" instead of "./.claude/worktrees/").`
+        );
+      }
+    }
+  }
+
   if (config.discriminator_properties) {
     for (const [eventName, cfg] of Object.entries(config.discriminator_properties)) {
       const prop = typeof cfg === "string" ? cfg : cfg.property;

@@ -63,6 +63,8 @@ const EXCLUDE_DIRS = [
   "vendor",
   // Common generated dirs
   "generated", ".cache", ".parcel-cache",
+  // Claude Code worktrees and artifacts — never canonical source
+  ".claude",
 ];
 
 /** Extra directories to exclude, set via config `repo.exclude_paths` */
@@ -213,7 +215,7 @@ export function hasNearbyTrackingCall(
   filePath: string,
   lineNumber: number,
   patterns: string[],
-  range = 5
+  range = 10
 ): boolean {
   try {
     const content = fs.readFileSync(filePath, "utf8");

@@ -1,13 +1,55 @@
 # Emit
 
-Give your analytics events definitions and meaning so your team (and AI) can do more accurate analysis every day without managing an event catalog.
+**Three commands. Your event catalog, in git, generated from your code.**
 
-Emit scans your event instrumentation code (CDPs like Segment or your own custom pipelines) and writes a structured catalog of every event and property in `emit.catalog.yml`. Commit it, review it in PRs, and feed it to whoever needs it.
+Your `analytics.track()` calls already contain the property names, types, and business logic. Emit reads them, asks an LLM for the semantics, and writes a structured catalog you review in PRs — instead of maintaining a tracking plan that drifts from reality within weeks.
 
-**What you get:**
-- **A tracking plan that actually stays current.**
-- **Faster, more trustworthy analysis.**
-- **AI agents that don't hallucinate column meanings.**
+```
+   ┌──────────────────┐                       ┌──────────────────┐
+   │  Your codebase   │        scan           │  Emit scanner    │
+   │  track() calls   │  ───────────────────▶ │  + LLM extract   │
+   └──────────────────┘                       └────────┬─────────┘
+                                                       │
+   ┌──────────────────┐         cross-ref              │
+   │  warehouse data  │  ──────────────────────────────┤
+   └──────────────────┘                                ▼
+                                            ┌──────────────────┐
+                                            │ emit.catalog.yml │
+                                            │   (lives in git) │
+                                            └────────┬─────────┘
+                                                     │  push
+              ┌──────────────┬─────────────┬─────────┴──────────┐
+              ▼              ▼             ▼                    ▼
+          Mixpanel       Snowflake    custom adapter         MCP server
+          Lexicon        comments     (any HTTP API)         → AI agents
+```
+
+## What you get back
+
+A snippet of a real `emit.catalog.yml`:
+
+```yaml
+purchase_completed:
+  description: "Fires when a customer successfully completes checkout."
+  fires_when: "After payment authorization succeeds and the order row is committed."
+  confidence: high
+  source_file: src/checkout/complete.ts:142
+  properties:
+    bill_amount:
+      type: number
+      description: "Final charged amount in cents. Negative values indicate a refund."
+      confidence: high
+    currency:
+      type: string
+      description: "ISO 4217 currency code, lowercased."
+      confidence: high
+    coupon_code:
+      type: string
+      description: "Coupon applied at checkout. Null when no coupon was used."
+      confidence: medium
+```
+
+Every entry is grounded in a real call site. Re-runs are cached by SHA-256 of the surrounding code, so unchanged files cost nothing.
 
 ## Prerequisites
 
@@ -64,32 +106,7 @@ Common flags: `--event <name>`, `--events <names>`, `--dry-run`, `--confirm`, `-
 
 > **Caching is on by default.** Emit caches LLM extractions by SHA-256 of the surrounding code context. Re-running a scan after no source changes is free and instant — only events whose code actually moved are re-extracted. Pass `--fresh` to force a full re-extraction.
 
-`emit.catalog.yml` is meant to be **committed alongside your code** and reviewed in PRs — same lifecycle as a schema migration. The whole point is that the catalog and the instrumentation can never silently drift apart.
-
-#### What you get back
-
-A snippet of a real `emit.catalog.yml`:
-
-```yaml
-purchase_completed:
-  description: "Fires when a customer successfully completes checkout."
-  fires_when: "After payment authorization succeeds and the order row is committed."
-  confidence: high
-  source_file: src/checkout/complete.ts:142
-  properties:
-    bill_amount:
-      type: number
-      description: "Final charged amount in cents. Negative values indicate a refund."
-      confidence: high
-    currency:
-      type: string
-      description: "ISO 4217 currency code, lowercased."
-      confidence: high
-    coupon_code:
-      type: string
-      description: "Coupon applied at checkout. Null when no coupon was used."
-      confidence: medium
-```
+`emit.catalog.yml` is meant to be **committed alongside your code** and reviewed in PRs — same lifecycle as a schema migration. The whole point is that the catalog and the instrumentation can never silently drift apart. (See the [sample output](#what-you-get-back) above for what one entry looks like.)
 
 ### 3. Check health
 

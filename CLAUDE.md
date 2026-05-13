@@ -6,17 +6,6 @@ Emit is an open-source CLI tool that automatically generates event metadata cata
 
 **The core insight:** The source code is the truth. The instrumentation code that fires `analytics.track("purchase_completed", { bill_amount: total - refundAmount })` contains more semantic meaning than any catalog entry ever will. We extract that meaning automatically.
 
-## Project Status
-
-- **Phase 0 (PoC):** Complete
-- **Phase 1 (CLI):** Complete — all commands built and working
-- **Phase 2 (GitHub Action):** Removed for MVP simplification
-- **Phase 3 (Hosted Platform + UI):** Not started
-- **Phase 4 (MCP Server):** Complete — local MCP server with 8 tools, `emit mcp` command
-- **Phase 5 (Implementation Agent):** Not started
-
-See `md files/emit-master-plan.md` for the full roadmap and architectural vision.
-
 ## Architecture
 
 ```
@@ -206,27 +195,25 @@ Test repos live in `test-repos/` (gitignored). They're split by what they exerci
 
 Added to stress-test emit across diverse real-world codebases:
 
-| Repo | SDK Pattern | Category | Events | Discovery | Notes |
-|------|-------------|----------|--------|-----------|-------|
-| `vscode` | `publicLog2(` | Custom telemetry | 12 | 100% | TypeScript generics + GDPR classifications |
-| `netlify-cli` | `track(` | Custom CLI | 10 | 100% | Validated event naming: `cli:{object}_{action}` |
-| `sentry` | `trackAnalytics(` | Multi-provider | 664+ | 100% | Amplitude frontend + Python backend analytics |
-| `grafana` | `reportInteraction(` | Framework telemetry | 366+ | 100% | Rudderstack backend, `grafana_*` namespace |
-| `posthog` | `posthog.capture(` | Self-dogfooding | 459+ | 100% | PostHog uses their own product |
-| `datahub` | `analytics.event(` | Enum-based events | 40+ | 100% | EventType enum, plugin architecture |
-| `metabase` | `trackSchemaEvent(` | Schema events | 70+ | 57% | Snowplow schema-based, event names in object props |
-| `kibana` | `reportEvent(` | Framework telemetry | 46+ | 67% | EVENT_TYPE constants, EBT analytics client |
-| `twenty` | `.track({` | Server monitoring | ~13 | 33% | Object params, not string event names |
-| `supabase` | `sendEvent(` | Custom studio | 1 | 50% | Most telemetry via platform API, not client code |
-| `plane` | `track_event(` | Python PostHog | 4 | 0%* | Events in Python backend, not TS. Tests .py scanning |
-| `prisma` | `checkpoint.` | OpenTelemetry | 1 | 17% | OTel spans ≠ analytics events. Tests edge case |
-| `mattermost` | N/A | Perf telemetry | 0 | 0% | Go backend telemetry only, no JS event tracking |
-| `directus` | `track(` | Aggregate reports | 0 | 0% | Server-side usage reports, not discrete events |
-
-*Plane events are in Python files which emit supports, but the event names are defined as constants referenced indirectly.
+| Repo | SDK Pattern | Category | Notes |
+|------|-------------|----------|-------|
+| `vscode` | `publicLog2(` | Custom telemetry | TypeScript generics + GDPR classifications |
+| `netlify-cli` | `track(` | Custom CLI | Validated event naming: `cli:{object}_{action}` |
+| `sentry` | `trackAnalytics(` | Multi-provider | Amplitude frontend + Python backend analytics |
+| `grafana` | `reportInteraction(` | Framework telemetry | Rudderstack backend, `grafana_*` namespace |
+| `posthog` | `posthog.capture(` | Self-dogfooding | PostHog uses their own product |
+| `datahub` | `analytics.event(` | Enum-based events | EventType enum, plugin architecture |
+| `metabase` | `trackSchemaEvent(` | Schema events | Snowplow schema-based, event names in object props |
+| `kibana` | `reportEvent(` | Framework telemetry | EVENT_TYPE constants, EBT analytics client |
+| `twenty` | `.track({` | Server monitoring | Object params, not string event names |
+| `supabase` | `sendEvent(` | Custom studio | Most telemetry via platform API, not client code |
+| `plane` | `track_event(` | Python PostHog | Events in Python backend, not TS. Tests .py scanning |
+| `prisma` | `checkpoint.` | OpenTelemetry | OTel spans ≠ analytics events. Tests edge case |
+| `mattermost` | N/A | Perf telemetry | Go backend telemetry only, no JS event tracking |
+| `directus` | `track(` | Aggregate reports | Server-side usage reports, not discrete events |
 
 **Key findings:**
-- Scanner achieves **100% discovery** for repos with standard `trackFn("event_name")` patterns
+- Scanner reliably discovers events in repos with standard `trackFn("event_name")` patterns
 - **Enum/constant resolution** improved: now tries PascalCase, camelCase, UPPER_SNAKE_CASE variants + broad search fallback
 - Repos with **object-param tracking** (twenty), **server-side only** (mattermost, directus), or **aggregate telemetry** (prisma) are intentionally hard edge cases
 

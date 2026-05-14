@@ -1,33 +1,29 @@
 # Emit
 
-**Three commands. Your event catalog in git generated from your code.**
+**Three commands. Your event catalog in git generated from code.**
 
-Your `analytics.track()` calls already contain the property names, types, and business logic. Emit reads them, asks an LLM for the semantics, and writes a structured catalog you review in PRs.
+Whether your code calls `track()`, publishes to SNS, or sends a Kafka message, emit reads the call site and writes a structured catalog you review in PRs.
 
 ```
-   ┌──────────────────┐                       ┌──────────────────┐
-   │  Your codebase   │        scan           │  Emit scanner    │
-   │  track() calls   │  ───────────────────▶ │  + LLM extract   │
-   └──────────────────┘                       └────────┬─────────┘
-                                                       │
-   ┌──────────────────┐         cross-ref              │
-   │  warehouse /     |
-      destinations    │  ──────────────────────────────┤
-   └──────────────────┘                                ▼
-                                            ┌──────────────────┐
-                                            │ emit.catalog.yml │
-                                            │   (lives in git) │
-                                            └────────┬─────────┘
-                                                     │  push
-              ┌──────────────┬─────────────┬─────────┴──────────┐
-              ▼              ▼             ▼                    ▼
-          Amplitude       Snowflake    custom adapter         MCP server
-                          comments     (any HTTP API)         
+   ┌──────────────────┐                  ┌──────────────────┐
+   │  Your codebase   │      scan        │  Emit scanner    │
+   │  event sites     │ ───────────────▶ │  + LLM extract   │
+   └──────────────────┘                  └────────┬─────────┘
+                                                  ▼
+                                       ┌──────────────────┐ read+write  ┌──────────────┐
+                                       │ emit.catalog.yml │ ◀─────────▶ │  MCP server  │
+                                       │   (lives in git) │             └──────────────┘
+                                       └────────┬─────────┘
+                                                │  push
+              ┌─────────────────────────────────┼─────────────────────────────────┐
+              ▼                                 ▼                                 ▼
+       Warehouse / lakehouse           Product analytics                    custom adapter
+       (Snowflake comments, ...)       (Mixpanel, ...)                      (any HTTP API)
 ```
 
 ## What you get back
 
-A snippet of a real `emit.catalog.yml`:
+A snippet from `emit.catalog.yml`:
 
 ```yaml
 purchase_completed:
@@ -50,7 +46,7 @@ purchase_completed:
       confidence: medium
 ```
 
-Every entry is grounded in a real call site. Re-runs are cached by SHA-256 of the surrounding code, so unchanged files cost nothing.
+Every entry is grounded in a real call site. Re-runs are cached by SHA-256 of the surrounding code.
 
 ## Prerequisites
 
@@ -72,17 +68,6 @@ Then verify:
 emit --help
 ```
 
-> **Permission error on macOS?** If you see `EACCES: permission denied` when running the install command, your system npm is writing to a root-owned directory. Fix it by redirecting npm's global prefix to a user-owned location:
->
-> ```bash
-> mkdir ~/.npm-global
-> npm config set prefix '~/.npm-global'
-> echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.zshrc && source ~/.zshrc
-> npm install -g emit-catalog
-> ```
->
-> Alternatively, install Node.js via [nvm](https://github.com/nvm-sh/nvm) or [Homebrew](https://brew.sh) to avoid this issue entirely.
-
 ## Quickstart
 
 ### 1. Initialize
@@ -91,7 +76,7 @@ emit --help
 emit init
 ```
 
-Interactive setup wizard. Enter your event names (CSV/JSON or in line), emit auto detects your LLM provider, and then kicks off your first scan. That's it.
+Interactive setup wizard. Enter your event names (CSV/JSON or in line), emit auto detects your LLM provider, and then kicks off your first scan.
 
 Creates `emit.config.yml`.
 
@@ -194,7 +179,6 @@ Run `emit <command> --help` for a quick reminder inline.
 | `-y, --yes` | Headless mode — launches Claude Code via `-p --permission-mode acceptEdits`, skips all prompts, auto-runs `emit scan --fresh --yes` after. Requires `--ask`. |
 | `--debug-context` | Print the deterministic LLM context bundle (catalog summary, exemplars, naming style) as JSON and exit. Requires `--ask`. No LLM call. |
 | `--debug-prompt` | Print the full agent brief that would be handed to Claude Code, and exit. Requires `--ask`. No LLM call. |
-| `--format <format>` | Reserved for future use. |
 
 ### `emit import <file>`
 

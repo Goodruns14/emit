@@ -2,13 +2,7 @@
 
 **Two commands. Your event catalog in git generated from code.**
 
-<div>
-    <a href="https://www.loom.com/share/afb56a8c84e140d68fb80fb571e7b0f2">
-    </a>
-    <a href="https://www.loom.com/share/afb56a8c84e140d68fb80fb571e7b0f2">
-      <img style="max-width:300px;" src="https://cdn.loom.com/sessions/thumbnails/afb56a8c84e140d68fb80fb571e7b0f2-1add03bdbed447bc-full-play.gif#t=0.1">
-    </a>
-  </div>
+https://github.com/user-attachments/assets/658ebe06-0b40-4b79-a19e-4ad8565cf47d
 
 Whether your code calls `track()`, publishes to SNS, or sends a Kafka message, emit reads the call site and writes a structured catalog you review in PRs.
 

@@ -1,6 +1,6 @@
 # Emit
 
-**Three commands. Your event catalog in git generated from code.**
+**Two commands. Your event catalog in git generated from code.**
 
 Whether your code calls `track()`, publishes to SNS, or sends a Kafka message, emit reads the call site and writes a structured catalog you review in PRs.
 
@@ -93,14 +93,6 @@ Common flags: `--event <name>`, `--events <names>`, `--dry-run`, `--confirm`, `-
 > **Caching is on by default.** Emit caches LLM extractions by SHA-256 of the surrounding code context. Re-running a scan after no source changes is free and instant — only events whose code actually moved are re-extracted. Pass `--fresh` to force a full re-extraction.
 
 `emit.catalog.yml` is meant to be **committed alongside your code** and reviewed in PRs — same lifecycle as a schema migration. The whole point is that the catalog and the instrumentation can never silently drift apart. (See the [sample output](#what-you-get-back) above for what one entry looks like.)
-
-### 3. Check health
-
-```bash
-emit status
-```
-
-Shows a catalog health report with confidence breakdown, stale events, and flagged items.
 
 ## Confidence levels
 

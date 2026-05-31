@@ -15,16 +15,23 @@ export function registerMcp(program: Command): void {
       "--catalog <path>",
       "Path to emit.catalog.yml (overrides emit.config.yml output.file)"
     )
-    .action(async (opts: { catalog?: string }) => {
+    .option(
+      "--catalog-set <path>",
+      "Path to an emit.catalogs.yml registry — serves the union of multiple repos' catalogs"
+    )
+    .action(async (opts: { catalog?: string; catalogSet?: string }) => {
       const exitCode = await runMcp(opts);
       process.exit(exitCode);
     });
 }
 
-async function runMcp(opts: { catalog?: string }): Promise<number> {
+async function runMcp(opts: { catalog?: string; catalogSet?: string }): Promise<number> {
   let catalogPath: string;
 
-  if (opts.catalog) {
+  if (opts.catalogSet) {
+    // A registry path; readCatalog resolves it to the merged union of all listed catalogs.
+    catalogPath = path.resolve(opts.catalogSet);
+  } else if (opts.catalog) {
     catalogPath = path.resolve(opts.catalog);
   } else {
     try {

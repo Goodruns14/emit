@@ -14,6 +14,8 @@ import { listNotFoundTool } from "./tools/list-not-found.js";
 import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
 import { listPropertiesTool } from "./tools/list-properties.js";
 import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
+import { listResolvedTool } from "./tools/list-resolved.js";
+import { getCoverageTool } from "./tools/get-coverage.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -106,6 +108,29 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     "Find all events that fire from a given source file. Use this to understand what analytics a specific feature or page tracks. Supports partial file path matching (e.g. 'checkout.ts' matches './src/checkout.ts').",
     { file_path: z.string().describe("Full or partial file path to match against event source files") },
     async ({ file_path }) => getEventsBySourceFileTool(catalogPath, { file_path })
+  );
+
+  server.tool(
+    "list_resolved",
+    "List events that were located under a different name than requested (detected renames). Use this to map an old or analytics-tool event name to its current name in code.",
+    {},
+    async () => listResolvedTool(catalogPath)
+  );
+
+  server.tool(
+    "get_coverage",
+    "Get instrumentation coverage from the last `emit reconcile`: which events are tracked (matched), fire in the analytics tool but have no code (oa-only), or exist in code but have no analytics data (code-only), plus ambiguous matches needing review. Use this to answer 'do we track X?' and 'what's missing?'.",
+    {
+      status: z
+        .enum(["matched", "oa_only", "code_only", "needs_review"])
+        .optional()
+        .describe("Return only one coverage bucket"),
+      source_catalog: z
+        .string()
+        .optional()
+        .describe("Filter to events from one repo (catalog set name)"),
+    },
+    async ({ status, source_catalog }) => getCoverageTool(catalogPath, { status, source_catalog })
   );
 
   // ── Write tools ─────────────────────────────────────────────────────────────

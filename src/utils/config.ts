@@ -165,6 +165,19 @@ function validate(config: EmitConfig): void {
     }
   }
 
+  // oa_mcp validation: connection to the analytics-source MCP for `emit reconcile`.
+  if (config.oa_mcp !== undefined) {
+    if (typeof config.oa_mcp !== "object" || Array.isArray(config.oa_mcp)) {
+      throw new Error("oa_mcp: must be an object with at least a `command` string");
+    }
+    if (typeof config.oa_mcp.command !== "string" || !config.oa_mcp.command) {
+      throw new Error("oa_mcp.command: required non-empty string");
+    }
+    if (config.oa_mcp.args !== undefined && !Array.isArray(config.oa_mcp.args)) {
+      throw new Error("oa_mcp.args: must be an array of strings");
+    }
+  }
+
   // Producer-mode rpc_exchanges validation: must be string[].
   if (config.rpc_exchanges !== undefined) {
     if (!Array.isArray(config.rpc_exchanges)) {

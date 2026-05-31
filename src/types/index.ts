@@ -88,6 +88,11 @@ export interface CatalogEvent {
   confidence_reason: string;
   review_required: boolean;
   segment_event_name?: string;
+  /** The event's name as it appears in the analytics tool (e.g. OA/Segment), discovered
+   *  and persisted by `emit reconcile` when an OA event is matched to this code event.
+   *  Not computed at scan time. Used as the shared join key between emit's catalog and the
+   *  analytics-source feed. */
+  analytics_name?: string;
   track_pattern?: string;
   parent_event?: string;
   discriminator_property?: string;
@@ -110,6 +115,10 @@ export interface CatalogEvent {
   flags: string[];
   context_hash?: string;
   last_modified_by?: string;
+  /** Name of the source catalog (repo) this event came from, set only when events are
+   *  merged from multiple catalogs via a catalog set / registry. Undefined in a
+   *  single-repo catalog. */
+  source_catalog?: string;
 
   // ─────────────────────────────────────────────
   // Producer-mode fields (Phase 1)
@@ -710,6 +719,26 @@ export interface EmitConfig {
   };
   llm: LlmCallConfig;
   destinations?: DestinationConfig[];
+  /** Connection to an external "analytics-source" MCP that lists events as they appear in
+   *  the analytics tool (OA/Segment). Consumed by `emit reconcile` to join code-truth
+   *  against production-truth. */
+  oa_mcp?: OaMcpConfig;
+}
+
+/** How `emit reconcile` reaches the analytics-source MCP (emit acts as the MCP client). */
+export interface OaMcpConfig {
+  /** Command launched over stdio to start the OA MCP server (e.g. "npx", "node"). */
+  command: string;
+  /** Arguments for the command. */
+  args?: string[];
+  /** Tool on the OA MCP that returns the event list. Default: "list_events". */
+  list_tool?: string;
+  /** Field on each returned event holding its (possibly renamed) analytics name. Default: "name". */
+  name_field?: string;
+  /** Optional field holding the original/source (pre-rename) name, when the feed exposes it. */
+  original_name_field?: string;
+  /** Optional field holding the event's property names (string array) for shape matching. */
+  properties_field?: string;
 }
 
 // ─────────────────────────────────────────────

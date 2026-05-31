@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
-import type { EmitCatalog, CatalogEvent, PropertyDefinition } from "../../types/index.js";
+import type { EmitCatalog, CatalogEvent, CatalogStats, PropertyDefinition } from "../../types/index.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -247,6 +247,13 @@ function writeCatalogDirectory(dirPath: string, catalog: EmitCatalog): void {
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export function readCatalog(filePath: string): EmitCatalog {
+  // A catalog *set* registry (emit.catalogs.yml) is read as the merged union of the
+  // catalogs it lists. This makes every reader (MCP tools, reconcile) cross-repo aware
+  // without any caller changes. Registry detection runs first because a registry file
+  // ends in .yml (so isCatalogDirectory is false) but has no `events` key.
+  if (isRegistryFile(filePath)) {
+    return loadCatalogSet(filePath);
+  }
   if (isCatalogDirectory(filePath)) {
     return readCatalogDirectory(filePath);
   }
@@ -254,11 +261,154 @@ export function readCatalog(filePath: string): EmitCatalog {
 }
 
 export function writeCatalog(filePath: string, catalog: EmitCatalog): void {
+  if (isRegistryFile(filePath)) {
+    throw new Error(
+      "Cannot write to a catalog set registry (emit.catalogs.yml). " +
+        "Writes must target a single repo's catalog, not the union."
+    );
+  }
   if (isCatalogDirectory(filePath)) {
     writeCatalogDirectory(filePath, catalog);
   } else {
     writeCatalogFile(filePath, catalog);
   }
+}
+
+// ── Cross-repo catalog set (registry) ──────────────────────────────────────
+//
+// A registry file (`emit.catalogs.yml`) lists per-repo catalogs to union into one
+// queryable catalog. Scanning still happens per repo — this only *reads* and merges
+// committed catalogs. It is the mechanism that ties repos together for the MCP server and
+// `emit reconcile`; neither does the merging itself.
+
+export interface CatalogRegistryEntry {
+  name: string;
+  path: string;
+}
+
+const EMPTY_CATALOG_SET_STATS: CatalogStats = {
+  events_targeted: 0,
+  events_located: 0,
+  events_not_found: 0,
+  high_confidence: 0,
+  medium_confidence: 0,
+  low_confidence: 0,
+};
+
+/**
+ * True when `filePath` is a catalog *set* registry rather than a single catalog. Detected
+ * by the conventional filename, or by sniffing a top-level `catalogs:` list with no
+ * `events:` key (so a normal catalog is never mistaken for a registry).
+ */
+export function isRegistryFile(filePath: string): boolean {
+  if (path.basename(filePath) === "emit.catalogs.yml") return true;
+  try {
+    const parsed = yaml.load(fs.readFileSync(filePath, "utf8")) as
+      | { catalogs?: unknown; events?: unknown }
+      | undefined;
+    return (
+      !!parsed &&
+      typeof parsed === "object" &&
+      Array.isArray(parsed.catalogs) &&
+      parsed.events === undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Parse + validate a registry file into its entries. */
+export function loadRegistry(registryPath: string): CatalogRegistryEntry[] {
+  if (!fs.existsSync(registryPath)) {
+    throw new Error(`Catalog set registry not found: ${registryPath}`);
+  }
+  const parsed = yaml.load(fs.readFileSync(registryPath, "utf8")) as
+    | { catalogs?: unknown }
+    | undefined;
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.catalogs)) {
+    throw new Error(
+      `Invalid catalog set registry: ${registryPath}\n  Expected a top-level \`catalogs:\` list of { name, path } entries.`
+    );
+  }
+  return parsed.catalogs.map((raw: unknown, i: number) => {
+    if (!raw || typeof raw !== "object") {
+      throw new Error(`catalogs[${i}]: must be an object with { name, path }`);
+    }
+    const { name, path: p } = raw as Record<string, unknown>;
+    if (typeof name !== "string" || !name) {
+      throw new Error(`catalogs[${i}].name: required non-empty string`);
+    }
+    if (typeof p !== "string" || !p) {
+      throw new Error(`catalogs[${i}].path: required non-empty string`);
+    }
+    return { name, path: p };
+  });
+}
+
+function addCatalogStats(a: CatalogStats, b: CatalogStats | undefined): CatalogStats {
+  if (!b) return a;
+  return {
+    events_targeted: a.events_targeted + (b.events_targeted ?? 0),
+    events_located: a.events_located + (b.events_located ?? 0),
+    events_not_found: a.events_not_found + (b.events_not_found ?? 0),
+    high_confidence: a.high_confidence + (b.high_confidence ?? 0),
+    medium_confidence: a.medium_confidence + (b.medium_confidence ?? 0),
+    low_confidence: a.low_confidence + (b.low_confidence ?? 0),
+  };
+}
+
+/**
+ * Union the catalogs named in a registry into a single in-memory `EmitCatalog`.
+ *
+ * Each event is tagged with `source_catalog` (the registry entry name). Keys are the
+ * natural event name; on a cross-repo collision the later entry is keyed
+ * `name@source_catalog` so nothing is lost and natural-name lookups still resolve the
+ * first occurrence. Property definitions are unioned (first-wins); `not_found` deduped;
+ * `resolved` concatenated; stats summed.
+ */
+export function loadCatalogSet(registryPath: string): EmitCatalog {
+  const entries = loadRegistry(registryPath);
+  const baseDir = path.dirname(path.resolve(registryPath));
+
+  const merged: EmitCatalog = {
+    version: 0,
+    generated_at: new Date().toISOString(),
+    commit: "",
+    stats: { ...EMPTY_CATALOG_SET_STATS },
+    property_definitions: {},
+    events: {},
+    not_found: [],
+    resolved: [],
+  };
+  const notFound = new Set<string>();
+
+  for (const entry of entries) {
+    const abs = path.isAbsolute(entry.path)
+      ? entry.path
+      : path.resolve(baseDir, entry.path);
+    const catalog = readCatalog(abs);
+
+    merged.version = Math.max(merged.version, catalog.version ?? 0);
+    merged.stats = addCatalogStats(merged.stats, catalog.stats);
+
+    for (const [name, def] of Object.entries(catalog.property_definitions ?? {})) {
+      if (!(name in merged.property_definitions)) {
+        merged.property_definitions[name] = def;
+      }
+    }
+
+    for (const [eventKey, ev] of Object.entries(catalog.events ?? {})) {
+      const tagged: CatalogEvent = { ...ev, source_catalog: entry.name };
+      const key = eventKey in merged.events ? `${eventKey}@${entry.name}` : eventKey;
+      merged.events[key] = tagged;
+    }
+
+    for (const nf of catalog.not_found ?? []) notFound.add(nf);
+    if (catalog.resolved?.length) merged.resolved!.push(...catalog.resolved);
+  }
+
+  merged.not_found = [...notFound];
+  return merged;
 }
 
 export function getEvent(

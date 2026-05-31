@@ -126,6 +126,7 @@ Today only the event-level score gates `review_required` and the high/medium/low
 | `emit destination <add\|list\|test\|remove>` | Manage push destinations (scaffold custom adapters, list, test, remove) |
 | `emit status` | Show catalog health report |
 | `emit revert` | Restore an event definition from git history |
+| `emit reconcile` | Join the catalog against the analytics-source (OA) event list; write a coverage report and stamp discovered analytics names onto matched events |
 | `emit mcp` | Start a local MCP server exposing the catalog to AI agents |
 
 Run `emit <command> --help` for a quick reminder inline.
@@ -322,7 +323,9 @@ The server communicates over stdio. Add it to your Claude Desktop config:
 | `list_events` | List all events, optionally filtered by confidence level or review status |
 | `list_properties` | List all properties with how many events use each one |
 | `list_not_found` | Events that couldn't be located in source code, useful for catalog maintenance |
-| `search_events` | Full-text search across event names, descriptions, and fires_when text |
+| `list_resolved` | Events located under a different name than requested (detected renames) — maps an old/analytics-tool name to the current code name |
+| `get_coverage` | Instrumentation coverage from the last `emit reconcile`: matched / oa-only (fires, no code) / code-only (instrumented, no data) / needs-review |
+| `search_events` | Full-text search across event names, **analytics names**, descriptions, and fires_when text |
 | `get_events_by_source_file` | Find all events that fire from a given source file (supports partial path matching) |
 | `get_catalog_health` | Summary of total events, confidence breakdown, and events needing review |
 | `update_event_description` | Update an event's description and fires_when, writes to `emit.catalog.yml` |

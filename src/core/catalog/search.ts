@@ -27,6 +27,9 @@ export function filterEvents(
 // property sample value (which is often an error-message string or UI copy).
 const WEIGHTS = {
   event_name: 3.0,
+  // The name as it appears in the analytics tool (OA/Segment), discovered by reconcile.
+  // Weighted like event_name: a PM/agent often knows only the analytics-side name.
+  analytics_name: 3.0,
   description: 2.0,
   fires_when: 2.0,
   property_name: 1.5,
@@ -84,6 +87,9 @@ export function searchEvents(
     let score = 0;
 
     score += countTokenHits(name, tokens) * WEIGHTS.event_name;
+    if (event.analytics_name) {
+      score += countTokenHits(event.analytics_name, tokens) * WEIGHTS.analytics_name;
+    }
     if (event.description) {
       score += countTokenHits(event.description, tokens) * WEIGHTS.description;
     }

@@ -15,16 +15,28 @@ export function registerMcp(program: Command): void {
       "--catalog <path>",
       "Path to emit.catalog.yml (overrides emit.config.yml output.file)"
     )
-    .action(async (opts: { catalog?: string }) => {
+    .option(
+      "--catalog-set <path>",
+      "Path to an emit.catalogs.yml registry; serves the union of the listed catalogs"
+    )
+    .action(async (opts: { catalog?: string; catalogSet?: string }) => {
       const exitCode = await runMcp(opts);
       process.exit(exitCode);
     });
 }
 
-async function runMcp(opts: { catalog?: string }): Promise<number> {
-  let catalogPath: string;
+async function runMcp(opts: { catalog?: string; catalogSet?: string }): Promise<number> {
+  if (opts.catalog && opts.catalogSet) {
+    logger.error("Pass either --catalog or --catalog-set, not both.");
+    return 1;
+  }
 
-  if (opts.catalog) {
+  let catalogPath: string;
+  const isSet = Boolean(opts.catalogSet);
+
+  if (opts.catalogSet) {
+    catalogPath = path.resolve(opts.catalogSet);
+  } else if (opts.catalog) {
     catalogPath = path.resolve(opts.catalog);
   } else {
     try {
@@ -42,14 +54,16 @@ async function runMcp(opts: { catalog?: string }): Promise<number> {
 
   if (!catalogExists(catalogPath)) {
     logger.error(
-      `Catalog not found: ${catalogPath}\n  Run \`emit scan\` first to generate the catalog.`
+      isSet
+        ? `Catalog registry not found: ${catalogPath}`
+        : `Catalog not found: ${catalogPath}\n  Run \`emit scan\` first to generate the catalog.`
     );
     return 1;
   }
 
   // Write startup message to stderr so it doesn't pollute the stdio MCP stream
   process.stderr.write(
-    `emit MCP server started — catalog: ${catalogPath}\n`
+    `emit MCP server started — ${isSet ? "catalog set" : "catalog"}: ${catalogPath}\n`
   );
 
   try {

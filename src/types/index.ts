@@ -111,6 +111,14 @@ export interface CatalogEvent {
   context_hash?: string;
   last_modified_by?: string;
 
+  /**
+   * Runtime-only tag identifying which catalog in a catalog set (`emit.catalogs.yml`)
+   * this event came from. Set by `loadCatalogSet` during a cross-repo union; it is
+   * NEVER written to disk — `writeCatalog` refuses registry paths and reconcile
+   * write-back re-reads each source catalog fresh. Absent for single-catalog reads.
+   */
+  source_catalog?: string;
+
   // ─────────────────────────────────────────────
   // Producer-mode fields (Phase 1)
   // All optional and only populated when scan runs with mode: 'producer' or 'both'.

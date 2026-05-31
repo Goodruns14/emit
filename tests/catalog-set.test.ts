@@ -225,6 +225,26 @@ describe("loadCatalogSet — union semantics", () => {
     const union = loadCatalogSet(reg);
     expect(Object.keys(union.events).sort()).toEqual(["only_a", "only_b"]);
   });
+
+  it("federates a directory-mode catalog as a set member", () => {
+    // Single-file member.
+    writeYaml("repoA/emit.catalog.yml", makeCatalog({ signup: makeEvent() }));
+    // Directory-mode member: a path with no .yml extension routes writeCatalog to
+    // the directory writer (_index.yml + events/<slug>.yml).
+    const dirCatalog = path.join(tmp, "repoB", "catalog");
+    writeCatalog(dirCatalog, makeCatalog({ purchase: makeEvent() }));
+    expect(fs.existsSync(path.join(dirCatalog, "_index.yml"))).toBe(true);
+
+    const reg = writeYaml("emit.catalogs.yml", {
+      catalogs: [
+        { name: "a", path: "repoA/emit.catalog.yml" },
+        { name: "b", path: "repoB/catalog" },
+      ],
+    });
+    const union = loadCatalogSet(reg);
+    expect(union.events.signup.source_catalog).toBe("a");
+    expect(union.events.purchase.source_catalog).toBe("b");
+  });
 });
 
 // ── readCatalog / writeCatalog registry awareness ─────────────────────────────

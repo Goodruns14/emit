@@ -471,6 +471,7 @@ catalogs:
 | `src/commands/catalogs.ts` | `emit catalogs add` — manage the registry |
 | `src/mcp/tools/list-resolved.ts` | `list_resolved` MCP tool |
 | `tests/catalog-set.test.ts` | Union semantics, registry validation, tools-over-union (21 tests) |
+| `tests/mcp-server-set.test.ts` | End-to-end smoke: real MCP client ↔ server querying the union — in-process (`createMcpServer` + in-memory transport) and the real `emit mcp --catalog-set` subprocess over stdio |
 
 ## Important Design Decisions
 

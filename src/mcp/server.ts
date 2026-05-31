@@ -19,7 +19,13 @@ import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js"
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-export async function startMcpServer(catalogPath: string): Promise<void> {
+/**
+ * Build the MCP server and register all tools against a catalog path (a single
+ * catalog file/dir, or an emit.catalogs.yml registry for the cross-repo union).
+ * Transport-agnostic so it can be driven over stdio in production or an
+ * in-memory transport in tests.
+ */
+export function createMcpServer(catalogPath: string): McpServer {
   const server = new McpServer({
     name: "emit-catalog",
     version: pkg.version,
@@ -144,6 +150,12 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     async ({ event_name, property_name, description }) =>
       updatePropertyTool(catalogPath, { event_name, property_name, description })
   );
+
+  return server;
+}
+
+export async function startMcpServer(catalogPath: string): Promise<void> {
+  const server = createMcpServer(catalogPath);
 
   // ── Connect and serve ────────────────────────────────────────────────────────
 

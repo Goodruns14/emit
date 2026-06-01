@@ -525,6 +525,8 @@ The MCP server also ships **server-level `instructions`** (`SERVER_INSTRUCTIONS`
 | `src/mcp/tools/get-coverage.ts` | `get_coverage` MCP tool |
 | `tests/reconcile-join.test.ts` | Matcher unit tests (18) |
 | `tests/reconcile-e2e.test.ts` | End-to-end against a fake analytics MCP fixture (`tests/fixtures/fake-analytics-mcp.mjs`) — write-back + get_coverage |
+| `scripts/reconcile-sandbox.mjs` | Manual sandbox (`npm run sandbox:reconcile`): builds two fake repos + a registry + a fake analytics MCP, runs union + reconcile (all four buckets + write-back), and prints the exact MCP Inspector / Claude Desktop commands to drive it by hand. No LLM, repeatable. |
+| `scripts/sandbox-analytics-mcp.mjs` | Fake analytics MCP for the sandbox (events crafted to hit every bucket) |
 
 ## Important Design Decisions
 

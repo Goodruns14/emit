@@ -12,6 +12,7 @@ import { getCatalogHealthTool } from "./tools/get-catalog-health.js";
 import { searchEventsTool } from "./tools/search-events.js";
 import { listNotFoundTool } from "./tools/list-not-found.js";
 import { listResolvedTool } from "./tools/list-resolved.js";
+import { getCoverageTool } from "./tools/get-coverage.js";
 import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
 import { listPropertiesTool } from "./tools/list-properties.js";
 import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
@@ -20,22 +21,41 @@ const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
 /**
+ * Server-level guidance surfaced to the model by the MCP client at connection
+ * time (no user prompt needed). It tells the agent how to use emit ALONGSIDE an
+ * analytics/query tool (e.g. a Mixpanel / PostHog / Amplitude MCP): emit for
+ * meaning + correct names + coverage; the analytics tool for live numbers.
+ */
+const SERVER_INSTRUCTIONS = [
+  "This server is the source of truth for what your analytics events MEAN and whether your tracking is trustworthy. It is generated from the instrumentation code itself.",
+  "",
+  "Work ALONGSIDE your analytics/query tool (e.g. a Mixpanel, PostHog, or Amplitude MCP), not instead of it: use THIS server for meaning, correct event names, and coverage; use the analytics tool for live numbers.",
+  "",
+  "Recommended workflow for any product or analytics question:",
+  "1. Resolve the event here first — search_events / list_events / get_event_description — to get its real meaning, its properties, and the correct name. Names often differ between code and the analytics tool; when they do, this catalog records the analytics-tool name as `analytics_name`. Query your analytics tool by `analytics_name` when it is present, otherwise by the event name.",
+  "2. Before trusting an event's numbers, call get_coverage: `matched` = reliable; `code_only` = instrumented but sending NO data (do not trust counts); `analytics_only` = data exists with no code emit can explain; `needs_review` = unconfirmed. Warn the user about unreliable events.",
+  "3. Use get_property_description / get_property_across_events to choose correct breakdowns and filters, and to confirm a property means the same thing across events.",
+  "",
+  "Prefer this catalog's descriptions over guessing from event names. If an event is not in the catalog, say so rather than inventing meaning.",
+].join("\n");
+
+/**
  * Build the MCP server and register all tools against a catalog path (a single
  * catalog file/dir, or an emit.catalogs.yml registry for the cross-repo union).
  * Transport-agnostic so it can be driven over stdio in production or an
  * in-memory transport in tests.
  */
 export function createMcpServer(catalogPath: string): McpServer {
-  const server = new McpServer({
-    name: "emit-catalog",
-    version: pkg.version,
-  });
+  const server = new McpServer(
+    { name: "emit-catalog", version: pkg.version },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
 
   // ── Read tools ──────────────────────────────────────────────────────────────
 
   server.tool(
     "get_event_description",
-    "Get the full definition of an analytics event — what it means, when it fires, its properties, confidence level, and source file. Use this to understand an event before building queries, charts, or dashboards in an analytics platform.",
+    "Get the full definition of an analytics event — what it means, when it fires, its properties, confidence level, source file, and analytics_name (its name in the analytics tool, if different). Use this to understand an event before building queries, charts, or dashboards; pair with get_coverage to check whether the event is trustworthy.",
     { event_name: z.string().describe("The name of the event (e.g. 'purchase_completed')") },
     async ({ event_name }) => getEventTool(catalogPath, { event_name })
   );
@@ -53,7 +73,7 @@ export function createMcpServer(catalogPath: string): McpServer {
 
   server.tool(
     "list_events",
-    "List all tracked events, optionally filtered by confidence or review status. Start here to see what events are available before building reports or dashboards. Returns a summary — use get_event_description for full details.",
+    "List all tracked events, optionally filtered by confidence or review status. See what events are available before building reports or dashboards. Returns a summary — use get_event_description for full details and get_coverage to see which events are reliable.",
     {
       confidence: z
         .enum(["high", "medium", "low"])
@@ -70,7 +90,7 @@ export function createMcpServer(catalogPath: string): McpServer {
 
   server.tool(
     "search_events",
-    "Find events by name or meaning. Use this before querying an analytics platform to confirm the correct event name, understand what it tracks, and discover available properties for breakdowns and filters.",
+    "Find events by name or meaning — START HERE for any analytics question. Confirms the correct event name (and the analytics-tool name via analytics_name when it differs), what the event tracks, and its properties, before you query your analytics tool for numbers. Also matches on analytics_name.",
     { query: z.string().describe("Search query to match against event names, descriptions, and fires_when text") },
     async ({ query }) => searchEventsTool(catalogPath, { query })
   );
@@ -87,6 +107,22 @@ export function createMcpServer(catalogPath: string): McpServer {
     "List events that were missing under their listed name but found in code under a different name (likely renames) during the last scan. original_name is the old/listed name; actual_event_name is what's in code now. Over a catalog set, this spans every repo.",
     {},
     async () => listResolvedTool(catalogPath)
+  );
+
+  server.tool(
+    "get_coverage",
+    "Read the analytics↔code coverage map from the latest `emit reconcile` run: matched (code ↔ analytics), analytics_only (fires but no code — a blind spot), code_only (instrumented but no data — dead/ungated), and needs_review. Use this to answer 'is our tracking healthy?' and to find gaps before trusting an event. Filter by status or by repo (source).",
+    {
+      status: z
+        .enum(["matched", "analytics_only", "code_only", "needs_review"])
+        .optional()
+        .describe("Return only this bucket"),
+      source: z
+        .string()
+        .optional()
+        .describe("Filter to events from this catalog (source_catalog name) in a catalog set"),
+    },
+    async ({ status, source }) => getCoverageTool(catalogPath, { status, source })
   );
 
   server.tool(

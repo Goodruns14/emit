@@ -45,7 +45,8 @@
     "start": "node dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "sandbox:reconcile": "node scripts/reconcile-sandbox.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",

@@ -144,8 +144,22 @@ describe("MCP server over a catalog set (in-process client↔server)", () => {
           "search_events",
           "get_event_description",
           "list_resolved",
+          "get_coverage",
         ])
       );
+    } finally {
+      await close();
+    }
+  });
+
+  it("ships server-level instructions that orchestrate emit alongside an analytics tool", async () => {
+    const { client, close } = await connect();
+    try {
+      const instructions = client.getInstructions();
+      expect(instructions).toBeTruthy();
+      expect(instructions).toMatch(/alongside/i);
+      expect(instructions).toMatch(/get_coverage/);
+      expect(instructions).toMatch(/analytics_name/);
     } finally {
       await close();
     }

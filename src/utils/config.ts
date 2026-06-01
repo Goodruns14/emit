@@ -334,6 +334,44 @@ function validate(config: EmitConfig): void {
       }
     }
   }
+
+  // Reconcile config validation (analytics source for `emit reconcile`).
+  if (config.analytics_mcp !== undefined) {
+    const a = config.analytics_mcp;
+    if (typeof a !== "object" || Array.isArray(a)) {
+      throw new Error("analytics_mcp: must be an object");
+    }
+    if (typeof a.command !== "string" || !a.command.trim()) {
+      throw new Error(
+        "analytics_mcp.command: required non-empty string (the command to spawn the analytics MCP)"
+      );
+    }
+    if (
+      a.args !== undefined &&
+      (!Array.isArray(a.args) || a.args.some((x) => typeof x !== "string"))
+    ) {
+      throw new Error("analytics_mcp.args: must be an array of strings");
+    }
+    if (a.tool_name !== undefined && (typeof a.tool_name !== "string" || !a.tool_name.trim())) {
+      throw new Error("analytics_mcp.tool_name: must be a non-empty string");
+    }
+    if (a.env !== undefined && (typeof a.env !== "object" || Array.isArray(a.env))) {
+      throw new Error("analytics_mcp.env: must be a string-to-string map");
+    }
+    if (a.thresholds !== undefined) {
+      for (const [k, v] of Object.entries(a.thresholds)) {
+        if (typeof v !== "number" || v < 0 || v > 1) {
+          throw new Error(`analytics_mcp.thresholds.${k}: must be a number in [0, 1]`);
+        }
+      }
+    }
+  }
+  if (
+    config.analytics_csv !== undefined &&
+    (typeof config.analytics_csv !== "string" || !config.analytics_csv.trim())
+  ) {
+    throw new Error("analytics_csv: must be a non-empty string (path to a CSV/TSV/JSON export)");
+  }
 }
 
 /**

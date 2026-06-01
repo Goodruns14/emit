@@ -2,6 +2,16 @@ import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
 import type { EmitCatalog, CatalogEvent, PropertyDefinition } from "../../types/index.js";
+import { isCatalogRegistry, loadCatalogSet } from "./set.js";
+
+// Re-export the catalog-set (cross-repo union) API so consumers have a single
+// entry point through the catalog module.
+export { isCatalogRegistry, loadCatalogSet, loadCatalogSources } from "./set.js";
+export type {
+  CatalogRegistry,
+  CatalogRegistryEntry,
+  ResolvedCatalogSource,
+} from "./set.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -250,10 +260,36 @@ export function readCatalog(filePath: string): EmitCatalog {
   if (isCatalogDirectory(filePath)) {
     return readCatalogDirectory(filePath);
   }
-  return readCatalogFile(filePath);
+  // Single-file path. Content-sniff so a catalog registry (emit.catalogs.yml,
+  // which also ends in .yml) is federated into a union rather than mis-parsed
+  // as a single catalog. Missing files fall through to readCatalogFile for the
+  // standard "not found" error. Normal catalogs are read exactly once.
+  if (!fs.existsSync(filePath)) {
+    return readCatalogFile(filePath);
+  }
+  const parsed = yaml.load(fs.readFileSync(filePath, "utf8"));
+  if (isCatalogRegistry(parsed)) {
+    return loadCatalogSet(filePath);
+  }
+  if (!parsed || typeof parsed !== "object" || !(parsed as { events?: unknown }).events) {
+    throw new Error(`Invalid catalog format: ${filePath}`);
+  }
+  return parsed as EmitCatalog;
 }
 
 export function writeCatalog(filePath: string, catalog: EmitCatalog): void {
+  // Never clobber a registry with a dumped catalog (which would also persist
+  // runtime-only source_catalog tags). New-file writes (no file yet) are fine.
+  if (!isCatalogDirectory(filePath) && fs.existsSync(filePath)) {
+    const parsed = yaml.load(fs.readFileSync(filePath, "utf8"));
+    if (isCatalogRegistry(parsed)) {
+      throw new Error(
+        `Refusing to overwrite a catalog registry: ${filePath}\n` +
+          "  This file lists multiple catalogs; it is not itself a catalog. " +
+          "Write-back targets individual catalog files instead."
+      );
+    }
+  }
   if (isCatalogDirectory(filePath)) {
     writeCatalogDirectory(filePath, catalog);
   } else {

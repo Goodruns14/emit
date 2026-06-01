@@ -11,6 +11,7 @@ import { listEventsTool } from "./tools/list-events.js";
 import { getCatalogHealthTool } from "./tools/get-catalog-health.js";
 import { searchEventsTool } from "./tools/search-events.js";
 import { listNotFoundTool } from "./tools/list-not-found.js";
+import { listResolvedTool } from "./tools/list-resolved.js";
 import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
 import { listPropertiesTool } from "./tools/list-properties.js";
 import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
@@ -18,7 +19,13 @@ import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js"
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
-export async function startMcpServer(catalogPath: string): Promise<void> {
+/**
+ * Build the MCP server and register all tools against a catalog path (a single
+ * catalog file/dir, or an emit.catalogs.yml registry for the cross-repo union).
+ * Transport-agnostic so it can be driven over stdio in production or an
+ * in-memory transport in tests.
+ */
+export function createMcpServer(catalogPath: string): McpServer {
   const server = new McpServer({
     name: "emit-catalog",
     version: pkg.version,
@@ -73,6 +80,13 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     "List events that were in your import list or previously cataloged but could not be located in source code during the last scan. Use this for catalog maintenance — these events may have been renamed, deleted, or moved.",
     {},
     async () => listNotFoundTool(catalogPath)
+  );
+
+  server.tool(
+    "list_resolved",
+    "List events that were missing under their listed name but found in code under a different name (likely renames) during the last scan. original_name is the old/listed name; actual_event_name is what's in code now. Over a catalog set, this spans every repo.",
+    {},
+    async () => listResolvedTool(catalogPath)
   );
 
   server.tool(
@@ -136,6 +150,12 @@ export async function startMcpServer(catalogPath: string): Promise<void> {
     async ({ event_name, property_name, description }) =>
       updatePropertyTool(catalogPath, { event_name, property_name, description })
   );
+
+  return server;
+}
+
+export async function startMcpServer(catalogPath: string): Promise<void> {
+  const server = createMcpServer(catalogPath);
 
   // ── Connect and serve ────────────────────────────────────────────────────────
 

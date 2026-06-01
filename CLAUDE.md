@@ -42,6 +42,8 @@ node dist/cli.js status    # Catalog health report
 node dist/cli.js revert    # Restore event from git history
 node dist/cli.js mcp       # Start local MCP server (stdio)
 node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
+node dist/cli.js mcp --catalog-set ./emit.catalogs.yml  # Serve the union of several repos' catalogs
+node dist/cli.js catalogs add web ../web/emit.catalog.yml  # Add a catalog to the cross-repo registry
 node dist/cli.js suggest --ask "instrument signup drop-off" --yes  # Propose events via Claude Code
 ```
 
@@ -132,6 +134,13 @@ Every command runs headless (no TTY) — pass `--yes` and supply all decisions a
 | Flag | Description |
 |------|-------------|
 | `--catalog <path>` | Explicit path to `emit.catalog.yml`; overrides the path resolved from `emit.config.yml` |
+| `--catalog-set <path>` | Path to an `emit.catalogs.yml` registry; serves the **union** of the listed catalogs (cross-repo). Mutually exclusive with `--catalog` |
+
+#### `emit catalogs add <name> <catalog-path>`
+
+| Flag | Description |
+|------|-------------|
+| `--registry <file>` | Registry file to create/update (default `emit.catalogs.yml`). Adds or updates the named entry; entry paths are resolved relative to the registry file |
 
 #### `emit destination add [name]`
 
@@ -431,6 +440,38 @@ order_placed:
 - **Dirty working tree** — interactive mode prompts; headless mode warns to stderr but proceeds. Stage or stash beforehand if you want a clean diff to review.
 - **Empty catalog** — fails fast; bypassable only via `--debug-context` / `--debug-prompt` (no-LLM dev affordances).
 - **Brief temp file location** — written to `.emit/emit-brief-<slug>-<timestamp>.md` inside the repo (not `os.tmpdir()`), because `--permission-mode acceptEdits` only grants access within the workspace.
+
+## Cross-repo Catalog Sets
+
+A product funnel spans repos, so emit can federate several repos' catalogs into one queryable set. Each repo is still `init`/`scan`ned separately and commits its own `emit.catalog.yml`; a small `emit.catalogs.yml` registry then points at those outputs (it never re-scans).
+
+```yaml
+# emit.catalogs.yml — paths are resolved relative to this file
+catalogs:
+  - { name: web,     path: ../web/emit.catalog.yml }
+  - { name: billing, path: ../billing/emit.catalog.yml }
+```
+
+### How it works
+
+1. `loadCatalogSet(registryPath)` (`src/core/catalog/set.ts`) reads each member, tags every event with a **runtime-only** `source_catalog`, and unions them into a normal `EmitCatalog`. Events key by name; a cross-catalog clash is keyed `name@source_catalog` (first entry keeps the bare key). `property_definitions` merge first-wins (event lists concatenated); `not_found`/`resolved` concatenate; metadata is synthesized (`commit: "union"`, summed `stats`, latest `generated_at`).
+2. `readCatalog` (`src/core/catalog/index.ts`) **content-sniffs**: a `.yml` whose parsed body has a top-level `catalogs:` array is treated as a registry and returns the union. Because the union is a normal `EmitCatalog`, **all MCP tools work over a set with no tool changes**. `writeCatalog` refuses a registry path.
+3. `emit mcp --catalog-set <registry>` serves the union. `list_resolved` (`src/mcp/tools/list-resolved.ts`) surfaces detected renames (`catalog.resolved`) across every repo.
+
+### Leakage rule
+
+`source_catalog` is **never** written to disk: the union tags shallow clones (sources are not mutated), `writeCatalog` refuses registries, and reconcile write-back (Wave 2) re-reads each source catalog fresh.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/core/catalog/set.ts` | Registry types, `loadCatalogSources`, `loadCatalogSet`, `isCatalogRegistry`, union semantics |
+| `src/core/catalog/index.ts` | `readCatalog` registry content-sniff; `writeCatalog` registry refusal; re-exports the set API |
+| `src/commands/catalogs.ts` | `emit catalogs add` — manage the registry |
+| `src/mcp/tools/list-resolved.ts` | `list_resolved` MCP tool |
+| `tests/catalog-set.test.ts` | Union semantics, registry validation, tools-over-union (21 tests) |
+| `tests/mcp-server-set.test.ts` | End-to-end smoke: real MCP client ↔ server querying the union — in-process (`createMcpServer` + in-memory transport) and the real `emit mcp --catalog-set` subprocess over stdio |
 
 ## Important Design Decisions
 

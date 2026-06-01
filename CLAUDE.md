@@ -512,6 +512,8 @@ analytics_csv: ./analytics-events.csv
 
 `get_coverage` reads `emit.reconcile.yml` (located next to the catalog/registry → cwd fallback) and returns the four buckets, filterable by `status` and `source`. `search_events` also matches `analytics_name`. `list_resolved` surfaces scan-detected renames.
 
+The MCP server also ships **server-level `instructions`** (`SERVER_INSTRUCTIONS` in `src/mcp/server.ts`, passed to `createMcpServer`). The MCP client surfaces these to the model at connection time — no user prompt needed — telling the agent to use emit for meaning/correct-names/coverage and a side-by-side analytics MCP (Mixpanel/PostHog/Amplitude) for live numbers, joining on `analytics_name`, and to check `get_coverage` before trusting an event. This is how emit gets consulted by default instead of requiring "always check emit first" prompt rules.
+
 ### Key files
 
 | File | Purpose |

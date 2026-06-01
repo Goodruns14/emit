@@ -88,6 +88,13 @@ export interface CatalogEvent {
   confidence_reason: string;
   review_required: boolean;
   segment_event_name?: string;
+  /**
+   * The event's name in the analytics tool, when it differs from the code name
+   * (names are often renamed in the pipeline). The join key for `emit reconcile`.
+   * Written ONLY by `emit reconcile` on high-confidence matches — never at scan
+   * time. Round-trips through the catalog writer with no serializer change.
+   */
+  analytics_name?: string;
   track_pattern?: string;
   parent_event?: string;
   discriminator_property?: string;
@@ -176,6 +183,83 @@ export interface ResolvedEvent {
   explanation: string;
   rename_detected: boolean;
   confidence: "high" | "medium" | "low";
+}
+
+// ─────────────────────────────────────────────
+// RECONCILE TYPES (analytics↔code)
+// ─────────────────────────────────────────────
+
+/** One event as reported by the external analytics tool (via its MCP or a CSV export). */
+export interface AnalyticsEvent {
+  /** The event's name in the analytics tool. */
+  name: string;
+  /** Property/column names the tool reports for this event, when available. */
+  properties?: string[];
+  /** Feed-declared original (code) name, when the tool tracks its own renames. */
+  original_name?: string;
+}
+
+export type ReconcileStatus =
+  | "matched" // code event ↔ analytics event, confidently linked
+  | "analytics_only" // fires in the tool, no code found
+  | "code_only" // instrumented in code, no analytics data
+  | "needs_review"; // uncertain fuzzy candidate — confirm before linking
+
+export type ReconcileMethod = "feed_mapping" | "exact" | "fuzzy" | "none";
+
+export interface ReconcileMatch {
+  /** Catalog event name (bare, no @source suffix). Absent for analytics_only. */
+  code_name?: string;
+  /** Analytics-tool event name. Absent for code_only. */
+  analytics_name?: string;
+  status: ReconcileStatus;
+  confidence: "high" | "medium" | "low";
+  method: ReconcileMethod;
+  /** Fuzzy score in [0,1] when method === "fuzzy". */
+  score?: number;
+  /** Human-readable explanation of the decision. */
+  reason: string;
+  /** Which catalog (in a set) the code event came from. */
+  source_catalog?: string;
+}
+
+export interface ReconcileResult {
+  matched: ReconcileMatch[];
+  analytics_only: ReconcileMatch[];
+  code_only: ReconcileMatch[];
+  needs_review: ReconcileMatch[];
+}
+
+/** Tunable fuzzy-match thresholds (all in [0,1]). */
+export interface ReconcileThresholds {
+  /** Property-set Jaccard at/above which a fuzzy pair auto-matches. */
+  jaccard_high: number;
+  /** Jaccard at/above which a fuzzy pair is surfaced for review. */
+  jaccard_review: number;
+  /** Name similarity required to promote a mid-Jaccard pair to a match (or to flag review). */
+  name_sim_high: number;
+}
+
+/**
+ * How `emit reconcile` reaches the external analytics-source MCP (as a CLIENT).
+ * emit does NOT build that MCP — this configures spawning/connecting to it.
+ */
+export interface AnalyticsMcpConfig {
+  /** Command to spawn the MCP over stdio (e.g. "npx"). */
+  command: string;
+  /** Args for the command (e.g. ["-y", "@vendor/analytics-mcp"]). */
+  args?: string[];
+  /** Extra env vars for the spawned process (values may use ${VAR}). */
+  env?: Record<string, string>;
+  /**
+   * Tool to call to list events. Default "list_events". Configurable because
+   * vendors differ: Mixpanel "Get-Events", PostHog "event-definitions-list", etc.
+   */
+  tool_name?: string;
+  /** Optional arguments object passed to the tool call. */
+  tool_args?: Record<string, unknown>;
+  /** Optional fuzzy-threshold overrides. */
+  thresholds?: Partial<ReconcileThresholds>;
 }
 
 // ─────────────────────────────────────────────
@@ -718,6 +802,13 @@ export interface EmitConfig {
   };
   llm: LlmCallConfig;
   destinations?: DestinationConfig[];
+  /** Reconcile: how to reach the analytics tool's MCP (see AnalyticsMcpConfig). */
+  analytics_mcp?: AnalyticsMcpConfig;
+  /**
+   * Reconcile: default path to a CSV/TSV/JSON export of analytics event names
+   * (an alternative source to analytics_mcp). The `--from-csv` flag overrides it.
+   */
+  analytics_csv?: string;
 }
 
 // ─────────────────────────────────────────────

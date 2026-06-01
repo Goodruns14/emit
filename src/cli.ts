@@ -11,6 +11,7 @@ import { registerFix } from "./commands/fix.js";
 import { registerDestination } from "./commands/destination.js";
 import { registerSuggest } from "./commands/suggest.js";
 import { registerCatalogs } from "./commands/catalogs.js";
+import { registerReconcile } from "./commands/reconcile.js";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -33,5 +34,6 @@ registerFix(program);
 registerDestination(program);
 registerSuggest(program);
 registerCatalogs(program);
+registerReconcile(program);
 
 program.parse(process.argv);

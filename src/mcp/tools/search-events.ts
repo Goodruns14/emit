@@ -16,6 +16,7 @@ export function searchEventsTool(catalogPath: string, input: SearchEventsInput) 
       // Determine what matched so the agent knows why this event was returned
       const matchedOn: string[] = [];
       if (hitsAny(name)) matchedOn.push("event_name");
+      if (event.analytics_name && hitsAny(event.analytics_name)) matchedOn.push("analytics_name");
       if (event.description && hitsAny(event.description)) matchedOn.push("description");
       if (event.fires_when && hitsAny(event.fires_when)) matchedOn.push("fires_when");
 
@@ -33,6 +34,7 @@ export function searchEventsTool(catalogPath: string, input: SearchEventsInput) 
 
       return {
         name,
+        ...(event.analytics_name ? { analytics_name: event.analytics_name } : {}),
         description: event.description,
         fires_when: event.fires_when,
         confidence: event.confidence,

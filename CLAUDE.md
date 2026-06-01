@@ -44,6 +44,8 @@ node dist/cli.js mcp       # Start local MCP server (stdio)
 node dist/cli.js mcp --catalog ./emit.catalog.yml  # Explicit catalog path
 node dist/cli.js mcp --catalog-set ./emit.catalogs.yml  # Serve the union of several repos' catalogs
 node dist/cli.js catalogs add web ../web/emit.catalog.yml  # Add a catalog to the cross-repo registry
+node dist/cli.js reconcile --catalog-set ./emit.catalogs.yml  # Match code events to the analytics tool; write coverage map
+node dist/cli.js reconcile --from-csv analytics-events.csv  # Reconcile against a CSV export instead of an MCP
 node dist/cli.js suggest --ask "instrument signup drop-off" --yes  # Propose events via Claude Code
 ```
 
@@ -141,6 +143,16 @@ Every command runs headless (no TTY) — pass `--yes` and supply all decisions a
 | Flag | Description |
 |------|-------------|
 | `--registry <file>` | Registry file to create/update (default `emit.catalogs.yml`). Adds or updates the named entry; entry paths are resolved relative to the registry file |
+
+#### `emit reconcile`
+
+| Flag | Description |
+|------|-------------|
+| `--catalog <path>` | Reconcile a single catalog (overrides `emit.config.yml` output.file) |
+| `--catalog-set <path>` | Reconcile the **union** of an `emit.catalogs.yml` registry. Mutually exclusive with `--catalog` |
+| `--from-csv <path>` | Read the analytics event list from a CSV/TSV/JSON export instead of the analytics MCP |
+| `--format <format>` | Output format: `text` (default) or `json` |
+| `--no-write-back` | Do not persist `analytics_name` onto matched events (report only) |
 
 #### `emit destination add [name]`
 
@@ -472,6 +484,45 @@ catalogs:
 | `src/mcp/tools/list-resolved.ts` | `list_resolved` MCP tool |
 | `tests/catalog-set.test.ts` | Union semantics, registry validation, tools-over-union (21 tests) |
 | `tests/mcp-server-set.test.ts` | End-to-end smoke: real MCP client ↔ server querying the union — in-process (`createMcpServer` + in-memory transport) and the real `emit mcp --catalog-set` subprocess over stdio |
+
+## Reconcile Mode (analytics↔code)
+
+`emit reconcile` matches cataloged code events to the events as they appear in the analytics tool, producing a **coverage map** so a PM-facing agent can join emit's *meaning* with the analytics tool's *numbers*. emit does **not** build the analytics MCP — it calls one as a client (or reads a CSV export). The shared key is `analytics_name` (the event's name in the analytics tool, often renamed in the pipeline).
+
+```yaml
+# emit.config.yml — analytics source for reconcile
+analytics_mcp:
+  command: npx
+  args: ["-y", "@vendor/analytics-mcp"]
+  tool_name: list_events     # Mixpanel "Get-Events", PostHog "event-definitions-list", etc.
+  thresholds: { jaccard_high: 0.6, jaccard_review: 0.3, name_sim_high: 0.8 }
+# or, instead of an MCP:
+analytics_csv: ./analytics-events.csv
+```
+
+### How it works
+
+1. Loads the catalog (or the **union** via `--catalog-set`) and collapses discriminator sub-events into parents via `rollupDiscriminators`.
+2. Fetches the analytics event list — `src/core/reconcile/analytics-client.ts` (fail-soft): an MCP client (`@modelcontextprotocol/sdk`) calling a configurable list-events tool, or a CSV via the existing `parseEventsFile`. `parseAnalyticsResponse` parses defensively (`{events|results|data:[...]}`, bare arrays, field synonyms) because no vendor documents a stable shape.
+3. Joins with the **pure** matcher `src/core/reconcile/join.ts`. Precedence: (1) feed's `original_name` mapping → (2) exact name (code name or known `analytics_name`) → (3) fuzzy: property-set **Jaccard primary**, name similarity secondary. Name-only signals (no analytics properties) cap at `needs_review` — never auto-matched.
+4. Partitions into four buckets: **matched**, **analytics_only** (fires, no code), **code_only** (instrumented, no data), **needs_review**. Writes `emit.reconcile.yml` (+ `--format json`).
+5. **Write-back**: persists `analytics_name` onto **only** exact/feed-declared renames (fuzzy stays in `needs_review`). Re-reads each source catalog fresh and writes that single file, so the runtime `source_catalog` tag never leaks. Identical names are skipped.
+
+### PM-facing MCP tools
+
+`get_coverage` reads `emit.reconcile.yml` (located next to the catalog/registry → cwd fallback) and returns the four buckets, filterable by `status` and `source`. `search_events` also matches `analytics_name`. `list_resolved` surfaces scan-detected renames.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/commands/reconcile.ts` | Command: load catalog/set → rollup → fetch → join → report + leakage-safe write-back. `runReconcile(opts, baseDir?)` |
+| `src/core/reconcile/join.ts` | Pure matcher: Jaccard, name similarity (Levenshtein), 3-tier precedence, 4-bucket partition |
+| `src/core/reconcile/analytics-client.ts` | Fail-soft MCP client + CSV source; defensive `parseAnalyticsResponse` |
+| `src/core/reconcile/report.ts` | `emit.reconcile.yml` read/write (shared with `get_coverage`) |
+| `src/mcp/tools/get-coverage.ts` | `get_coverage` MCP tool |
+| `tests/reconcile-join.test.ts` | Matcher unit tests (18) |
+| `tests/reconcile-e2e.test.ts` | End-to-end against a fake analytics MCP fixture (`tests/fixtures/fake-analytics-mcp.mjs`) — write-back + get_coverage |
 
 ## Important Design Decisions
 

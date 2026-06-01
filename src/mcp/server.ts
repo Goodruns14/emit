@@ -12,6 +12,7 @@ import { getCatalogHealthTool } from "./tools/get-catalog-health.js";
 import { searchEventsTool } from "./tools/search-events.js";
 import { listNotFoundTool } from "./tools/list-not-found.js";
 import { listResolvedTool } from "./tools/list-resolved.js";
+import { getCoverageTool } from "./tools/get-coverage.js";
 import { getPropertyAcrossEventsTool } from "./tools/get-property-across-events.js";
 import { listPropertiesTool } from "./tools/list-properties.js";
 import { getEventsBySourceFileTool } from "./tools/get-events-by-source-file.js";
@@ -87,6 +88,22 @@ export function createMcpServer(catalogPath: string): McpServer {
     "List events that were missing under their listed name but found in code under a different name (likely renames) during the last scan. original_name is the old/listed name; actual_event_name is what's in code now. Over a catalog set, this spans every repo.",
     {},
     async () => listResolvedTool(catalogPath)
+  );
+
+  server.tool(
+    "get_coverage",
+    "Read the analytics↔code coverage map from the latest `emit reconcile` run: matched (code ↔ analytics), analytics_only (fires but no code — a blind spot), code_only (instrumented but no data — dead/ungated), and needs_review. Use this to answer 'is our tracking healthy?' and to find gaps before trusting an event. Filter by status or by repo (source).",
+    {
+      status: z
+        .enum(["matched", "analytics_only", "code_only", "needs_review"])
+        .optional()
+        .describe("Return only this bucket"),
+      source: z
+        .string()
+        .optional()
+        .describe("Filter to events from this catalog (source_catalog name) in a catalog set"),
+    },
+    async ({ status, source }) => getCoverageTool(catalogPath, { status, source })
   );
 
   server.tool(
